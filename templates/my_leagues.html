@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="leagues-container">
+    {% for league in leagues %}
+    <div class="glass-tile league-tile">
+        <h2>{{ league.league_name }}</h2>
+        <p><strong>Team:</strong> {{ 'N/A' }}</p>
+        <p><strong>Record:</strong> {{ league.record or '--' }}</p>
+        <p><strong>Standing:</strong> {{ league.standing or '--' }}</p>
+        <p><strong>Roster:</strong> {{ league.roster_spots or 'Not set' }}</p>
+
+        <a href="#" class="button">View Details</a>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FantasyHub</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body style="background: url('{{ url_for('static', filename='img/field.jpg') }}') no-repeat center center fixed; background-size: cover;">
+
+    <header class="site-header" style="display: flex; align-items: center; justify-content: space-between; padding: 0 20px;">
+        <div class="logo">
+            <h1>FantasyHub</h1>
+        </div>
+
+        <nav>
+            <ul style="display: flex; gap: 15px; list-style: none; margin: 0; padding: 0;">
+                <li><a href="{{ url_for('leagues.my_leagues') }}">Leagues</a></li>
+                <li><a href="#">Trades (Coming Soon)</a></li>
+                <li><a href="#">Live Scoring (Coming Soon)</a></li>
+            </ul>
+        </nav>
+
+        <div class="donate-button">
+            <a href="https://paypal.me/pwinterh" target="_blank"
+               style="background: #0070ba; color: white; padding: 8px 14px; border-radius: 6px; text-decoration: none; font-weight: bold;">
+                Donate
+            </a>
+        </div>
+    </header>
+
+    <main class="content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="site-footer">
+        <p>&copy; {{ current_year }} FantasyHub
+        Contact @pwindynasty on X with feedback</p>
+    </footer>
+</body>
+</html>
