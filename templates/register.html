@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="max-w-md mx-auto bg-white rounded-xl shadow p-6">
-  <h1 class="text-2xl font-bold mb-4">Sign in</h1>
+  <h1 class="text-2xl font-bold mb-4">Create your account</h1>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
@@ -18,11 +18,18 @@
     {% endif %}
   {% endwith %}
 
-  <form method="POST" action="{{ url_for('auth.login') }}" class="space-y-4">
-    <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+  <form method="POST" action="{{ url_for('auth.register') }}" class="space-y-4">
     <div>
-      <label class="block text-sm font-medium mb-1">Username or Email</label>
-      <input name="username_or_email" type="text" required
+      <label class="block text-sm font-medium mb-1">Username</label>
+      <input name="username" type="text" required
+             value="{{ request.form.get('username','') }}"
+             class="w-full border rounded px-3 py-2 focus:outline-none">
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium mb-1">Email</label>
+      <input name="email" type="email" required
+             value="{{ request.form.get('email','') }}"
              class="w-full border rounded px-3 py-2 focus:outline-none">
     </div>
 
@@ -30,16 +37,17 @@
       <label class="block text-sm font-medium mb-1">Password</label>
       <input name="password" type="password" required
              class="w-full border rounded px-3 py-2 focus:outline-none">
+      <p class="text-xs text-gray-500 mt-1">At least 8 characters.</p>
     </div>
 
     <button type="submit" class="w-full py-2 rounded bg-black text-white">
-      Sign in
+      Create account
     </button>
   </form>
 
   <p class="text-sm mt-4">
-    New here?
-    <a class="underline" href="{{ url_for('auth.register') }}">Create an account</a>
+    Already have an account?
+    <a class="underline" href="{{ url_for('auth.login') }}">Sign in</a>
   </p>
 </div>
 {% endblock %}

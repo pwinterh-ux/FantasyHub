@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  /* full-screen overlay */
+  #syncOverlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55);
+    display: none; align-items: center; justify-content: center;
+    z-index: 9999;
+  }
+  .spinner {
+    width: 64px; height: 64px; border: 6px solid rgba(255,255,255,.25);
+    border-top-color: #fff; border-radius: 50%; animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .sync-text { color:#fff; margin-top: 12px; text-align:center; font-weight:600; }
+  .league-row:hover { background: rgba(255,255,255,0.04); }
+</style>
+
+<div id="syncOverlay">
+  <div style="display:flex; flex-direction:column; align-items:center;">
+    <div class="spinner"></div>
+    <div class="sync-text">Syncing your leagues… this can take a minute</div>
+  </div>
+</div>
+
+<div class="glass-tile" style="max-width:760px;margin:40px auto;padding:24px;">
+  <h2 style="margin-top:0;">Select leagues to sync</h2>
+  <p style="margin-bottom:14px;">
+    The leagues you keep checked will be synced to this site. Unchecking a league will
+    <strong>delete it</strong> (and its teams/rosters/picks) from your account here.
+  </p>
+
+  <form id="mflConfigForm" method="POST" action="{{ url_for('mfl.mfl_config_submit') }}">
+    <input type="hidden" name="year" value="{{ year }}">
+
+    {% if leagues and leagues|length %}
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0 14px;">
+        <input id="filterBox" placeholder="Filter leagues…" oninput="filterLeagues()" style="flex:1;min-width:220px;">
+        <button type="button" class="button" onclick="toggleAll(true)">Select all</button>
+        <button type="button" class="button" style="background:#444;" onclick="toggleAll(false)">Select none</button>
+      </div>
+
+      <div id="leagueList" style="max-height:55vh; overflow:auto; border:1px solid #2c2c2c; border-radius:8px; padding:10px;">
+        {% for lg in leagues %}
+          <label class="league-row"
+                 data-text="{{ (lg.name ~ ' ' ~ lg.id ~ ' ' ~ lg.year)|lower }}"
+                 style="display:flex;align-items:center;gap:12px;padding:8px;border-bottom:1px solid rgba(255,255,255,0.06);">
+            <input type="checkbox" name="league_id" value="{{ lg.id }}" {% if lg.checked %}checked{% endif %}>
+            <div style="display:flex;flex-direction:column;">
+              <span><strong>{{ lg.name }}</strong></span>
+              <span style="opacity:.8;font-size:.9em;">
+                ID: {{ lg.id }} &middot; Year: {{ lg.year }}
+                {% if lg.franchise_id %}&middot; Franchise: {{ lg.franchise_id }}{% endif %}
+              </span>
+            </div>
+
+            <!-- Pass values back on submit (no extra API call needed on POST) -->
+            <input type="hidden" name="league_name_{{ lg.id }}" value="{{ lg.name }}">
+            <input type="hidden" name="franchise_id_{{ lg.id }}" value="{{ lg.franchise_id or '' }}">
+          </label>
+        {% endfor %}
+      </div>
+
+      <div style="display:flex;gap:10px;align-items:center;margin-top:14px;">
+        <button id="syncBtn" class="button" type="submit">Sync selected</button>
+        <a class="button" href="{{ url_for('leagues.my_leagues') }}" style="background:#444;">Cancel</a>
+      </div>
+    {% else %}
+      <p>No leagues were returned for year {{ year }}. Try a different year or re-link your MFL account.</p>
+      <a class="button" href="{{ url_for('mfl.mfl_login') }}">Back to MFL Login</a>
+    {% endif %}
+  </form>
+</div>
+
+<script>
+  function toggleAll(checked) {
+    document.querySelectorAll('#leagueList input[type="checkbox"]').forEach(cb => cb.checked = checked);
+  }
+  function filterLeagues() {
+    const q = (document.getElementById('filterBox').value || '').toLowerCase();
+    document.querySelectorAll('#leagueList .league-row').forEach(row => {
+      const txt = row.getAttribute('data-text') || '';
+      row.style.display = txt.indexOf(q) !== -1 ? 'flex' : 'none';
+    });
+  }
+
+  // Reliable spinner: prevent default, show overlay, then submit after a tick
+  document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('mflConfigForm');
+    const btn  = document.getElementById('syncBtn');
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      if (btn) btn.disabled = true;
+      const overlay = document.getElementById('syncOverlay');
+      if (overlay) overlay.style.display = 'flex';
+      // give the browser a moment to paint the overlay before the request blocks
+      setTimeout(() => form.submit(), 75);
+    });
+  });
+</script>
+{% endblock %}

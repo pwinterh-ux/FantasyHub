@@ -1,17 +1,255 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="leagues-container">
-    {% for league in leagues %}
-    <div class="glass-tile league-tile">
-        <h2>{{ league.league_name }}</h2>
-        <p><strong>Team:</strong> {{ 'N/A' }}</p>
-        <p><strong>Record:</strong> {{ league.record or '--' }}</p>
-        <p><strong>Standing:</strong> {{ league.standing or '--' }}</p>
-        <p><strong>Roster:</strong> {{ league.roster_spots or 'Not set' }}</p>
+<div class="glass-tile" style="max-width: 1100px; margin: 28px auto; padding: 16px 18px;">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;">
+    <h2 style="margin:0;">My Leagues</h2>
+    <a href="{{ url_for('mfl.mfl_config') }}"
+       style="padding:8px 12px; border-radius:10px; background:#111; color:#fff; text-decoration:none;">
+      Refresh Leagues
+    </a>
+  </div>
 
-        <a href="#" class="button">View Details</a>
-    </div>
-    {% endfor %}
+  <div class="responsive-table" style="overflow-x:auto;">
+    <table class="league-table" style="width:100%; border-collapse:separate; border-spacing:0 10px;">
+      <thead>
+        <tr style="text-align:left;">
+          <th style="padding:10px;">League</th>
+          <th style="padding:10px;">Season</th>
+          <th style="padding:10px;">My Team</th>
+          <th style="padding:10px;">Record</th>
+          <th style="padding:10px;">Standing</th>
+          <th style="padding:10px;">Roster</th>
+        </tr>
+      </thead>
+      <tbody id="leagues-tbody">
+        {% for league in leagues %}
+          {% set my_team = my_teams.get(league.id) %}
+          <!-- Row "tile" -->
+          <tr class="league-row"
+              data-league-row="{{ league.id }}"
+              data-details-url="{{ url_for('leagues.league_details_json', league_id=league.id) }}"
+              style="background: rgba(255,255,255,0.90); color:#111; box-shadow: 0 8px 22px rgba(0,0,0,0.08);">
+            <td style="padding:14px; border-top-left-radius:12px; border-bottom-left-radius:12px; font-weight:600; cursor:pointer;">
+              {{ league.name }}
+              <div style="font-size: 12px; color:#555;">MFL: {{ league.mfl_id }}</div>
+            </td>
+            <td style="padding:14px; cursor:pointer;">{{ league.year }}</td>
+            <td style="padding:14px; cursor:pointer;">{{ my_team.name if my_team else '—' }}</td>
+            <td style="padding:14px; cursor:pointer;">{{ my_team.record if my_team and my_team.record else '—' }}</td>
+            <td style="padding:14px; cursor:pointer;">{{ my_team.standing if my_team and my_team.standing is not none else '—' }}</td>
+            <td style="padding:14px; border-top-right-radius:12px; border-bottom-right-radius:12px; cursor:pointer;">
+              {{ league.roster_slots or 'Not set' }}
+            </td>
+          </tr>
+          <!-- details panel injects after each tile row -->
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
+
+<style>
+  /* Details panel styling with strong contrast */
+  .details-row td {
+    background: rgba(255,255,255,0.97);
+    color: #111;
+    padding: 0 14px 16px 14px;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+    border-radius: 12px;
+  }
+  .details-panel { padding: 16px 6px 6px; }
+  .details-header {
+    display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin:0 0 10px;
+  }
+  .details-header h3 { margin:0; font-size:18px; }
+  .mini { font-size:12px; color:#555; }
+
+  .grid-2 {
+    display:grid; grid-template-columns: 1.2fr 1fr; gap:16px;
+  }
+  @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  .standings-table, .roster-table, .picks-table {
+    width:100%; border-collapse: collapse; color:#111;
+    background: transparent;
+  }
+  .standings-table th, .standings-table td,
+  .roster-table th, .roster-table td,
+  .picks-table th, .picks-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+    text-align:left;
+  }
+  .standings-table th, .roster-table th, .picks-table th { font-weight:700; }
+  .is-mine { background: rgba(34,197,94,0.12); } /* highlight my franchise */
+
+  .spinner-inline {
+    display:inline-block; width:16px; height:16px;
+    border:2px solid rgba(0,0,0,0.2);
+    border-top-color:#111; border-radius:50%;
+    animation: spin .7s linear infinite; vertical-align:-3px; margin-left:6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Hover affordance on tiles */
+  .league-row:hover { box-shadow: 0 10px 26px rgba(0,0,0,0.12); }
+</style>
+
+<script>
+(function(){
+  const tbody = document.getElementById('leagues-tbody');
+
+  function closeOpenDetails(exceptLeagueId) {
+    document.querySelectorAll('tr.details-row').forEach(tr => {
+      const lid = tr.getAttribute('data-for-league');
+      if (!exceptLeagueId || String(lid) !== String(exceptLeagueId)) tr.remove();
+    });
+  }
+
+  function renderStandings(teams, myFranchise) {
+    const rows = (teams || []).map((t, idx) => {
+      const mine = myFranchise && String(t.mfl_id) === String(myFranchise);
+      const rank = (t.standing !== null && t.standing !== undefined) ? t.standing : (idx + 1);
+      return `
+        <tr class="${mine ? 'is-mine' : ''}">
+          <td style="width:56px;">${rank}</td>
+          <td>${t.name || '—'}</td>
+          <td>${t.record || '—'}</td>
+          <td>${t.points_for ?? '—'}</td>
+          <td>${t.points_against ?? '—'}</td>
+        </tr>
+      `;
+    }).join('');
+    return `
+      <div>
+        <h4 style="margin:0 0 6px;">Standings</h4>
+        <table class="standings-table">
+          <thead>
+            <tr>
+              <th style="width:56px;">#</th>
+              <th>Team</th>
+              <th>Record</th>
+              <th>PF</th>
+              <th>PA</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows || '<tr><td colspan="5" style="padding:10px;">No team data found.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function renderRoster(roster) {
+    const rows = (roster || []).map(r => `
+      <tr>
+        <td style="width:64px;">${r.position || '—'}</td>
+        <td>${r.name || '—'}<div class="mini">${r.team || ''}</div></td>
+        <td style="width:90px;">${r.is_starter ? 'Starter' : 'Bench'}</td>
+      </tr>
+    `).join('');
+    return `
+      <div>
+        <h4 style="margin: 10px 0 6px;">My Roster</h4>
+        <table class="roster-table">
+          <thead>
+            <tr><th style="width:64px;">Pos</th><th>Player</th><th style="width:90px;">Slot</th></tr>
+          </thead>
+          <tbody>
+            ${rows || '<tr><td colspan="3" style="padding:10px;">No roster loaded.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function renderPicks(picks) {
+    const rows = (picks || []).map(p => `
+      <tr>
+        <td style="width:70px;">${p.season}</td>
+        <td style="width:70px;">R${p.round}</td>
+        <td style="width:90px;">${p.pick_number ?? '—'}</td>
+        <td>${p.original_team || '—'}</td>
+      </tr>
+    `).join('');
+    return `
+      <div>
+        <h4 style="margin: 10px 0 6px;">My Draft Picks</h4>
+        <table class="picks-table">
+          <thead>
+            <tr><th style="width:70px;">Season</th><th style="width:70px;">Round</th><th style="width:90px;">Pick</th><th>Original Team</th></tr>
+          </thead>
+          <tbody>
+            ${rows || '<tr><td colspan="4" style="padding:10px;">No draft picks loaded.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  async function toggleDetails(rowEl) {
+    const leagueId = rowEl.getAttribute('data-league-row');
+    const url = rowEl.getAttribute('data-details-url');
+
+    // If already open under this row: close it
+    const existing = document.querySelector(`tr.details-row[data-for-league="${leagueId}"]`);
+    if (existing) { existing.remove(); return; }
+
+    // Close others
+    closeOpenDetails(leagueId);
+
+    // Insert a placeholder loading row
+    const loadingRow = document.createElement('tr');
+    loadingRow.className = 'details-row';
+    loadingRow.setAttribute('data-for-league', leagueId);
+
+    const colCount = rowEl.children.length;
+    const td = document.createElement('td');
+    td.colSpan = colCount;
+    td.innerHTML = `<div class="details-panel">Loading <span class="spinner-inline"></span></div>`;
+    loadingRow.appendChild(td);
+    rowEl.insertAdjacentElement('afterend', loadingRow);
+
+    try {
+      const res = await fetch(url, { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('Failed to load details');
+      const data = await res.json();
+
+      const myFranchise = data.league && data.league.franchise_id ? String(data.league.franchise_id) : null;
+      const synced = data.league && data.league.synced_at ? new Date(data.league.synced_at).toLocaleString() : '—';
+
+      td.innerHTML = `
+        <div class="details-panel">
+          <div class="details-header">
+            <h3>${data.league.name}</h3>
+            <span class="mini">Season ${data.league.year} • MFL ${data.league.mfl_id} • Last sync: ${synced}</span>
+          </div>
+          <div style="margin-bottom: 10px;">
+            <strong>Lineup:</strong> ${data.league.roster_slots || 'Not set'}
+          </div>
+
+          <div class="grid-2">
+            ${renderStandings(data.teams, myFranchise)}
+            <div>
+              ${renderRoster(data.my_roster)}
+              ${renderPicks(data.my_draft_picks)}
+            </div>
+          </div>
+        </div>
+      `;
+    } catch (err) {
+      td.innerHTML = `<div class="details-panel">Could not load league details. Please try again.</div>`;
+      console.error(err);
+    }
+  }
+
+  tbody.addEventListener('click', (e) => {
+    const row = e.target.closest('tr.league-row');
+    if (!row) return;
+    toggleDetails(row);
+  });
+})();
+</script>
 {% endblock %}
