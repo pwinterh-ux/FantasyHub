@@ -69,7 +69,7 @@ def create_app():
     _configure_logging(app)
 
     # Optional: cap MFL response body logging length (used by mfl_client)
-    app.config.setdefault("MFL_LOG_BODY_CHARS", 800)
+    app.config.setdefault("MFL_LOG_BODY_CHARS", 5000)
 
     # Import models after db is ready to avoid circulars
     from models import User, League  # noqa: F401

@@ -1,0 +1,340 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+  /* ---- page-level overrides to force stacked layout & improve contrast ---- */
+  .page-wrap { max-width: 1100px; margin: 18px auto; padding: 0 10px; }
+  .toolbar { 
+    display:flex; align-items:center; justify-content:space-between; gap:12px; 
+    flex-wrap: wrap;
+    background: rgba(15,23,42,0.55);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px; padding: 18px 16px;
+    backdrop-filter: blur(10px);
+    color: #e5e7eb;
+    text-shadow: 0 1px 1px rgba(0,0,0,.45);
+  }
+  .toolbar h2 { margin: 0; font-size: 24px; line-height: 1.1; }
+  .toolbar .sub { font-size: 12px; opacity: .85; }
+
+  .toolbar .btn {
+    display:inline-flex; align-items:center; gap:8px;
+    padding: 8px 12px; border-radius: 8px; text-decoration: none;
+    border: none; cursor: pointer; font-weight: 600;
+  }
+  .btn-dark   { background:#0b1220; color:#fff; }
+  .btn-sky    { background:#0284c7; color:#fff; }
+  .btn-dark:disabled, .btn-sky:disabled { opacity:.55; cursor:not-allowed; }
+
+  /* section shells */
+  .section {
+    margin-top: 16px; 
+    background: rgba(15,23,42,0.52);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px; padding: 16px;
+    color: #e5e7eb;
+    backdrop-filter: blur(10px);
+  }
+  .section h3 { margin: 0 0 6px 0; }
+  .section .desc { margin: 0 0 12px 0; font-size: 13px; color:#cbd5e1; opacity:.9; }
+
+  /* the list is stacked, cards are full width */
+  .trade-list { display:block; }
+  .trade-card {
+    margin: 10px 0;
+    border-radius: 14px;
+    background: rgba(2,6,23,0.66);
+    border: 1px solid rgba(255,255,255,.12);
+    backdrop-filter: blur(10px);
+    padding: 12px;
+    color: #e5e7eb;
+  }
+
+  /* compact header row inside each card */
+  .trade-head {
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    margin-bottom: 8px;
+  }
+  .trade-title { font-weight: 700; }
+  .trade-meta { font-size: 12px; color:#cbd5e1; opacity:.9; }
+
+  /* slim, two-column sides; collapse to one on narrow screens */
+  .sides {
+    display:grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  }
+  @media (max-width: 800px) { .sides { grid-template-columns: 1fr; } }
+
+  .side {
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 10px; padding: 10px;
+    background: rgba(255,255,255,0.04);
+  }
+  .side h4 { 
+    margin: 0 0 6px 0; font-size: 14px; font-weight: 800; 
+    display:flex; align-items:center; gap:8px; 
+  }
+
+  .pill { 
+    font-size: 10px; padding: 2px 7px; border-radius: 999px; 
+    letter-spacing:.2px; text-transform: uppercase; font-weight: 800;
+  }
+  .you { 
+    background:#22c55e; color:#06251a;                 /* bright green */
+    box-shadow: 0 0 0 2px rgba(34,197,94,.35);         /* subtle halo */
+  }
+  .give { background:#0b1220; color:#fff; }
+
+  .items { 
+    margin: 4px 0 0 0; padding-left: 16px; 
+    font-size: 13px; line-height: 1.35;
+  }
+  .items li { margin: 2px 0; }
+
+  details.more { margin-top: 6px; }
+  details.more > summary {
+    list-style: none; cursor: pointer; user-select: none;
+    font-size: 12px; color:#93c5fd;
+  }
+  details.more > summary::-webkit-details-marker { display:none; }
+
+  .muted { color:#cbd5e1; opacity:.9; }
+</style>
+
+<div class="page-wrap">
+
+  <!-- Top toolbar -->
+  <div class="toolbar">
+    <div>
+      <h2>Open Trades</h2>
+      <div class="sub">
+        {% if fetched_at %}Last refreshed: {{ fetched_at }}{% else %}Not refreshed yet this session{% endif %}
+        {% if count_total is not none %} • {{ count_total }} total{% endif %}
+      </div>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:10px;">
+      <a href="{{ url_for('mfl.trades_home') }}" class="btn btn-dark">← Back</a>
+
+      {% set can_refresh = (next_refresh_in|int <= 0) %}
+      <button id="refreshBtn" class="btn btn-sky" {% if not can_refresh %}disabled{% endif %}>
+        {% if can_refresh %}Refresh Now{% else %}Refresh available in ~{{ (next_refresh_in // 60) if next_refresh_in else 0 }} min{% endif %}
+      </button>
+    </div>
+  </div>
+
+  <div id="syncStatus" class="muted" style="margin: 8px 4px; display:none;"></div>
+
+  <!-- RECEIVED -->
+  <section class="section">
+    <h3>Trades Received</h3>
+    <p class="desc">Offers where another franchise proposed a trade to you.</p>
+
+    {% set rec = (to_you or []) %}
+    {% if rec|length == 0 %}
+      <div class="trade-card" style="text-align:center; opacity:.9;">No incoming offers found.</div>
+    {% else %}
+      <div class="trade-list">
+        {% for t in rec %}
+          <article class="trade-card">
+            <div class="trade-head">
+              <div class="trade-title">{{ t.league_name or ('League ' ~ t.league_id) }}</div>
+              <div class="trade-meta">#{{ t.trade_id }}</div>
+            </div>
+
+            {% if t.sides and t.sides|length > 0 %}
+              <div class="sides">
+                {% for s in t.sides %}
+                  <div class="side">
+                    <h4>
+                      {{ (team_names.get(t.league_id, {}) or {}).get(s.franchise_id, 'Team ' ~ s.franchise_id) }}
+                      {% if t.my_franchise_id and s.franchise_id == t.my_franchise_id %}
+                        <span class="pill you">You</span>
+                      {% endif %}
+                      <span class="pill give">give</span>
+                    </h4>
+
+                    {% set players = (s.player_ids or []) %}
+                    {% set picks = (s.future_picks or []) %}
+                    {% set faab = s.faab %}
+
+                    {% if players|length > 0 or picks|length > 0 or faab %}
+                      <ul class="items">
+                        {% for pid in players %}
+                          {% set p = player_lookup.get(pid) or player_lookup.get(pid|string) %}
+                          {% if p %}
+                            <li>{{ p.name }}{% if p.pos %} — {{ p.pos }}{% endif %}{% if p.team %} ({{ p.team }}){% endif %}</li>
+                          {% else %}
+                            <li>Player #{{ pid }}</li>
+                          {% endif %}
+                        {% endfor %}
+                        {% for p in picks %}
+                          {% set orig = (team_names.get(t.league_id, {}) or {}).get(p.original_team, '@' ~ p.original_team) %}
+                          <li>{{ p.season }} R{{ p.round }} (original: {{ orig }})</li>
+                        {% endfor %}
+                        {% if faab %}
+                          <li>FAAB ${{ "%.0f"|format(faab) }}</li>
+                        {% endif %}
+                      </ul>
+                    {% else %}
+                      <div class="muted" style="font-size:12px;">(no assets listed)</div>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="muted" style="font-size:12px;">(no side details from league API)</div>
+            {% endif %}
+
+            {% if t.created_dt or t.expires_dt or t.comments %}
+              <details class="more">
+                <summary>More</summary>
+                <div class="muted" style="margin-top:6px;">
+                  {% if t.created_dt or t.expires_dt %}
+                    <div style="font-size:12px;">
+                      {% if t.created_dt %}Created: {{ t.created_dt.strftime('%Y-%m-%d %H:%M:%S %Z') }}{% endif %}
+                      {% if t.expires_dt %} • Expires: {{ t.expires_dt.strftime('%Y-%m-%d %H:%M:%S %Z') }}{% endif %}
+                    </div>
+                  {% endif %}
+                  {% if t.comments and t.comments|length > 0 %}
+                    <div style="margin-top:6px; font-size:12px;">
+                      Comments ({{ t.comments|length }})
+                      <ul style="margin:4px 0 0; padding-left:16px;">
+                        {% for c in t.comments %}
+                          <li><span class="muted">{{ c.date }}</span> — <strong>{{ c.franchise }}</strong>: {{ c.text }}</li>
+                        {% endfor %}
+                      </ul>
+                    </div>
+                  {% endif %}
+                </div>
+              </details>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+
+  <!-- SENT -->
+  <section class="section">
+    <h3>Trades Sent</h3>
+    <p class="desc">Offers you proposed to another franchise.</p>
+
+    {% set sent = (from_you or []) %}
+    {% if sent|length == 0 %}
+      <div class="trade-card" style="text-align:center; opacity:.9;">No outgoing offers found.</div>
+    {% else %}
+      <div class="trade-list">
+        {% for t in sent %}
+          <article class="trade-card">
+            <div class="trade-head">
+              <div class="trade-title">{{ t.league_name or ('League ' ~ t.league_id) }}</div>
+              <div class="trade-meta">#{{ t.trade_id }}</div>
+            </div>
+
+            {% if t.sides and t.sides|length > 0 %}
+              <div class="sides">
+                {% for s in t.sides %}
+                  <div class="side">
+                    <h4>
+                      {{ (team_names.get(t.league_id, {}) or {}).get(s.franchise_id, 'Team ' ~ s.franchise_id) }}
+                      {% if t.my_franchise_id and s.franchise_id == t.my_franchise_id %}
+                        <span class="pill you">You</span>
+                      {% endif %}
+                      <span class="pill give">give</span>
+                    </h4>
+
+                    {% set players = (s.player_ids or []) %}
+                    {% set picks = (s.future_picks or []) %}
+                    {% set faab = s.faab %}
+
+                    {% if players|length > 0 or picks|length > 0 or faab %}
+                      <ul class="items">
+                        {% for pid in players %}
+                          {% set p = player_lookup.get(pid) or player_lookup.get(pid|string) %}
+                          {% if p %}
+                            <li>{{ p.name }}{% if p.pos %} — {{ p.pos }}{% endif %}{% if p.team %} ({{ p.team }}){% endif %}</li>
+                          {% else %}
+                            <li>Player #{{ pid }}</li>
+                          {% endif %}
+                        {% endfor %}
+                        {% for p in picks %}
+                          {% set orig = (team_names.get(t.league_id, {}) or {}).get(p.original_team, '@' ~ p.original_team) %}
+                          <li>{{ p.season }} R{{ p.round }} (original: {{ orig }})</li>
+                        {% endfor %}
+                        {% if faab %}
+                          <li>FAAB ${{ "%.0f"|format(faab) }}</li>
+                        {% endif %}
+                      </ul>
+                    {% else %}
+                      <div class="muted" style="font-size:12px;">(no assets listed)</div>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="muted" style="font-size:12px;">(no side details from league API)</div>
+            {% endif %}
+
+            {% if t.created_dt or t.expires_dt or t.comments %}
+              <details class="more">
+                <summary>More</summary>
+                <div class="muted" style="margin-top:6px;">
+                  {% if t.created_dt or t.expires_dt %}
+                    <div style="font-size:12px;">
+                      {% if t.created_dt %}Created: {{ t.created_dt.strftime('%Y-%m-%d %H:%M:%S %Z') }}{% endif %}
+                      {% if t.expires_dt %} • Expires: {{ t.expires_dt.strftime('%Y-%m-%d %H:%M:%S %Z') }}{% endif %}
+                    </div>
+                  {% endif %}
+                  {% if t.comments and t.comments|length > 0 %}
+                    <div style="margin-top:6px; font-size:12px;">
+                      Comments ({{ t.comments|length }})
+                      <ul style="margin:4px 0 0; padding-left:16px;">
+                        {% for c in t.comments %}
+                          <li><span class="muted">{{ c.date }}</span> — <strong>{{ c.franchise }}</strong>: {{ c.text }}</li>
+                        {% endfor %}
+                      </ul>
+                    </div>
+                  {% endif %}
+                </div>
+              </details>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+</div>
+
+<script>
+  // Refresh button: hits the JSON sync and then reloads the page
+  (function () {
+    const btn = document.getElementById('refreshBtn');
+    const status = document.getElementById('syncStatus');
+    if (!btn) return;
+
+    btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
+      const url = "{{ url_for('mfl.mfl_trades_sync') }}";
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = 'Refreshing…';
+      status.style.display = 'block';
+      status.textContent = 'Fetching open trades from all connected leagues…';
+
+      try {
+        const res = await fetch(url, { credentials: 'same-origin' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+
+        status.textContent = `Fetched ${json.count_trades} trades from ${json.count_leagues} leagues. Reloading…`;
+        setTimeout(() => window.location.reload(), 500);
+      } catch (e) {
+        status.textContent = 'Refresh failed: ' + (e && e.message ? e.message : e);
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+  })();
+</script>
+
+{% endblock %}

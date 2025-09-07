@@ -1,7 +1,8 @@
 # models.py
 from flask_login import UserMixin
 from app import db, bcrypt  # created in app.py
-
+from datetime import datetime
+import json
 
 # ----- User -----------------------------------------------------------------
 
@@ -23,6 +24,11 @@ class User(UserMixin, db.Model):
     mfl_user = db.Column(db.String(120), nullable=True)
     session_key = db.Column(db.String(255), nullable=True)
 
+    mfl_cookie_api = db.Column(db.Text, nullable=True)           # cookie string scoped to api.myfantasyleague.com
+    mfl_cookie_hosts_json = db.Column(db.Text, nullable=True)    # JSON: {"www43.myfantasyleague.com": "...", ...}
+    mfl_cookie_updated_at = db.Column(db.DateTime, nullable=True)
+
+
     # relationships
     leagues = db.relationship(
         "League",
@@ -30,6 +36,40 @@ class User(UserMixin, db.Model):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+    # --- convenience helpers (optional but handy) ---
+
+    def get_mfl_host_cookies(self) -> dict[str, str]:
+        """
+        Return per-host cookies as a dict. Safe on empty/malformed JSON.
+        """
+        try:
+            raw = self.mfl_cookie_hosts_json or "{}"
+            obj = json.loads(raw)
+            if isinstance(obj, dict):
+                # normalize to str->str
+                return {str(k): str(v) for k, v in obj.items()}
+        except Exception:
+            pass
+        return {}
+
+    def set_mfl_cookie_bundle(
+        self,
+        api_cookie: str | None,
+        host_cookie_map: dict[str, str] | None,
+    ) -> None:
+        """
+        Set api cookie + per-host cookies and stamp updated_at.
+        """
+        if api_cookie is not None:
+            self.mfl_cookie_api = api_cookie
+        if host_cookie_map is not None:
+            try:
+                self.mfl_cookie_hosts_json = json.dumps(host_cookie_map)
+            except Exception:
+                # fall back to empty object if dumping fails
+                self.mfl_cookie_hosts_json = "{}"
+        self.mfl_cookie_updated_at = datetime.utcnow()
 
     # password helpers
     def set_password(self, password: str) -> None:
@@ -59,13 +99,18 @@ class League(db.Model):
         index=True,
     )
 
-    # columns per your current MySQL table
+    # core league fields already in your DB
     mfl_id = db.Column(db.String(50), nullable=False)        # e.g., '11376'
     name = db.Column(db.String(120), nullable=False)         # league name
     year = db.Column(db.Integer, nullable=False)             # season
     synced_at = db.Column(db.DateTime, nullable=True)        # when you last synced
     roster_slots = db.Column(db.String(255), nullable=True)  # e.g., 'QB:1,RB:2-4,...'
     franchise_id = db.Column(db.String(10), nullable=True)   # user's team in that league (e.g., '0006')
+
+    # NEW: where this league "lives" + an optional cached homepage URL
+    # store either "www43.myfantasyleague.com" or full "https://www43.myfantasyleague.com"
+    league_host = db.Column(db.String(64), nullable=True)
+    home_url = db.Column(db.String(255), nullable=True)
 
     # relationships
     user = db.relationship("User", back_populates="leagues")
@@ -76,8 +121,44 @@ class League(db.Model):
         passive_deletes=True,
     )
 
+    # --- convenience link builders ---
+
+    def _league_base(self) -> str | None:
+        """
+        Normalizes league_host to a full 'https://host' base without trailing slash.
+        Returns None if missing.
+        """
+        if not self.league_host:
+            return None
+        base = self.league_host.strip().rstrip("/")
+        if not base:
+            return None
+        if not (base.startswith("http://") or base.startswith("https://")):
+            base = f"https://{base}"
+        return base
+
+    def url_for_league_home(self) -> str | None:
+        """
+        e.g. https://www43.myfantasyleague.com/2025/home/55188
+        """
+        base = self._league_base()
+        if not base or not self.year or not self.mfl_id:
+            return None
+        return f"{base}/{self.year}/home/{self.mfl_id}"
+
+    def url_for_trades(self) -> str | None:
+        """
+        e.g. https://www43.myfantasyleague.com/2025/options?L=55188&O=05
+        (O=05 is MFL's Trade screen)
+        """
+        base = self._league_base()
+        if not base or not self.year or not self.mfl_id:
+            return None
+        return f"{base}/{self.year}/options?L={self.mfl_id}&O=05"
+
     def __repr__(self) -> str:
         return f"<League {self.id} {self.name} {self.year} u{self.user_id} mfl:{self.mfl_id}>"
+
 
 
 # ----- Team -----------------------------------------------------------------

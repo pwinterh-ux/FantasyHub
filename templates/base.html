@@ -51,7 +51,7 @@
         .toast-warning { border-left-color: #f59e0b; }  /* amber */
         .toast-danger  { border-left-color: #ef4444; }  /* red */
 
-        /* Basic glass containers already come from your styles.css */
+        /* You already have glass container styling in styles.css */
     </style>
 </head>
 <body style="background: url('{{ url_for('static', filename='img/field.jpg') }}') no-repeat center center fixed; background-size: cover;">
@@ -80,7 +80,12 @@
             <ul style="display: flex; gap: 15px; list-style: none; margin: 0; padding: 0;">
                 <!-- Use /start so auth-aware routing decides (login -> config -> leagues) -->
                 <li><a href="{{ url_for('start') }}">Leagues</a></li>
-                <li><a href="#">Trades (Coming Soon)</a></li>
+
+                <!-- Trades home page -->
+                <li>
+                    <a href="{{ url_for('mfl.trades_home') }}">Trades</a>
+                </li>
+
                 <li><a href="#">Live Scoring (Coming Soon)</a></li>
 
                 {% if current_user.is_authenticated %}
