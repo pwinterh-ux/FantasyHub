@@ -56,7 +56,7 @@
     margin-bottom: 8px;
   }
   .trade-title { font-weight: 700; }
-  .trade-meta { font-size: 12px; color:#cbd5e1; opacity:.9; }
+  .trade-meta { font-size: 12px; color:#cbd5e1; opacity:.95; }
 
   /* slim, two-column sides; collapse to one on narrow screens */
   .sides {
@@ -79,8 +79,8 @@
     letter-spacing:.2px; text-transform: uppercase; font-weight: 800;
   }
   .you { 
-    background:#22c55e; color:#06251a;                 /* bright green */
-    box-shadow: 0 0 0 2px rgba(34,197,94,.35);         /* subtle halo */
+    background:#22c55e; color:#06251a;
+    box-shadow: 0 0 0 2px rgba(34,197,94,.35);
   }
   .give { background:#0b1220; color:#fff; }
 
@@ -98,6 +98,13 @@
   details.more > summary::-webkit-details-marker { display:none; }
 
   .muted { color:#cbd5e1; opacity:.9; }
+
+  /* small ghost button for header link */
+  .btn-ghost-small {
+    background:#0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,.14);
+    padding:6px 10px; border-radius:8px; text-decoration:none; font-weight:700; font-size:12px;
+  }
+  .btn-ghost-small:hover { background:#0b1220; }
 </style>
 
 <div class="page-wrap">
@@ -135,10 +142,14 @@
     {% else %}
       <div class="trade-list">
         {% for t in rec %}
+          {% set host = ((league_hosts or {}).get(t.league_id) or 'www.myfantasyleague.com') %}
+          {% set mfl_url = 'https://' ~ host ~ '/' ~ year ~ '/options?L=' ~ t.league_id ~ '&O=05' %}
           <article class="trade-card">
             <div class="trade-head">
               <div class="trade-title">{{ t.league_name or ('League ' ~ t.league_id) }}</div>
-              <div class="trade-meta">#{{ t.trade_id }}</div>
+              <div class="trade-meta">
+                <a class="btn-ghost-small" href="{{ mfl_url }}" target="_blank" rel="noopener noreferrer">View Trade in MFL</a>
+              </div>
             </div>
 
             {% if t.sides and t.sides|length > 0 %}
@@ -225,10 +236,14 @@
     {% else %}
       <div class="trade-list">
         {% for t in sent %}
+          {% set host = ((league_hosts or {}).get(t.league_id) or 'www.myfantasyleague.com') %}
+          {% set mfl_url = 'https://' ~ host ~ '/' ~ year ~ '/options?L=' ~ t.league_id ~ '&O=05' %}
           <article class="trade-card">
             <div class="trade-head">
               <div class="trade-title">{{ t.league_name or ('League ' ~ t.league_id) }}</div>
-              <div class="trade-meta">#{{ t.trade_id }}</div>
+              <div class="trade-meta">
+                <a class="btn-ghost-small" href="{{ mfl_url }}" target="_blank" rel="noopener noreferrer">View Trade in MFL</a>
+              </div>
             </div>
 
             {% if t.sides and t.sides|length > 0 %}

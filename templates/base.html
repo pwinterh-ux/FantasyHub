@@ -1,147 +1,212 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FantasyHub</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-    <style>
-        /* --- Toasts (lightweight, no external libs) --- */
-        #toast-stack {
-            position: fixed;
-            top: 16px;
-            right: 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            z-index: 9999;
-        }
-        .toast {
-            backdrop-filter: blur(8px);
-            background: rgba(255, 255, 255, 0.85);
-            color: #111;
-            border-radius: 10px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-            padding: 10px 14px;
-            min-width: 280px;
-            max-width: 460px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            border-left: 6px solid transparent;
-            opacity: 1;
-            transform: translateY(0);
-            transition: opacity .35s ease, transform .35s ease;
-        }
-        .toast.hide {
-            opacity: 0;
-            transform: translateY(-6px);
-        }
-        .toast .toast-close {
-            margin-left: auto;
-            background: transparent;
-            border: none;
-            font-size: 18px;
-            line-height: 1;
-            cursor: pointer;
-            color: #333;
-        }
-        .toast-success { border-left-color: #22c55e; }  /* green */
-        .toast-info    { border-left-color: #3b82f6; }  /* blue */
-        .toast-warning { border-left-color: #f59e0b; }  /* amber */
-        .toast-danger  { border-left-color: #ef4444; }  /* red */
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FantasyHub</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  <style>
+    :root{
+      --tile-bg: radial-gradient(120% 120% at 10% 0%, rgba(22,22,26,.90), rgba(10,12,14,.94));
+      --tile-dark: radial-gradient(120% 120% at 10% 0%, rgba(10,12,14,.92), rgba(6,8,10,.96));
+      --border: rgba(255,255,255,.12);
+      --muted: rgba(255,255,255,.85);
+    }
 
-        /* You already have glass container styling in styles.css */
-    </style>
+    /* --------- Global background with subtle overlay --------- */
+    body{
+      background: url('{{ url_for('static', filename='img/field.jpg') }}') no-repeat center center fixed;
+      background-size: cover;
+      color: #eaf1f7;
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      position: relative;
+      min-height: 100vh;
+    }
+    body::before{
+      content:"";
+      position: fixed; inset:0;
+      background: radial-gradient(120% 120% at 10% 0%, rgba(5,8,12,.45), rgba(3,5,8,.65));
+      pointer-events:none;
+      z-index:-1;
+    }
+
+    /* --------- Reusable tiles / buttons (to match other screens) --------- */
+    .tile{
+      background: var(--tile-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      color: #eaf1f7;
+    }
+    .tile.dark{ background: var(--tile-dark); }
+    .tile.pad{ padding: 14px; }
+
+    .btn{
+      background: linear-gradient(180deg, #10b981, #059669);
+      color:#fff; border:none; border-radius:10px; padding:10px 14px; font-weight:700;
+      box-shadow: 0 6px 18px rgba(16,185,129,.35);
+      text-decoration:none; display:inline-block; cursor:pointer;
+    }
+    .btn-ghost{
+      background:#0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,.12);
+      border-radius:10px; padding:10px 14px; text-decoration:none; display:inline-block;
+    }
+
+    .page-wrap{ max-width: 1200px; margin: 0 auto; padding: 16px; }
+
+    /* --------- Header / Nav (darker inlaid bar) --------- */
+    .site-header{
+      position: sticky; top:0; z-index: 50;
+      padding: 8px 0;
+      margin-bottom: 8px;
+      backdrop-filter: blur(6px);
+    }
+    .nav-bar{
+      align-items: center; justify-content: space-between; gap: 12px;
+      display:flex;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: var(--tile-dark);
+      padding: 10px 14px;
+    }
+    .logo h1{
+      margin:0; font-size: 22px; letter-spacing:.2px; color:#f4f7fa; text-shadow:0 1px 2px rgba(0,0,0,.35);
+    }
+    .nav-links{ display:flex; gap: 14px; list-style:none; margin:0; padding:0; align-items:center; }
+    .nav-links a{
+      color:#e5e7eb; text-decoration:none; padding:8px 10px; border-radius:8px;
+      border:1px solid transparent;
+    }
+    .nav-links a:hover{
+      background:#0b1220; border-color: rgba(255,255,255,.08);
+    }
+
+    /* --------- Main content area --------- */
+    main.content{ padding: 8px 0 24px; }
+    footer.site-footer{
+      text-align:center; color:#cbd5e1; font-size: 13px; padding: 12px 0 18px;
+      opacity:.9;
+    }
+
+    /* --------- Toasts (dark theme to match) --------- */
+    #toast-stack{
+      position: fixed; top: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 9999;
+    }
+    .toast{
+      backdrop-filter: blur(8px);
+      background: rgba(12, 15, 21, 0.90);
+      color: #e5e7eb;
+      border-radius: 10px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+      padding: 10px 14px;
+      min-width: 280px; max-width: 460px;
+      display: flex; align-items: center; gap: 10px;
+      border-left: 6px solid transparent;
+      opacity: 1; transform: translateY(0);
+      transition: opacity .35s ease, transform .35s ease;
+      border:1px solid rgba(255,255,255,.08);
+    }
+    .toast.hide{ opacity: 0; transform: translateY(-6px); }
+    .toast .toast-close{
+      margin-left: auto; background: transparent; border: none; font-size: 18px; line-height: 1; cursor: pointer; color: #cbd5e1;
+    }
+    .toast-success { border-left-color: #22c55e; }
+    .toast-info    { border-left-color: #3b82f6; }
+    .toast-warning { border-left-color: #eab308; }
+    .toast-danger  { border-left-color: #ef4444; }
+
+    /* Donate pill */
+    .donate a{
+      background: #0070ba; color: white; padding: 8px 14px; border-radius: 10px; text-decoration: none; font-weight: bold;
+      border:1px solid rgba(255,255,255,.18);
+    }
+
+    /* Utility */
+    .muted{ opacity:.85; }
+  </style>
 </head>
-<body style="background: url('{{ url_for('static', filename='img/field.jpg') }}') no-repeat center center fixed; background-size: cover;">
+<body>
 
-    <!-- Toasts -->
-    {% with messages = get_flashed_messages(with_categories=True) %}
-    {% if messages %}
-    <div id="toast-stack" aria-live="polite" aria-atomic="true">
-        {% for category, message in messages %}
-        {% set cat = category or 'info' %}
-        <div class="toast toast-{{ cat }}" role="status">
-            <div class="toast-body">{{ message }}</div>
-            <button class="toast-close" aria-label="Dismiss">&times;</button>
-        </div>
-        {% endfor %}
+  <!-- Toasts -->
+  {% with messages = get_flashed_messages(with_categories=True) %}
+  {% if messages %}
+  <div id="toast-stack" aria-live="polite" aria-atomic="true">
+    {% for category, message in messages %}
+      {% set cat = category or 'info' %}
+      <div class="toast toast-{{ cat }}" role="status">
+        <div class="toast-body">{{ message }}</div>
+        <button class="toast-close" aria-label="Dismiss">&times;</button>
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endwith %}
+
+  <!-- Header -->
+  <header class="site-header">
+    <div class="page-wrap nav-bar">
+      <div class="logo"><h1>FantasyHub</h1></div>
+
+      <nav>
+        <ul class="nav-links">
+          <li><a href="{{ url_for('start') }}">Leagues</a></li>
+          <li><a href="{{ url_for('mfl.trades_home') }}">Trades</a></li>
+          <li><a href="#">Live Scoring (Coming Soon)</a></li>
+
+          {% if current_user.is_authenticated %}
+            <li class="muted">Hi, {{ current_user.username }}</li>
+            <li>
+              <form method="POST" action="{{ url_for('auth.logout') }}" style="display:inline;">
+                <button type="submit" class="btn-ghost">Logout</button>
+              </form>
+            </li>
+          {% else %}
+            <li><a href="{{ url_for('auth.login') }}">Login</a></li>
+            <li><a href="{{ url_for('auth.register') }}">Register</a></li>
+          {% endif %}
+        </ul>
+      </nav>
+
+      <div class="donate">
+        <a href="https://paypal.me/pwinterh" target="_blank" rel="noopener noreferrer">Donate</a>
+      </div>
     </div>
-    {% endif %}
-    {% endwith %}
+  </header>
 
-    <header class="site-header" style="display: flex; align-items: center; justify-content: space-between; padding: 0 20px;">
-        <div class="logo">
-            <h1>FantasyHub</h1>
-        </div>
+  <!-- Content -->
+  <main class="content">
+    <div class="page-wrap">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
 
-        <nav>
-            <ul style="display: flex; gap: 15px; list-style: none; margin: 0; padding: 0;">
-                <!-- Use /start so auth-aware routing decides (login -> config -> leagues) -->
-                <li><a href="{{ url_for('start') }}">Leagues</a></li>
+  <!-- Footer -->
+  <footer class="site-footer">
+    <div class="page-wrap">
+      <p>&copy; {{ current_year }} FantasyHub &mdash; Contact @pwindynasty on X with feedback</p>
+    </div>
+  </footer>
 
-                <!-- Trades home page -->
-                <li>
-                    <a href="{{ url_for('mfl.trades_home') }}">Trades</a>
-                </li>
-
-                <li><a href="#">Live Scoring (Coming Soon)</a></li>
-
-                {% if current_user.is_authenticated %}
-                    <li style="display:flex; align-items:center; color:#555;">Hi, {{ current_user.username }}</li>
-                    <li>
-                        <form method="POST" action="{{ url_for('auth.logout') }}" style="display:inline;">
-                            <button type="submit"
-                                    style="background:#000; color:#fff; padding:6px 12px; border-radius:6px; border:none; cursor:pointer;">
-                                Logout
-                            </button>
-                        </form>
-                    </li>
-                {% else %}
-                    <li><a href="{{ url_for('auth.login') }}">Login</a></li>
-                    <li><a href="{{ url_for('auth.register') }}">Register</a></li>
-                {% endif %}
-            </ul>
-        </nav>
-
-        <div class="donate-button">
-            <a href="https://paypal.me/pwinterh" target="_blank"
-               style="background: #0070ba; color: white; padding: 8px 14px; border-radius: 6px; text-decoration: none; font-weight: bold;">
-                Donate
-            </a>
-        </div>
-    </header>
-
-    <main class="content">
-        {% block content %}{% endblock %}
-    </main>
-
-    <footer class="site-footer">
-        <p>&copy; {{ current_year }} FantasyHub
-        Contact @pwindynasty on X with feedback</p>
-    </footer>
-
-    <script>
-        // Auto-hide toasts after ~1.5s; allow manual dismiss.
-        (function () {
-            const toasts = document.querySelectorAll('#toast-stack .toast');
-            toasts.forEach((t, i) => {
-                const btn = t.querySelector('.toast-close');
-                if (btn) {
-                    btn.addEventListener('click', () => {
-                        t.classList.add('hide');
-                        setTimeout(() => t.remove(), 400);
-                    });
-                }
-                // Stagger slightly to avoid all animating at once if many
-                const delay = 1200 + (i * 150);
-                setTimeout(() => {
-                    t.classList.add('hide');
-                    setTimeout(() => t.remove(), 400);
-                }, delay);
-            });
-        })();
-    </script>
+  <script>
+    // Auto-hide toasts after ~1.5s; allow manual dismiss.
+    (function () {
+      const toasts = document.querySelectorAll('#toast-stack .toast');
+      toasts.forEach((t, i) => {
+        const btn = t.querySelector('.toast-close');
+        if (btn) {
+          btn.addEventListener('click', () => {
+            t.classList.add('hide');
+            setTimeout(() => t.remove(), 400);
+          });
+        }
+        const delay = 1200 + (i * 150);
+        setTimeout(() => {
+          t.classList.add('hide');
+          setTimeout(() => t.remove(), 400);
+        }, delay);
+      });
+    })();
+  </script>
 </body>
 </html>

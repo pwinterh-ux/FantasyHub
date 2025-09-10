@@ -23,14 +23,15 @@
       {% endif %}
     </a>
 
-    <!-- Automated Offers -->
-    <div class="glass-card"
-         style="padding:22px;border-radius:14px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);box-shadow:0 10px 25px rgba(0,0,0,.25);color:#fff;border:1px solid rgba(255,255,255,.2);">
-      <div style="font-size:20px;font-weight:700;margin-bottom:6px;">Automated Offers — Coming Soon</div>
+    <!-- Automated Offers (now links to Offers search) -->
+    <a href="{{ url_for('offers.search') }}"
+       class="glass-card"
+       style="display:block;padding:22px;border-radius:14px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);box-shadow:0 10px 25px rgba(0,0,0,.25);text-decoration:none;color:#fff;border:1px solid rgba(255,255,255,.2);">
+      <div style="font-size:20px;font-weight:700;margin-bottom:6px;">Automated Offers</div>
       <div style="opacity:.9;line-height:1.4;">
-        Send an offer to every team in your league with one command.
+        Build and send trade offers across your synced leagues.
       </div>
-    </div>
+    </a>
   </div>
 </div>
 {% endblock %}

@@ -10,7 +10,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_required, current_user
 
 from app import db
-from models import League, Team, Roster, DraftPick, Player  # <-- added Player
+from models import League, Team, Roster, DraftPick, Player
 from services.mfl_client import MFLClient
 from services.mfl_parsers import (
     parse_user_leagues,
@@ -85,6 +85,12 @@ def _host_only(url: str | None) -> str | None:
     except Exception:
         return None
 
+# --- entry point to the Offers flow from the Trades home ---
+@mfl_bp.route("/offers", methods=["GET"])
+@login_required
+def offers_entry():
+    # keep the nav under the mfl/ namespace, but land in the offers app
+    return redirect(url_for("offers.search"))
 
 # --------------------------- Link / Login -----------------------------------
 
@@ -126,7 +132,7 @@ def mfl_login():
         host_cookie_map: dict[str, str] = {}
         for host in sorted(hostnames):
             try:
-                # league-scoped base like https://{host}/{year}/
+                # league-scoped base like https://www43.myfantasyleague.com/{year}/
                 host_client = MFLClient(year=year, base_url=f"https://{host}/{year}/")
                 host_cookie = host_client.login(username, password)
                 if host_cookie:
@@ -309,31 +315,23 @@ def mfl_config_submit():
     # Delete children first (safe across MySQL/SQLite/Postgres)
     for lg in to_delete:
         try:
-            # 1) collect team ids for this league (subquery avoids JOIN deletes)
+            # 1) collect team ids for this league (avoid JOIN deletes)
             team_ids = [tid for (tid,) in db.session.query(Team.id)
                         .filter(Team.league_id == lg.id).all()]
 
             # 2) delete rows that depend on teams
             if team_ids:
-                # rosters -> draft picks -> teams
-                Roster.query.filter(Roster.team_id.in_(team_ids)).delete(
-                    synchronize_session=False
-                )
-                DraftPick.query.filter(DraftPick.team_id.in_(team_ids)).delete(
-                    synchronize_session=False
-                )
-                Team.query.filter(Team.id.in_(team_ids)).delete(
-                    synchronize_session=False
-                )
+                Roster.query.filter(Roster.team_id.in_(team_ids)).delete(synchronize_session=False)
+                DraftPick.query.filter(DraftPick.team_id.in_(team_ids)).delete(synchronize_session=False)
+                Team.query.filter(Team.id.in_(team_ids)).delete(synchronize_session=False)
 
             # 3) finally delete the league
             db.session.delete(lg)
-            db.session.flush()  # surface any FK issues right here for this league
+            db.session.flush()
         except Exception as e:
             db.session.rollback()
             current_app.logger.exception("Failed deleting league %s: %s", lg.mfl_id, e)
             flash(f"Failed deleting league {lg.mfl_id}: {e}", "danger")
-            # keep going with others, or re-raise if you prefer
             continue
 
     db.session.commit()
@@ -368,6 +366,34 @@ def mfl_config_submit():
     # Base API client (used to discover league host)
     api_client = MFLClient(year=year)
 
+    # --- build a host map like trades does (once) ---
+    host_by_lid: dict[str, str] = {}
+    try:
+        xml = api_client.get_user_leagues(api_cookie)
+        for rec in parse_user_leagues(xml):
+            if isinstance(rec, dict):
+                lid = str(rec.get("league_id") or rec.get("id") or "").strip()
+                host = rec.get("host")
+                if lid and host:
+                    host_by_lid[lid] = host
+    except Exception as e:
+        current_app.logger.info("could not build myleagues host map for config sync: %s", e)
+
+    # small helper to ensure the cookie we send carries MFL_USER_ID
+    def _append_user_id_cookie(base_cookie: str | None, api_cookie_val: str | None) -> str | None:
+        if not api_cookie_val:
+            return base_cookie
+        try:
+            uid = MFLClient._extract_user_id(api_cookie_val)
+        except Exception:
+            uid = None
+        if not uid:
+            return base_cookie
+        base_cookie = base_cookie or ""
+        if "MFL_USER_ID=" not in base_cookie:
+            base_cookie = (base_cookie + "; " if base_cookie else "") + f"MFL_USER_ID={uid}"
+        return base_cookie
+
     leagues_synced = 0
     teams_total = 0
     roster_rows_total = 0
@@ -389,24 +415,24 @@ def mfl_config_submit():
             current_app.logger.info("parse_league_info failed for L=%s: %s", lg.mfl_id, e)
             franchise_meta, roster_text, league_base_url = {}, None, None
 
-        # Normalize a bit and pick host cookie when available
-        host = _host_only(league_base_url)
+        # Resolve host (mirror trades): prefer stamped league_host, then base_url host, then myleagues host
+        resolved_host = getattr(lg, "league_host", None) or _host_only(league_base_url) or host_by_lid.get(lg.mfl_id)
+
         # Build data client pinned to the league host if we have it
         data_client = api_client
-        if league_base_url:
-            data_client = MFLClient(year=year, base_url=f"{league_base_url.rstrip('/')}/{year}/")
+        if resolved_host:
+            data_client = MFLClient(year=year, base_url=f"https://{resolved_host}/{year}/")
 
-        # Choose the best cookie
-        cookie_for_data = host_cookies.get(host) if host else None
+        # Choose the best cookie; then append MFL_USER_ID if missing (so host sees the user id)
+        cookie_for_data = host_cookies.get(resolved_host) if resolved_host else None
         if not cookie_for_data:
-            cookie_for_data = api_cookie  # fallback to API cookie
-        if not cookie_for_data:
-            cookie_for_data = getattr(current_user, "session_key", None)  # last resort
+            cookie_for_data = api_cookie or getattr(current_user, "session_key", None)
+        cookie_for_data = _append_user_id_cookie(cookie_for_data, api_cookie)
 
         # Save host/home on the league row (handy for templates/link-outs)
         try:
-            if host and getattr(lg, "league_host", None) != host:
-                lg.league_host = host
+            if resolved_host and getattr(lg, "league_host", None) != resolved_host:
+                lg.league_host = resolved_host
             if hasattr(lg, "home_url"):
                 lg.home_url = lg.url_for_league_home()
             db.session.commit()
@@ -419,26 +445,33 @@ def mfl_config_submit():
         except Exception as e:
             current_app.logger.info("sync_league_info error for L=%s: %s", lg.mfl_id, e)
 
-        # 3) Assets & Standings — prefer league host with its cookie; fallback to roster/picks when assets blocked
+        # 3) Assets & Standings — host-first (with MFL_USER_ID) then fallback to API host
         try:
+            # Assets: try league host first
             assets_xml = data_client.get_assets(lg.mfl_id, cookie_for_data)
+            want_api_fallback = bool(assets_xml and b"<error" in assets_xml and b"API requires logged in user" in assets_xml)
+            if want_api_fallback:
+                current_app.logger.info("assets blocked for L=%s at %s; trying API host fallback",
+                                        lg.mfl_id, getattr(data_client, "base", "?"))
+                assets_xml = api_client.get_assets(lg.mfl_id, api_cookie)
+
+            # If still blocked, use roster/picks fallbacks like before
             use_fallbacks = bool(assets_xml and b"<error" in assets_xml and b"API requires logged in user" in assets_xml)
-
             if use_fallbacks:
-                current_app.logger.info("assets blocked/empty for L=%s; using fallbacks", lg.mfl_id)
                 flash("Some league data requires a per-league login; using roster/picks fallbacks for one or more leagues.", "warning")
-
                 rosters_xml = data_client.get_rosters(lg.mfl_id, cookie_for_data)
                 try:
                     picks_xml = data_client.get_future_picks(lg.mfl_id, cookie_for_data)
                 except Exception:
                     picks_xml = None
-
                 assets = parse_rosters_fallback(rosters_xml, picks_xml)
             else:
                 assets = parse_assets(assets_xml)
 
+            # Standings: try host first then API host if blocked
             standings_xml = data_client.get_standings(lg.mfl_id, cookie_for_data)
+            if standings_xml and b"<error" in standings_xml and b"API requires logged in user" in standings_xml:
+                standings_xml = api_client.get_standings(lg.mfl_id, api_cookie)
 
             metrics = sync_league_assets(lg, assets)
             updated = sync_league_standings(lg, parse_standings(standings_xml))
@@ -452,8 +485,9 @@ def mfl_config_submit():
             picks_total += metrics.get("picks_inserted", 0)
 
             current_app.logger.info(
-                "synced L=%s: fid=%s teams=%s roster_rows=%s picks=%s standings_updated=%s",
+                "synced L=%s via %s: fid=%s teams=%s roster_rows=%s picks=%s standings_updated=%s",
                 lg.mfl_id,
+                (resolved_host or "api"),
                 lg.franchise_id,
                 metrics.get("teams_touched", 0),
                 metrics.get("rosters_inserted", 0),
@@ -566,8 +600,8 @@ def _gather_open_trades(year: int) -> dict:
                     "franchises": t.franchises,
                     "sides": [_side_to_dict(s) for s in t.sides],
                     "comments": t.comments,
-                    "proposed_by": t.proposed_by,   # NEW
-                    "offered_to": offered_to,       # NEW (best-effort)
+                    "proposed_by": t.proposed_by,
+                    "offered_to": offered_to,
                 }
                 league_payload["trades"].append(t_dict)
 
@@ -702,7 +736,6 @@ def trades_open():
         if tr.get("franchises") and my_fid in tr["franchises"]:
             return "to_you"
         return "to_you"
-
 
     # enrich + split
     for tr in (cached.get("trades_flat") or []):

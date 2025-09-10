@@ -1,0 +1,387 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .hud-wrap { max-width: 1100px; margin: 24px auto; }
+  .tile {
+    background: radial-gradient(120% 120% at 10% 0%, rgba(22,22,26,.85), rgba(10,12,14,.88));
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    color: #eaf1f7;
+  }
+  .tile + .tile { margin-top: 14px; }
+  .tile-pad { padding: 14px; }
+  .hdr { color: #f4f7fa; text-shadow: 0 1px 2px rgba(0,0,0,.35); margin: 0; }
+  .muted { opacity: .8; }
+  .muter { opacity:.7; font-size:12px; }
+  .small { font-size: 12px; opacity: .85; }
+
+  .rowline { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .btn {
+    background: linear-gradient(180deg, #10b981, #059669);
+    color:#fff; border:none; border-radius:10px; padding:10px 14px; font-weight:700;
+    box-shadow: 0 6px 18px rgba(16,185,129,.35);
+    text-decoration:none; display:inline-block;
+  }
+  .btn-secondary {
+    background: #0f172a; color:#e2e8f0; text-decoration:none; border-radius:10px; padding:10px 14px;
+    border: 1px solid rgba(255,255,255,.08);
+  }
+
+  .league-row { display:flex; gap: 10px; align-items:center; }
+  .league-title { font-weight: 700; }
+  .league-meta { font-size: 12px; opacity: .8; }
+  .badge { display:inline-block; padding:4px 8px; border-radius:999px; background:#0b1220; border:1px solid rgba(255,255,255,.12); font-size:12px; }
+
+  .fr-line { display:flex; align-items:center; gap: 6px; flex-wrap: wrap; }
+  .fr-pick {
+    background: #1f2937; color:#e5e7eb; border:1px solid rgba(255,255,255,.12);
+    border-radius: 10px; padding: 6px 8px; display:inline-flex; align-items:center; gap:6px;
+  }
+  .fr-pick input[type="checkbox"], .fr-pick input[type="radio"] { transform: translateY(0.5px); }
+
+  .pref-wrap { display:flex; gap: 10px; align-items:center; flex-wrap: wrap; }
+  .pref-wrap label { background:#0b1220; border:1px solid rgba(255,255,255,.08); color:#e5e7eb;
+                     border-radius:999px; padding:6px 10px; cursor:pointer; }
+  .pref-wrap input[type="radio"] { transform: translateY(0.5px); }
+
+  .buyers-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:10px; margin-top:8px; }
+  .buyer-card {
+    background: rgba(2, 6, 23, 0.6);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 12px;
+    padding: 10px;
+  }
+  .buyer-name { font-weight:700; margin-bottom:8px; }
+
+  .sec-hdr { font-weight:700; margin-bottom:6px; }
+  .league-card { transition: outline-color .2s ease; }
+  .league-card[aria-expanded="true"] { outline: 1px dashed rgba(34,211,238,.35); }
+  .league-card.disabled { opacity: .6; filter: grayscale(10%); }
+</style>
+
+<div class="hud-wrap">
+  <div class="rowline" style="margin-bottom:10px;">
+    <h2 class="hdr">Build Offers — {{ template_label }}</h2>
+    <a href="{{ url_for('offers.search') }}" class="btn-secondary">Back</a>
+  </div>
+
+  {% if year_options and year_options|length > 0 %}
+    <div class="tile tile-pad" style="margin-bottom:12px;">
+      <div style="font-weight:700; margin-bottom:6px;">Preferred Year (applies to auto-selection where choices exist)</div>
+      <div id="pref-wrap" class="pref-wrap">
+        {% for y in year_options %}
+          <label style="display:inline-flex;align-items:center;gap:6px;">
+            <input type="radio" name="pref_year" value="{{ y }}" {% if default_preferred_year and default_preferred_year == y %}checked{% elif not default_preferred_year and loop.first %}checked{% endif %}>
+            {{ y }}
+          </label>
+        {% endfor %}
+      </div>
+      <div class="muter" style="margin-top:6px;">If a team has multiple years available, we’ll pick this year first; otherwise the earliest year.</div>
+    </div>
+  {% endif %}
+
+  <form id="offer-form" method="POST" action="{{ url_for('offers.preview_offers') }}">
+    <input type="hidden" name="player_id" value="{{ player.id }}">
+    <input type="hidden" name="mode" value="{{ mode }}">
+    <input type="hidden" name="template_code" value="{{ template_code }}">
+
+    {% if template_code == 'upgrade' %}
+      <!-- Carry upgrade params to preview -->
+      <input type="hidden" name="upgrade_give_round" value="{{ upgrade_give_round }}">
+      <input type="hidden" name="upgrade_recv_round" value="{{ upgrade_recv_round }}">
+    {% endif %}
+
+    {% for row in rows %}
+      {% if template_code != 'upgrade' %}
+        <!-- ======================= BUY / SELL (standard templates) ======================= -->
+        <div class="tile tile-pad league-card" data-lid="{{ row.league.mfl_id }}" aria-expanded="true">
+          <div class="league-row">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" name="league_id" value="{{ row.league.mfl_id }}" checked>
+              <span class="league-title">{{ row.league.name }}</span>
+            </label>
+            <div class="league-meta">ID {{ row.league.mfl_id }} • Host {{ row.league.league_host or 'api.myfantasyleague.com' }}</div>
+          </div>
+
+          {% if mode == 'buy' %}
+            {% set cfid = '%04d'|format(row.counterparty.mfl_id|int) %}
+            <div class="small" style="margin-top:6px;">
+              Counterparty: <strong>{{ row.counterparty.name }}</strong> (FID {{ row.counterparty.mfl_id }}) — Record: {{ row.franchise_records.get(cfid) or '–' }}
+            </div>
+
+            <div class="sec-hdr" style="margin-top:10px;">Choose Picks to Give</div>
+            <div class="muter">Pick exactly the counts for {{ template_label }}.</div>
+
+            {% for rnd, need in req|dictsort %}
+              {% set picks = row.picks_by_round.get(rnd, []) %}
+              {% if picks and picks|length > 0 %}
+                <div style="margin-top:8px;">
+                  <div class="small" style="font-weight:700; margin-bottom:4px;">Round {{ rnd }}</div>
+                  <div class="fr-line">
+                    {% for dp in picks %}
+                      {% set fid = '%04d'|format((dp.original_team|int)) %}
+                      <label class="fr-pick">
+                        <input type="checkbox"
+                               name="pick_{{ row.league.mfl_id }}_{{ rnd }}"
+                               value="{{ dp.id }}"
+                               data-year="{{ dp.season }}"
+                               data-round="{{ dp.round }}">
+                        {{ dp.season }} R{{ dp.round }} (orig {{ row.franchise_names.get(fid, fid) }}{% if row.franchise_records.get(fid) %} ({{ row.franchise_records.get(fid) }}){% endif %})
+                      </label>
+                    {% endfor %}
+                  </div>
+                </div>
+              {% endif %}
+            {% endfor %}
+
+          {% else %}
+            <div class="sec-hdr" style="margin-top:10px;">Choose Buyer(s)</div>
+            <div class="muter">Select teams to send this player to, then choose which picks to receive.</div>
+
+            <div class="buyers-grid">
+              {% for bd in row.buyers %}
+                <div class="buyer-card" data-buyer-id="{{ bd.team.id }}">
+                  <label class="buyer-name" style="display:flex;align-items:center;gap:8px;">
+                    <input type="checkbox" name="buyer_{{ row.league.mfl_id }}" value="{{ bd.team.id }}">
+                    <span>{{ bd.team.name }}</span>
+                    <span class="muter">FID {{ bd.team.mfl_id }} • Record {{ bd.team.record or '–' }}</span>
+                  </label>
+
+                  {% for rnd, need in req|dictsort %}
+                    {% set picks = bd.picks_by_round.get(rnd, []) %}
+                    {% if picks and picks|length > 0 %}
+                      <div style="margin-top:6px;">
+                        <div class="small" style="font-weight:700; margin-bottom:4px;">Round {{ rnd }}</div>
+                        <div class="fr-line">
+                          {% for dp in picks %}
+                            {% set fid = '%04d'|format((dp.original_team|int)) %}
+                            <label class="fr-pick">
+                              <input type="checkbox"
+                                     name="pick_{{ row.league.mfl_id }}_{{ bd.team.id }}_{{ rnd }}"
+                                     value="{{ dp.id }}"
+                                     data-year="{{ dp.season }}"
+                                     data-round="{{ dp.round }}">
+                              {{ dp.season }} R{{ dp.round }} (orig {{ row.franchise_names.get(fid, fid) }}{% if row.franchise_records.get(fid) %} ({{ row.franchise_records.get(fid) }}){% endif %})
+                            </label>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    {% endif %}
+                  {% endfor %}
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+
+      {% else %}
+        <!-- ======================= SELL (PICK UPGRADE) ======================= -->
+        {% set lid = row.league.mfl_id %}
+        <div class="tile tile-pad league-card {% if row.disabled_reason %}disabled{% endif %}" data-lid="{{ lid }}" aria-expanded="true">
+          <div class="league-row">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" name="league_id" value="{{ lid }}" {% if row.disabled_reason %}disabled{% else %}checked{% endif %}>
+              <span class="league-title">{{ row.league.name }}</span>
+            </label>
+            <div class="league-meta">ID {{ lid }} • Host {{ row.league.league_host or 'api.myfantasyleague.com' }}</div>
+          </div>
+
+          {% if row.disabled_reason %}
+            <div class="small" style="margin-top:8px; font-style:italic;">{{ row.disabled_reason }}</div>
+          {% else %}
+            <!-- Top controls: Your pick to include & receiving round -->
+            <div class="sec-hdr" style="margin-top:10px;">Pick Upgrade Controls</div>
+            <div class="small" style="margin-bottom:4px;">You will give: <strong>{{ player.name }}</strong> + one of your <strong>Round {{ upgrade_give_round }}</strong> picks. You will receive: a <strong>Round {{ upgrade_recv_round }}</strong> pick from selected teams.</div>
+
+            <!-- Your pick to include (one required) -->
+            <div style="margin-top:8px;">
+              <div class="small" style="font-weight:700; margin-bottom:4px;">Your pick to include (Round {{ upgrade_give_round }})</div>
+              <div class="fr-line">
+                {% for dp in row.my_give_picks %}
+                  {% set fid = '%04d'|format((dp.original_team|int)) %}
+                  <label class="fr-pick">
+                    <input type="radio"
+                           name="upgrade_my_pick_{{ lid }}"
+                           value="{{ dp.id }}"
+                           data-year="{{ dp.season }}"
+                           data-round="{{ dp.round }}">
+                    {{ dp.season }} R{{ dp.round }} (orig {{ row.franchise_names.get(fid, fid) }}{% if row.franchise_records.get(fid) %} ({{ row.franchise_records.get(fid) }}){% endif %})
+                  </label>
+                {% endfor %}
+              </div>
+              <div class="muter" style="margin-top:4px;">One required. We’ll preselect the Preferred Year if available, otherwise earliest year.</div>
+            </div>
+
+            <!-- Receiving round note -->
+            <div style="margin-top:8px;">
+              <span class="badge">Receiving: Round {{ upgrade_recv_round }}</span>
+            </div>
+
+            <!-- Buyers -->
+            <div class="sec-hdr" style="margin-top:12px;">Eligible Buyers (own at least one Round {{ upgrade_recv_round }})</div>
+            <div class="buyers-grid">
+              {% for bd in row.buyers %}
+                <div class="buyer-card" data-buyer-id="{{ bd.team.id }}">
+                  <label class="buyer-name" style="display:flex;align-items:center;gap:8px;">
+                    <input type="checkbox" name="buyer_{{ lid }}" value="{{ bd.team.id }}" checked>
+                    <span>{{ bd.team.name }}</span>
+                    <span class="muter">FID {{ bd.team.mfl_id }} • Record {{ bd.team.record or '–' }}</span>
+                  </label>
+
+                  <!-- Show their receive-round picks (read-only; selection of year happens automatically at preview using Preferred Year) -->
+                  <div class="small" style="font-weight:700; margin-bottom:4px;">Their available Round {{ upgrade_recv_round }} picks</div>
+                  <div class="fr-line">
+                    {% for dp in bd.recv_picks %}
+                      {% set fid = '%04d'|format((dp.original_team|int)) %}
+                      <span class="fr-pick" data-year="{{ dp.season }}">{{ dp.season }} R{{ dp.round }} (orig {{ row.franchise_names.get(fid, fid) }}{% if row.franchise_records.get(fid) %} ({{ row.franchise_records.get(fid) }}){% endif %})</span>
+                    {% endfor %}
+                  </div>
+                  <div class="muter" style="margin-top:4px;">We’ll choose {{ year_options and 'your Preferred Year' or 'the earliest year' }} per team.</div>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      {% endif %}
+    {% endfor %}
+
+    <div class="rowline" style="margin-top:12px;">
+      <div class="muter">
+        {% if mode == 'sell' %}
+          Only one league can be sent at a time. Selecting a league will unselect others and (for upgrade) auto-check all eligible teams.
+        {% else %}
+          Only checked leagues (and buyers) will be included. You’ll confirm everything on the next screen.
+        {% endif %}
+      </div>
+      <button type="submit" class="btn">Review Offers</button>
+    </div>
+  </form>
+</div>
+
+<script>
+(function() {
+  const mode = "{{ mode }}";
+  const templateCode = "{{ template_code }}";
+  const REQ = {{ req|tojson }}; // standard templates use this
+  const upgradeRecvRound = "{{ upgrade_recv_round or '' }}";
+  const prefWrap = document.getElementById('pref-wrap');
+
+  function getPreferredYear() {
+    const sel = prefWrap ? prefWrap.querySelector('input[name="pref_year"]:checked') : null;
+    return sel ? sel.value : null;
+  }
+
+  // Default: all leagues checked and expanded (unless disabled)
+  document.querySelectorAll('.league-card').forEach(card => {
+    const cb = card.querySelector('input[type="checkbox"][name="league_id"]');
+    if (cb && !cb.disabled) {
+      cb.checked = true;
+      card.setAttribute('aria-expanded', 'true');
+    }
+  });
+
+  // SELL: enforce single league and auto-check buyers when a league is selected
+  if (mode === 'sell') {
+    const leagueBoxes = Array.from(document.querySelectorAll('input[name="league_id"]'));
+    leagueBoxes.forEach(cb => {
+      cb.addEventListener('change', () => {
+        if (cb.checked) {
+          leagueBoxes.forEach(other => { if (other !== cb) other.checked = false; });
+          const card = cb.closest('.league-card');
+          if (card) {
+            // auto-check all buyers in selected league (standard + upgrade)
+            card.querySelectorAll('input[name^="buyer_"]').forEach(b => { b.checked = true; });
+            // For upgrade, also auto-choose "my pick" using preferred year if available
+            if (templateCode === 'upgrade') {
+              autoSelectMyUpgradePick(card);
+            }
+          }
+        } else {
+          const card = cb.closest('.league-card');
+          if (card) {
+            card.querySelectorAll('input[name^="buyer_"]').forEach(b => { b.checked = false; });
+          }
+        }
+      });
+      // trigger once on load to auto-check buyers in the first league
+      if (cb.checked) cb.dispatchEvent(new Event('change'));
+    });
+  }
+
+  // ---------------------- helpers for standard templates --------------------
+  function autoSelectPicks(container) {
+    // for each required round, choose exactly REQ[round] checkboxes
+    const prefYear = getPreferredYear();
+    Object.entries(REQ).forEach(([rndStr, need]) => {
+      const rnd = String(rndStr);
+      const picks = Array.from(container.querySelectorAll(`input[type="checkbox"][name$="_${rnd}"]`));
+      if (!picks.length) return;
+
+      if (picks.length === Number(need)) {
+        picks.forEach(p => p.checked = true);
+        return;
+      }
+
+      let chosen = [];
+      if (prefYear) {
+        chosen = picks.filter(p => String(p.dataset.year) === String(prefYear)).slice(0, Number(need));
+      }
+      if (chosen.length < Number(need)) {
+        const remaining = picks.filter(p => !chosen.includes(p));
+        remaining.sort((a,b) => (String(a.dataset.year) || '').localeCompare(String(b.dataset.year) || ''));
+        chosen = chosen.concat(remaining.slice(0, Number(need) - chosen.length));
+      }
+
+      picks.forEach(p => p.checked = chosen.includes(p));
+    });
+  }
+
+  // ---------------------- helpers for upgrade template ----------------------
+  function autoSelectMyUpgradePick(card) {
+    const prefYear = getPreferredYear();
+    const lid = card.getAttribute('data-lid');
+    const radios = Array.from(card.querySelectorAll(`input[type="radio"][name="upgrade_my_pick_${lid}"]`));
+    if (!radios.length) return;
+
+    // preselect: Preferred year first, else earliest by year asc
+    let choice = null;
+    if (prefYear) {
+      choice = radios.find(r => String(r.dataset.year) === String(prefYear));
+    }
+    if (!choice) {
+      radios.sort((a,b) => (String(a.dataset.year) || '').localeCompare(String(b.dataset.year) || ''));
+      choice = radios[0];
+    }
+    if (choice) choice.checked = true;
+  }
+
+  // Auto defaults on load
+  document.querySelectorAll('.league-card').forEach(card => {
+    if (mode === 'buy' && templateCode !== 'upgrade') {
+      autoSelectPicks(card);
+    } else if (mode === 'sell' && templateCode !== 'upgrade') {
+      card.querySelectorAll('.buyer-card').forEach(bc => autoSelectPicks(bc));
+    } else if (mode === 'sell' && templateCode === 'upgrade') {
+      autoSelectMyUpgradePick(card);
+      // buyers are already auto-checked by the single-league handler
+    }
+  });
+
+  // Re-run on preferred year change
+  if (prefWrap) {
+    prefWrap.addEventListener('change', () => {
+      document.querySelectorAll('.league-card').forEach(card => {
+        if (mode === 'buy' && templateCode !== 'upgrade') {
+          autoSelectPicks(card);
+        } else if (mode === 'sell' && templateCode !== 'upgrade') {
+          card.querySelectorAll('.buyer-card').forEach(bc => autoSelectPicks(bc));
+        } else if (mode === 'sell' && templateCode === 'upgrade') {
+          autoSelectMyUpgradePick(card);
+        }
+      });
+    });
+  }
+})();
+</script>
+{% endblock %}

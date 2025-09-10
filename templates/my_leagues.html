@@ -1,104 +1,137 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="glass-tile" style="max-width: 1100px; margin: 28px auto; padding: 16px 18px;">
-  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;">
-    <h2 style="margin:0;">My Leagues</h2>
-    <a href="{{ url_for('mfl.mfl_config') }}"
-       style="padding:8px 12px; border-radius:10px; background:#111; color:#fff; text-decoration:none;">
-      Refresh Leagues
-    </a>
+<div class="tile pad" style="max-width:1100px;margin:24px auto;">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px;">
+    <h2 class="hdr" style="margin:0;">My Leagues</h2>
+    <a href="{{ url_for('mfl.mfl_config') }}" class="btn-ghost">Refresh Leagues</a>
   </div>
 
-  <div class="responsive-table" style="overflow-x:auto;">
-    <table class="league-table" style="width:100%; border-collapse:separate; border-spacing:0 10px;">
-      <thead>
-        <tr style="text-align:left;">
-          <th style="padding:10px;">League</th>
-          <th style="padding:10px;">Season</th>
-          <th style="padding:10px;">My Team</th>
-          <th style="padding:10px;">Record</th>
-          <th style="padding:10px;">Standing</th>
-          <th style="padding:10px;">Roster</th>
-        </tr>
-      </thead>
-      <tbody id="leagues-tbody">
-        {% for league in leagues %}
-          {% set my_team = my_teams.get(league.id) %}
-          <!-- Row "tile" -->
-          <tr class="league-row"
-              data-league-row="{{ league.id }}"
-              data-details-url="{{ url_for('leagues.league_details_json', league_id=league.id) }}"
-              style="background: rgba(255,255,255,0.90); color:#111; box-shadow: 0 8px 22px rgba(0,0,0,0.08);">
-            <td style="padding:14px; border-top-left-radius:12px; border-bottom-left-radius:12px; font-weight:600; cursor:pointer;">
-              {{ league.name }}
-              <div style="font-size: 12px; color:#555;">MFL: {{ league.mfl_id }}</div>
-            </td>
-            <td style="padding:14px; cursor:pointer;">{{ league.year }}</td>
-            <td style="padding:14px; cursor:pointer;">{{ my_team.name if my_team else '—' }}</td>
-            <td style="padding:14px; cursor:pointer;">{{ my_team.record if my_team and my_team.record else '—' }}</td>
-            <td style="padding:14px; cursor:pointer;">{{ my_team.standing if my_team and my_team.standing is not none else '—' }}</td>
-            <td style="padding:14px; border-top-right-radius:12px; border-bottom-right-radius:12px; cursor:pointer;">
-              {{ league.roster_slots or 'Not set' }}
-            </td>
+  <div class="tile pad dark" style="margin-top:8px;">
+    <div class="responsive-table" style="overflow-x:auto;">
+      <table style="width:100%; border-collapse:separate; border-spacing:0 8px; color:#eaf1f7;">
+        <thead>
+          <tr style="text-align:left; opacity:.9;">
+            <th style="padding:10px;">League</th>
+            <th style="padding:10px;">Season</th>
+            <th style="padding:10px;">My Team</th>
+            <th style="padding:10px;">Record</th>
+            <th style="padding:10px;">Standing</th>
+            <th style="padding:10px;">Roster</th>
           </tr>
-          <!-- details panel injects after each tile row -->
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody id="leagues-tbody">
+          {% for league in leagues %}
+            {% set my_team = my_teams.get(league.id) %}
+            <tr class="league-row"
+                data-league-row="{{ league.id }}"
+                data-details-url="{{ url_for('leagues.league_details_json', league_id=league.id) }}"
+                style="
+                  background: radial-gradient(120% 120% at 10% 0%, rgba(12,14,18,.86), rgba(8,10,12,.9));
+                  color:#eaf1f7;
+                  border:1px solid rgba(255,255,255,.12);
+                  border-radius:12px;
+                  box-shadow: 0 8px 22px rgba(0,0,0,.25);
+                ">
+              <td style="padding:14px; border-top-left-radius:12px; border-bottom-left-radius:12px; font-weight:600; cursor:pointer;">
+                {{ league.name }}
+                <div style="font-size: 12px; opacity:.8;">MFL: {{ league.mfl_id }}</div>
+              </td>
+              <td style="padding:14px; cursor:pointer;">{{ league.year }}</td>
+              <td style="padding:14px; cursor:pointer;">{{ my_team.name if my_team else '—' }}</td>
+              <td style="padding:14px; cursor:pointer;">{{ my_team.record if my_team and my_team.record else '—' }}</td>
+              <td style="padding:14px; cursor:pointer;">{{ my_team.standing if my_team and my_team.standing is not none else '—' }}</td>
+              <td style="padding:14px; border-top-right-radius:12px; border-bottom-right-radius:12px; cursor:pointer;">
+                <span class="roster-slots" data-raw="{{ league.roster_slots or '' }}">{{ league.roster_slots or 'Not set' }}</span>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 
 <style>
-  /* Details panel styling with strong contrast */
   .details-row td {
-    background: rgba(255,255,255,0.97);
-    color: #111;
+    background: radial-gradient(120% 120% at 10% 0%, rgba(10,12,14,.92), rgba(6,8,10,.96));
+    color: #eaf1f7;
     padding: 0 14px 16px 14px;
-    border-bottom: 1px solid rgba(0,0,0,0.06);
+    border: 1px solid rgba(255,255,255,.12);
     border-radius: 12px;
   }
   .details-panel { padding: 16px 6px 6px; }
-  .details-header {
-    display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin:0 0 10px;
-  }
-  .details-header h3 { margin:0; font-size:18px; }
-  .mini { font-size:12px; color:#555; }
+  .details-header { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin:0 0 10px; }
+  .details-header h3 { margin:0; font-size:18px; color:#f4f7fa; }
+  .mini { font-size:12px; opacity:.85; }
 
-  .grid-2 {
-    display:grid; grid-template-columns: 1.2fr 1fr; gap:16px;
-  }
+  .grid-2 { display:grid; grid-template-columns: 1.2fr 1fr; gap:16px; }
   @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
 
   .standings-table, .roster-table, .picks-table {
-    width:100%; border-collapse: collapse; color:#111;
-    background: transparent;
+    width:100%; border-collapse: collapse; background: transparent;
   }
   .standings-table th, .standings-table td,
   .roster-table th, .roster-table td,
   .picks-table th, .picks-table td {
-    padding: 8px 10px;
-    border-bottom: 1px solid rgba(0,0,0,0.08);
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(255,255,255,.10);
     text-align:left;
+    vertical-align: middle;
   }
-  .standings-table th, .roster-table th, .picks-table th { font-weight:700; }
-  .is-mine { background: rgba(34,197,94,0.12); } /* highlight my franchise */
+  .standings-table th, .roster-table th, .picks-table th { font-weight:700; opacity:.95; }
+
+  .is-mine { background: rgba(16,185,129,.12); }
 
   .spinner-inline {
     display:inline-block; width:16px; height:16px;
-    border:2px solid rgba(0,0,0,0.2);
-    border-top-color:#111; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.25);
+    border-top-color:#eaf1f7; border-radius:50%;
     animation: spin .7s linear infinite; vertical-align:-3px; margin-left:6px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* Hover affordance on tiles */
-  .league-row:hover { box-shadow: 0 10px 26px rgba(0,0,0,0.12); }
+  .league-row:hover { box-shadow: 0 12px 26px rgba(0,0,0,0.30); }
+
+  .group-start td { padding-top: 12px; border-top: 1px dashed rgba(255,255,255,.15); }
+  .pos-chip { font-size:11px; padding:2px 6px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background:#0b1220; }
 </style>
 
 <script>
 (function(){
   const tbody = document.getElementById('leagues-tbody');
+  const baseOffersSearch = "{{ url_for('offers.search') }}";
+
+  function pad4(x){ x = String(x || ''); return x.padStart(4, '0'); }
+
+  // Normalize duplicated/zero roster slot ranges, e.g.
+  // "QB:1,RB:2-4,WR:3-5,TE:1-3,QB:0-0,RB:0-0,WR:0-0,TE:0-0" -> "QB:1,RB:2-4,WR:3-5,TE:1-3"
+  function cleanRosterSlots(s) {
+    if (!s) return 'Not set';
+    const parts = String(s).split(',').map(p => p.trim()).filter(Boolean);
+    const seen = {};
+    const order = [];
+    for (const p of parts) {
+      const m = p.match(/^([A-Z]+)\s*:\s*([0-9]+(?:-[0-9]+)?)$/i);
+      if (!m) continue;
+      const pos = m[1].toUpperCase();
+      const val = m[2];
+      const isZero = /^0(?:-0)?$/.test(val);
+      if (!(pos in seen)) {
+        seen[pos] = { val, nonzero: !isZero };
+        order.push(pos);
+      } else {
+        // If first occurrence was zero and this one is non-zero, upgrade it
+        if (!seen[pos].nonzero && !isZero) {
+          seen[pos] = { val, nonzero: true };
+        }
+      }
+    }
+    const nonZero = order.filter(pos => seen[pos].nonzero).map(pos => `${pos}:${seen[pos].val}`);
+    if (nonZero.length) return nonZero.join(',');
+    const all = order.map(pos => `${pos}:${seen[pos].val}`);
+    return all.join(',') || 'Not set';
+  }
 
   function closeOpenDetails(exceptLeagueId) {
     document.querySelectorAll('tr.details-row').forEach(tr => {
@@ -107,8 +140,8 @@
     });
   }
 
-  function renderStandings(teams, myFranchise) {
-    const rows = (teams || []).map((t, idx) => {
+  function standingsRows(teams, myFranchise) {
+    return (teams || []).map((t, idx) => {
       const mine = myFranchise && String(t.mfl_id) === String(myFranchise);
       const rank = (t.standing !== null && t.standing !== undefined) ? t.standing : (idx + 1);
       return `
@@ -121,6 +154,90 @@
         </tr>
       `;
     }).join('');
+  }
+
+  // Roster: sort QB, RB, WR, TE, then others; inline team; Action column with Sell link
+  function renderRoster(roster) {
+    const order = { QB: 0, RB: 1, WR: 2, TE: 3 };
+    const items = (roster || []).slice().sort((a,b) => {
+      const pa = (a.position || '').toUpperCase();
+      const pb = (b.position || '').toUpperCase();
+      const oa = (pa in order) ? order[pa] : 99;
+      const ob = (pb in order) ? order[pb] : 99;
+      if (oa !== ob) return oa - ob;
+      const sa = a.is_starter ? 0 : 1;
+      const sb = b.is_starter ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+
+    let lastPos = null;
+    const rows = items.map(r => {
+      const pos = (r.position || '').toUpperCase();
+      const groupStart = lastPos !== null && pos !== lastPos ? 'group-start' : '';
+      lastPos = pos;
+      const team = r.team ? `<span class="mini" style="margin-left:6px;white-space:nowrap;">— ${r.team}</span>` : '';
+      const sellHref = `${baseOffersSearch}?q=${encodeURIComponent(r.name || '')}&mode=sell`;
+      return `
+        <tr class="${groupStart}">
+          <td style="width:64px;"><span class="pos-chip">${pos || '—'}</span></td>
+          <td>${r.name || '—'} ${team}</td>
+          <td style="width:100px;">
+            <a class="btn-ghost" href="${sellHref}" style="padding:6px 10px;font-size:12px;">Sell</a>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <div>
+        <h4 style="margin: 8px 0 6px;">My Roster</h4>
+        <table class="roster-table">
+          <thead>
+            <tr><th style="width:64px;">Pos</th><th>Player</th><th style="width:100px;">Action</th></tr>
+          </thead>
+          <tbody>
+            ${rows || '<tr><td colspan="3" style="padding:10px;">No roster loaded.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  // Picks: map original team FID -> name using teams array
+  function renderPicks(picks, teams) {
+    const teamMap = {};
+    (teams || []).forEach(t => { teamMap[pad4(t.mfl_id)] = t.name || pad4(t.mfl_id); });
+
+    const rows = (picks || []).map(p => {
+      const fid = pad4(p.original_team || '');
+      const orig = teamMap[fid] || fid;
+      return `
+        <tr>
+          <td style="width:70px;">${p.season}</td>
+          <td style="width:70px;">R${p.round}</td>
+          <td style="width:90px;">${p.pick_number ?? '—'}</td>
+          <td>${orig}</td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <div>
+        <h4 style="margin: 8px 0 6px;">My Draft Picks</h4>
+        <table class="picks-table">
+          <thead>
+            <tr><th style="width:70px;">Season</th><th style="width:70px;">Round</th><th style="width:90px;">Pick</th><th>Original Team</th></tr>
+          </thead>
+          <tbody>
+            ${rows || '<tr><td colspan="4" style="padding:10px;">No draft picks loaded.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function renderStandings(teams, myFranchise) {
     return `
       <div>
         <h4 style="margin:0 0 6px;">Standings</h4>
@@ -135,54 +252,7 @@
             </tr>
           </thead>
           <tbody>
-            ${rows || '<tr><td colspan="5" style="padding:10px;">No team data found.</td></tr>'}
-          </tbody>
-        </table>
-      </div>
-    `;
-  }
-
-  function renderRoster(roster) {
-    const rows = (roster || []).map(r => `
-      <tr>
-        <td style="width:64px;">${r.position || '—'}</td>
-        <td>${r.name || '—'}<div class="mini">${r.team || ''}</div></td>
-        <td style="width:90px;">${r.is_starter ? 'Starter' : 'Bench'}</td>
-      </tr>
-    `).join('');
-    return `
-      <div>
-        <h4 style="margin: 10px 0 6px;">My Roster</h4>
-        <table class="roster-table">
-          <thead>
-            <tr><th style="width:64px;">Pos</th><th>Player</th><th style="width:90px;">Slot</th></tr>
-          </thead>
-          <tbody>
-            ${rows || '<tr><td colspan="3" style="padding:10px;">No roster loaded.</td></tr>'}
-          </tbody>
-        </table>
-      </div>
-    `;
-  }
-
-  function renderPicks(picks) {
-    const rows = (picks || []).map(p => `
-      <tr>
-        <td style="width:70px;">${p.season}</td>
-        <td style="width:70px;">R${p.round}</td>
-        <td style="width:90px;">${p.pick_number ?? '—'}</td>
-        <td>${p.original_team || '—'}</td>
-      </tr>
-    `).join('');
-    return `
-      <div>
-        <h4 style="margin: 10px 0 6px;">My Draft Picks</h4>
-        <table class="picks-table">
-          <thead>
-            <tr><th style="width:70px;">Season</th><th style="width:70px;">Round</th><th style="width:90px;">Pick</th><th>Original Team</th></tr>
-          </thead>
-          <tbody>
-            ${rows || '<tr><td colspan="4" style="padding:10px;">No draft picks loaded.</td></tr>'}
+            ${standingsRows(teams, myFranchise) || '<tr><td colspan="5" style="padding:10px;">No team data found.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -193,14 +263,11 @@
     const leagueId = rowEl.getAttribute('data-league-row');
     const url = rowEl.getAttribute('data-details-url');
 
-    // If already open under this row: close it
     const existing = document.querySelector(`tr.details-row[data-for-league="${leagueId}"]`);
     if (existing) { existing.remove(); return; }
 
-    // Close others
     closeOpenDetails(leagueId);
 
-    // Insert a placeholder loading row
     const loadingRow = document.createElement('tr');
     loadingRow.className = 'details-row';
     loadingRow.setAttribute('data-for-league', leagueId);
@@ -219,6 +286,8 @@
 
       const myFranchise = data.league && data.league.franchise_id ? String(data.league.franchise_id) : null;
       const synced = data.league && data.league.synced_at ? new Date(data.league.synced_at).toLocaleString() : '—';
+      const teams = data.teams || [];
+      const slots = cleanRosterSlots(data.league && data.league.roster_slots ? data.league.roster_slots : '');
 
       td.innerHTML = `
         <div class="details-panel">
@@ -226,15 +295,15 @@
             <h3>${data.league.name}</h3>
             <span class="mini">Season ${data.league.year} • MFL ${data.league.mfl_id} • Last sync: ${synced}</span>
           </div>
-          <div style="margin-bottom: 10px;">
-            <strong>Lineup:</strong> ${data.league.roster_slots || 'Not set'}
+          <div style="margin-bottom: 8px;">
+            <strong>Lineup:</strong> ${slots}
           </div>
 
           <div class="grid-2">
-            ${renderStandings(data.teams, myFranchise)}
+            ${renderStandings(teams, myFranchise)}
             <div>
               ${renderRoster(data.my_roster)}
-              ${renderPicks(data.my_draft_picks)}
+              ${renderPicks(data.my_draft_picks, teams)}
             </div>
           </div>
         </div>
@@ -245,10 +314,17 @@
     }
   }
 
+  // Click to expand/collapse details
   tbody.addEventListener('click', (e) => {
     const row = e.target.closest('tr.league-row');
     if (!row) return;
     toggleDetails(row);
+  });
+
+  // Clean roster-slot strings in the top list rows
+  document.querySelectorAll('.roster-slots').forEach(el => {
+    const raw = el.getAttribute('data-raw') || '';
+    el.textContent = cleanRosterSlots(raw);
   });
 })();
 </script>

@@ -85,7 +85,9 @@ def create_app():
     from auth.routes import auth_bp
     from leagues.routes import leagues_bp
     from mfl.routes import mfl_bp
+    from offers.routes import offers_bp
 
+    app.register_blueprint(offers_bp)
     app.register_blueprint(mfl_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(leagues_bp)
