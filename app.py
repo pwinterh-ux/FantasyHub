@@ -86,11 +86,13 @@ def create_app():
     from leagues.routes import leagues_bp
     from mfl.routes import mfl_bp
     from offers.routes import offers_bp
+    from live.routes import live_bp
 
     app.register_blueprint(offers_bp)
     app.register_blueprint(mfl_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(leagues_bp)
+    app.register_blueprint(live_bp)
 
     # ----- Routes -----
     @app.route("/")

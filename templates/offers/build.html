@@ -218,7 +218,7 @@
               <span class="badge">Receiving: Round {{ upgrade_recv_round }}</span>
             </div>
 
-            <!-- Buyers -->
+            <!-- Buyers (single-select year per buyer) -->
             <div class="sec-hdr" style="margin-top:12px;">Eligible Buyers (own at least one Round {{ upgrade_recv_round }})</div>
             <div class="buyers-grid">
               {% for bd in row.buyers %}
@@ -229,15 +229,22 @@
                     <span class="muter">FID {{ bd.team.mfl_id }} • Record {{ bd.team.record or '–' }}</span>
                   </label>
 
-                  <!-- Show their receive-round picks (read-only; selection of year happens automatically at preview using Preferred Year) -->
-                  <div class="small" style="font-weight:700; margin-bottom:4px;">Their available Round {{ upgrade_recv_round }} picks</div>
+                  <div class="small" style="font-weight:700; margin-bottom:4px;">Select their Round {{ upgrade_recv_round }} pick (one)</div>
                   <div class="fr-line">
                     {% for dp in bd.recv_picks %}
                       {% set fid = '%04d'|format((dp.original_team|int)) %}
-                      <span class="fr-pick" data-year="{{ dp.season }}">{{ dp.season }} R{{ dp.round }} (orig {{ row.franchise_names.get(fid, fid) }}{% if row.franchise_records.get(fid) %} ({{ row.franchise_records.get(fid) }}){% endif %})</span>
+                      <label class="fr-pick">
+                        <input type="checkbox"
+                               class="recv-pick"
+                               name="pick_{{ lid }}_{{ bd.team.id }}_{{ upgrade_recv_round }}"
+                               value="{{ dp.id }}"
+                               data-year="{{ dp.season }}"
+                               data-round="{{ dp.round }}">
+                        {{ dp.season }} R{{ dp.round }} (orig {{ row.franchise_names.get(fid, fid) }}{% if row.franchise_records.get(fid) %} ({{ row.franchise_records.get(fid) }}){% endif %})
+                      </label>
                     {% endfor %}
                   </div>
-                  <div class="muter" style="margin-top:4px;">We’ll choose {{ year_options and 'your Preferred Year' or 'the earliest year' }} per team.</div>
+                  <div class="muter" style="margin-top:4px;">Preferred Year will preselect a year per team; your manual choice takes priority.</div>
                 </div>
               {% endfor %}
             </div>
@@ -249,7 +256,7 @@
     <div class="rowline" style="margin-top:12px;">
       <div class="muter">
         {% if mode == 'sell' %}
-          Only one league can be sent at a time. Selecting a league will unselect others and (for upgrade) auto-check all eligible teams.
+          Only one league can be sent at a time. Selecting a league will unselect others and (for upgrade) auto-check eligible teams and a default year per team.
         {% else %}
           Only checked leagues (and buyers) will be included. You’ll confirm everything on the next screen.
         {% endif %}
@@ -263,8 +270,7 @@
 (function() {
   const mode = "{{ mode }}";
   const templateCode = "{{ template_code }}";
-  const REQ = {{ req|tojson }}; // standard templates use this
-  const upgradeRecvRound = "{{ upgrade_recv_round or '' }}";
+  const REQ = {{ req|tojson }};
   const prefWrap = document.getElementById('pref-wrap');
 
   function getPreferredYear() {
@@ -272,7 +278,7 @@
     return sel ? sel.value : null;
   }
 
-  // Default: all leagues checked and expanded (unless disabled)
+  // Default expand/checked where allowed (unchanged behavior)
   document.querySelectorAll('.league-card').forEach(card => {
     const cb = card.querySelector('input[type="checkbox"][name="league_id"]');
     if (cb && !cb.disabled) {
@@ -281,39 +287,11 @@
     }
   });
 
-  // SELL: enforce single league and auto-check buyers when a league is selected
-  if (mode === 'sell') {
-    const leagueBoxes = Array.from(document.querySelectorAll('input[name="league_id"]'));
-    leagueBoxes.forEach(cb => {
-      cb.addEventListener('change', () => {
-        if (cb.checked) {
-          leagueBoxes.forEach(other => { if (other !== cb) other.checked = false; });
-          const card = cb.closest('.league-card');
-          if (card) {
-            // auto-check all buyers in selected league (standard + upgrade)
-            card.querySelectorAll('input[name^="buyer_"]').forEach(b => { b.checked = true; });
-            // For upgrade, also auto-choose "my pick" using preferred year if available
-            if (templateCode === 'upgrade') {
-              autoSelectMyUpgradePick(card);
-            }
-          }
-        } else {
-          const card = cb.closest('.league-card');
-          if (card) {
-            card.querySelectorAll('input[name^="buyer_"]').forEach(b => { b.checked = false; });
-          }
-        }
-      });
-      // trigger once on load to auto-check buyers in the first league
-      if (cb.checked) cb.dispatchEvent(new Event('change'));
-    });
-  }
-
-  // ---------------------- helpers for standard templates --------------------
+  // ---------------------- Standard template helpers -------------------------
   function autoSelectPicks(container) {
-    // for each required round, choose exactly REQ[round] checkboxes
+    // Standard BUY/SELL: choose exactly REQ[round] picks, pref year first, else earliest
     const prefYear = getPreferredYear();
-    Object.entries(REQ).forEach(([rndStr, need]) => {
+    Object.entries(REQ || {}).forEach(([rndStr, need]) => {
       const rnd = String(rndStr);
       const picks = Array.from(container.querySelectorAll(`input[type="checkbox"][name$="_${rnd}"]`));
       if (!picks.length) return;
@@ -337,14 +315,14 @@
     });
   }
 
-  // ---------------------- helpers for upgrade template ----------------------
+  // ---------------------- Upgrade template helpers --------------------------
   function autoSelectMyUpgradePick(card) {
+    // Your radio pick: prefer Preferred Year; else earliest
     const prefYear = getPreferredYear();
     const lid = card.getAttribute('data-lid');
     const radios = Array.from(card.querySelectorAll(`input[type="radio"][name="upgrade_my_pick_${lid}"]`));
     if (!radios.length) return;
 
-    // preselect: Preferred year first, else earliest by year asc
     let choice = null;
     if (prefYear) {
       choice = radios.find(r => String(r.dataset.year) === String(prefYear));
@@ -356,7 +334,72 @@
     if (choice) choice.checked = true;
   }
 
-  // Auto defaults on load
+  function autoSelectUpgradeBuyerPicks(card) {
+    // For each buyer: uncheck all, then check those matching Preferred Year; if none match, check earliest year's first
+    const prefYear = getPreferredYear();
+    if (!prefYear) return;
+
+    // All buyer cards inside this league
+    const buyers = card.querySelectorAll('.buyer-card');
+    buyers.forEach(bc => {
+      const checks = Array.from(bc.querySelectorAll('input[type="checkbox"][name^="pick_"]'));
+      if (!checks.length) return;
+
+      // Uncheck everything first
+      checks.forEach(c => { c.checked = false; });
+
+      // Check all matches for the preferred year
+      const matches = checks.filter(c => String(c.dataset.year) === String(prefYear));
+      if (matches.length) {
+        matches.forEach(c => { c.checked = true; });
+        return;
+      }
+
+      // Fallback: pick earliest year’s first option
+      const sorted = checks.slice().sort((a,b) => (String(a.dataset.year) || '').localeCompare(String(b.dataset.year) || ''));
+      if (sorted.length) sorted[0].checked = true;
+    });
+  }
+
+  // ---------------------- SELL behaviors ------------------------------------
+  if (mode === 'sell') {
+    const leagueBoxes = Array.from(document.querySelectorAll('input[name="league_id"]'));
+
+    // Enforce single-league selection for SELL (your server enforces this too)
+    leagueBoxes.forEach(cb => {
+      cb.addEventListener('change', () => {
+        if (cb.checked) {
+          leagueBoxes.forEach(other => { if (other !== cb) other.checked = false; });
+
+          const card = cb.closest('.league-card');
+          if (card) {
+            // Auto-check all buyers (both standard & upgrade), then apply helpers
+            card.querySelectorAll('input[name^="buyer_"]').forEach(b => { b.checked = true; });
+
+            if (templateCode !== 'upgrade') {
+              // Standard SELL: pick counts per REQ by preferred year
+              card.querySelectorAll('.buyer-card').forEach(bc => autoSelectPicks(bc));
+            } else {
+              // Upgrade: set your radio + buyer pick checkboxes by preferred year
+              autoSelectMyUpgradePick(card);
+              autoSelectUpgradeBuyerPicks(card);
+            }
+          }
+        } else {
+          const card = cb.closest('.league-card');
+          if (card) {
+            // Uncheck buyers if league unselected
+            card.querySelectorAll('input[name^="buyer_"]').forEach(b => { b.checked = false; });
+          }
+        }
+      });
+
+      // Trigger once on load for the initially-checked league
+      if (cb.checked) cb.dispatchEvent(new Event('change'));
+    });
+  }
+
+  // ---------------------- Initial defaults on load --------------------------
   document.querySelectorAll('.league-card').forEach(card => {
     if (mode === 'buy' && templateCode !== 'upgrade') {
       autoSelectPicks(card);
@@ -364,11 +407,11 @@
       card.querySelectorAll('.buyer-card').forEach(bc => autoSelectPicks(bc));
     } else if (mode === 'sell' && templateCode === 'upgrade') {
       autoSelectMyUpgradePick(card);
-      // buyers are already auto-checked by the single-league handler
+      autoSelectUpgradeBuyerPicks(card);
     }
   });
 
-  // Re-run on preferred year change
+  // ---------------------- React to Preferred Year changes -------------------
   if (prefWrap) {
     prefWrap.addEventListener('change', () => {
       document.querySelectorAll('.league-card').forEach(card => {
@@ -378,10 +421,12 @@
           card.querySelectorAll('.buyer-card').forEach(bc => autoSelectPicks(bc));
         } else if (mode === 'sell' && templateCode === 'upgrade') {
           autoSelectMyUpgradePick(card);
+          autoSelectUpgradeBuyerPicks(card);
         }
       });
     });
   }
 })();
 </script>
+
 {% endblock %}

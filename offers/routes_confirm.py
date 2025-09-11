@@ -85,85 +85,53 @@ def _draftpick_to_token(p: DraftPick) -> Optional[str]:
 
 
 def _draftpick_tokens_from_ids(ids: List[str]) -> List[str]:
-    """Turn DraftPick DB ids into MFL tokens FP_<origfid>_<year>_<round>."""
+    """
+    Turn DraftPick DB ids into tokens, preserving the *input order* of ids.
+    """
     if not ids:
         return []
-    tokens: List[str] = []
     found = DraftPick.query.filter(DraftPick.id.in_(ids)).all()
-    for p in found:
+    by_id = {str(p.id): p for p in found}
+    tokens: List[str] = []
+    for pid in ids:
+        p = by_id.get(str(pid))
+        if not p:
+            continue
         tok = _draftpick_to_token(p)
         if tok:
             tokens.append(tok)
     return tokens
 
 
-def _extract_buy_picks_for_league(form: Dict[str, Any], lid: str, required_rounds: Dict[int, int]) -> List[str]:
+def _extract_buy_picks_for_league(form: Dict[str, Any], lid: str) -> List[str]:
     """
     BUY mode:
-      - If required_rounds provided, read pick_{lid}_{rnd} for each required round.
-      - If not provided, accept ANY key that starts with pick_{lid}_ (covers all displayed rounds).
+      Accept ANY key that starts with pick_{lid}_ (covers all displayed rounds).
+      Return DraftPick ids in the order they appear in the form.
     """
     picks: List[str] = []
-    if required_rounds:
-        for rnd in required_rounds.keys():
-            picks.extend(form.getlist(f"pick_{lid}_{rnd}"))
-    else:
-        prefix = f"pick_{lid}_"
-        for key in form.keys():
-            if key.startswith(prefix):
-                picks.extend(form.getlist(key))
+    prefix = f"pick_{lid}_"
+    for key in form.keys():
+        if key.startswith(prefix):
+            picks.extend(form.getlist(key))
     # de-dup preserve order
     seen = set()
     return [x for x in picks if not (x in seen or seen.add(x))]
 
 
-def _extract_sell_picks_for_buyer(form: Dict[str, Any], lid: str, buyer_fid_or_id: str, required_rounds: Dict[int, int]) -> List[str]:
+def _extract_sell_picks_for_buyer(form: Dict[str, Any], lid: str, buyer_fid_or_id: str) -> List[str]:
     """
-    SELL mode:
-      - If required_rounds provided, read pick_{lid}_{buyer}_{rnd}.
-      - If not provided, accept ANY key that starts with pick_{lid}_{buyer}_.
+    SELL (standard or upgrade):
+      Accept ANY key that starts with pick_{lid}_{buyer}_ (covers all displayed rounds).
+      Return DraftPick ids in the order they appear in the form.
     """
     picks: List[str] = []
-    if required_rounds:
-        for rnd in required_rounds.keys():
-            picks.extend(form.getlist(f"pick_{lid}_{buyer_fid_or_id}_{rnd}"))
-    else:
-        prefix = f"pick_{lid}_{buyer_fid_or_id}_"
-        for key in form.keys():
-            if key.startswith(prefix):
-                picks.extend(form.getlist(key))
+    prefix = f"pick_{lid}_{buyer_fid_or_id}_"
+    for key in form.keys():
+        if key.startswith(prefix):
+            picks.extend(form.getlist(key))
     seen = set()
     return [x for x in picks if not (x in seen or seen.add(x))]
-
-
-def _choose_buyer_pick_for_round(buyer: Team, recv_round: int, pref_year: Optional[int]) -> Optional[DraftPick]:
-    """Pick exactly one of buyer's picks in the target round. Prefer pref_year; else earliest season."""
-    pbr: Dict[int, List[DraftPick]] = {}
-    for p in DraftPick.query.filter(DraftPick.team_id == buyer.id).all():
-        try:
-            r = int(p.round)
-        except Exception:
-            continue
-        pbr.setdefault(r, []).append(p)
-
-    candidates = pbr.get(int(recv_round), []) if recv_round else []
-    if not candidates:
-        return None
-
-    # try preferred year
-    if pref_year is not None:
-        for p in candidates:
-            try:
-                if int(p.season) == int(pref_year):
-                    return p
-            except Exception:
-                pass
-
-    # else earliest by season asc
-    try:
-        return sorted(candidates, key=lambda x: int(x.season))[0]
-    except Exception:
-        return candidates[0]
 
 
 @offers_bp.route("/preview", methods=["POST"])
@@ -171,28 +139,28 @@ def _choose_buyer_pick_for_round(buyer: Team, recv_round: int, pref_year: Option
 def preview_offers():
     """
     Build a pending-offers JSON from builder POST, then render confirm.html.
-    Includes SELL 'upgrade' flow (player + your pick for buyer's pick in a round).
+
+    STRICT behavior for all templates:
+      - Use exactly the posted checkbox/radio values (no auto-selection, no Preferred-Year logic).
+      - If a selected league/buyer has no picks checked, it is skipped for preview.
     """
     mode = (request.form.get("mode") or "buy").strip()
     template_code = (request.form.get("template_code") or "").strip()
-    pref_year_raw = request.form.get("pref_year")
-    try:
-        pref_year = int(pref_year_raw) if pref_year_raw else None
-    except Exception:
-        pref_year = None
 
+    # Player (if present in template)
     player_id_raw = request.form.get("player_id") or request.form.get("player")
     try:
         player_id = int(player_id_raw) if player_id_raw is not None else None
     except Exception:
         player_id = None
-
     player = Player.query.get(player_id) if player_id else None
 
     pending: List[Dict[str, Any]] = []
     count = 0
 
     if mode == "buy":
+        skipped: List[str] = []
+
         league_ids = request.form.getlist("league_id")
         for lid in league_ids:
             lg = League.query.filter_by(user_id=current_user.id, mfl_id=str(lid)).first()
@@ -205,9 +173,12 @@ def preview_offers():
             if not owner_team:
                 continue
 
-            pick_ids = _extract_buy_picks_for_league(request.form, str(lid), required_rounds={})
+            # STRICT: posted checkboxes only
+            pick_ids = _extract_buy_picks_for_league(request.form, str(lid))
             will_give = _draftpick_tokens_from_ids(pick_ids)
+
             if not will_give:
+                skipped.append(f"{lg.name} (ID {lg.mfl_id})")
                 continue
 
             will_recv = [str(player_id)] if player_id else []
@@ -237,6 +208,9 @@ def preview_offers():
                 "expires_unix": _now_utc_ts() + 7*24*3600,
             })
             count += 1
+
+        if skipped:
+            flash(f"Skipped (no picks selected): {', '.join(skipped)}", "info")
 
     elif mode == "sell" and template_code != "upgrade":
         # Enforce exactly one league selected via buyer_* keys
@@ -268,14 +242,19 @@ def preview_offers():
         fnames, frecords = _league_maps(lg)
         host = (lg.league_host or "").strip() or "api.myfantasyleague.com"
 
+        skipped_buyers: List[str] = []
+
         for bt in buyer_team_ids:
             buyer_team = Team.query.get(bt)
             if not buyer_team or buyer_team.league_id != lg.id:
                 continue
 
-            pick_ids = _extract_sell_picks_for_buyer(request.form, str(lid), str(buyer_team.id), required_rounds={})
+            # STRICT: posted checkboxes only
+            pick_ids = _extract_sell_picks_for_buyer(request.form, str(lid), str(buyer_team.id))
             will_recv = _draftpick_tokens_from_ids(pick_ids)
+
             if not will_recv:
+                skipped_buyers.append(buyer_team.name or f"FID {buyer_team.mfl_id}")
                 continue
 
             will_give = [str(player_id)] if player_id else []
@@ -301,9 +280,12 @@ def preview_offers():
             })
             count += 1
 
+        if skipped_buyers:
+            flash(f"Skipped buyer(s) with no picks selected: {', '.join(skipped_buyers)}", "info")
+
     elif mode == "sell" and template_code == "upgrade":
-        # --- SELL: Pick Upgrade ---
-        # Get upgrade params
+        # --- SELL: Pick Upgrade (now also uses posted buyer pick checkboxes) ---
+        # Params still validated, but selection is user-driven.
         try:
             recv_round = int(request.form.get("upgrade_recv_round") or "0")
             give_round = int(request.form.get("upgrade_give_round") or "0")
@@ -314,7 +296,7 @@ def preview_offers():
             flash("Pick Upgrade needs both Give and Receive rounds.", "warning")
             return redirect(url_for("offers.search"))
 
-        # Enforce exactly one league via buyer_* keys
+        # Exactly one league via buyer_* keys (your flow requirement)
         lids: List[str] = []
         for key in request.form.keys():
             m = re.match(r"buyer_(\d+)$", key)
@@ -338,7 +320,7 @@ def preview_offers():
             return redirect(url_for("offers.build", player_id=player_id, mode="sell", template_code="upgrade",
                                     upgrade_give_round=give_round, upgrade_recv_round=recv_round))
 
-        # Your selected pick (required)
+        # Your selected pick (radio required)
         my_pick_id = request.form.get(f"upgrade_my_pick_{lid}")
         if not my_pick_id:
             flash("Select one of your picks to include.", "warning")
@@ -350,7 +332,13 @@ def preview_offers():
             return redirect(url_for("offers.build", player_id=player_id, mode="sell", template_code="upgrade",
                                     upgrade_give_round=give_round, upgrade_recv_round=recv_round))
 
-        my_pick_token = _draftpick_to_token(my_pick_row)
+        def _draftpick_to_token_local(p: DraftPick) -> Optional[str]:
+            try:
+                return f"FP_{(p.original_team or '').zfill(4)}_{int(p.season)}_{int(p.round)}"
+            except Exception:
+                return None
+
+        my_pick_token = _draftpick_to_token_local(my_pick_row)
         if not my_pick_token:
             flash("Could not encode your pick.", "warning")
             return redirect(url_for("offers.build", player_id=player_id, mode="sell", template_code="upgrade",
@@ -365,32 +353,29 @@ def preview_offers():
         fnames, frecords = _league_maps(lg)
         host = (lg.league_host or "").strip() or "api.myfantasyleague.com"
 
+        skipped_buyers: List[str] = []
+
         for bt in buyer_team_ids:
             buyer_team = Team.query.get(bt)
             if not buyer_team or buyer_team.league_id != lg.id:
                 continue
 
-            # pick one receive-round pick for this buyer (prefer preferred year; else earliest)
-            chosen = _choose_buyer_pick_for_round(buyer_team, recv_round, pref_year)
-            if not chosen:
-                # Per your directive, you don't expect this case; skip silently if it occurs.
-                continue
-            buyer_token = _draftpick_to_token(chosen)
-            if not buyer_token:
+            # STRICT: posted buyer-pick checkboxes only (no auto-choosing)
+            pick_ids = _extract_sell_picks_for_buyer(request.form, str(lid), str(buyer_team.id))
+            will_recv = _draftpick_tokens_from_ids(pick_ids)
+
+            if not will_recv:
+                skipped_buyers.append(buyer_team.name or f"FID {buyer_team.mfl_id}")
                 continue
 
             will_give = [str(player_id)] if player_id else []
-            if my_pick_token:
-                will_give.append(my_pick_token)
-
-            will_recv = [buyer_token]
+            will_give.append(my_pick_token)
 
             give_names = {}
             if player:
                 give_names[str(player_id)] = player.name
-            if my_pick_token:
-                give_names[my_pick_token] = _fmt_pick(my_pick_token, fnames, frecords)
-            recv_names = {buyer_token: _fmt_pick(buyer_token, fnames, frecords)}
+            give_names[my_pick_token] = _fmt_pick(my_pick_token, fnames, frecords)
+            recv_names = {tok: _fmt_pick(tok, fnames, frecords) for tok in will_recv}
 
             pending.append({
                 "host": host,
@@ -408,9 +393,12 @@ def preview_offers():
                 "will_give_up_names": give_names,
                 "will_receive_names": recv_names,
                 "expires_unix": _now_utc_ts() + 7*24*3600,
-                "comments": "",  # optional
+                "comments": "",
             })
             count += 1
+
+        if skipped_buyers:
+            flash(f"Upgrade: skipped buyer(s) with no picks selected: {', '.join(skipped_buyers)}", "info")
 
     else:
         flash("Unknown mode.", "warning")

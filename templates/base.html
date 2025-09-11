@@ -81,6 +81,10 @@
     .nav-links a:hover{
       background:#0b1220; border-color: rgba(255,255,255,.08);
     }
+    /* Disabled/inactive nav items */
+    .nav-links a.disabled, .nav-links a[aria-disabled="true"]{
+      opacity:.5; pointer-events:none; cursor: default;
+    }
 
     /* --------- Main content area --------- */
     main.content{ padding: 8px 0 24px; }
@@ -152,7 +156,9 @@
         <ul class="nav-links">
           <li><a href="{{ url_for('start') }}">Leagues</a></li>
           <li><a href="{{ url_for('mfl.trades_home') }}">Trades</a></li>
-          <li><a href="#">Live Scoring (Coming Soon)</a></li>
+          <li><a href="{{ url_for('live.live_index') }}">Live Scoring</a></li>
+          <li><a href="#" class="disabled" aria-disabled="true" title="Coming soon">Lineups</a></li>
+          <li><a href="#" class="disabled" aria-disabled="true" title="Coming soon">Waivers</a></li>
 
           {% if current_user.is_authenticated %}
             <li class="muted">Hi, {{ current_user.username }}</li>
