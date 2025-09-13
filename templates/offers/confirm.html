@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .hud-wrap { max-width: 1100px; margin: 24px auto; }
+  .tile {
+    background: radial-gradient(120% 120% at 10% 0%, rgba(22,22,26,.85), rgba(10,12,14,.88));
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    color: #eaf1f7;
+  }
+  .tile-pad { padding: 16px; }
+  .hdr { color: #f4f7fa; text-shadow: 0 1px 2px rgba(0,0,0,.35); margin: 0; }
+  .muted { opacity: .8; }
+  .btn-main {
+    background: linear-gradient(180deg, #10b981, #059669);
+    color:#fff; border:none; border-radius:10px; padding:10px 14px; font-weight:700;
+    box-shadow: 0 6px 18px rgba(16,185,129,.35);
+  }
+  .btn-secondary {
+    background: #0f172a; color:#e2e8f0; text-decoration:none; border-radius:10px; padding:10px 14px;
+    border: 1px solid rgba(255,255,255,.08);
+  }
+  table.conf-table { width:100%; border-collapse: collapse; margin-top: 10px; }
+  table.conf-table th, table.conf-table td {
+    border-bottom: 1px solid rgba(255,255,255,.08);
+    padding: 8px 6px; text-align: left; font-size: 14px; vertical-align: top;
+  }
+  table.conf-table th { font-weight: 700; opacity: .95; }
+  .pill {
+    padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .2px; display: inline-block;
+    border: 1px solid rgba(255,255,255,.18); margin-right: 6px; margin-bottom: 4px;
+  }
+  .pill-give { background: #ef44441a; color:#fecaca; border-color:#ef444455; }
+  .pill-recv { background: #3b82f61a; color:#bfdbfe; border-color:#3b82f655; }
+  .foot-muted { font-size: 12px; opacity: .7; margin-top: 6px; }
+</style>
+
+<div class="hud-wrap">
+  <div class="tile tile-pad" style="display:flex;justify-content:space-between;align-items:center;">
+    <div>
+      <h2 class="hdr" style="margin-bottom:4px;">
+        Confirm sending {{ count }} offer{{ '' if count == 1 else 's' }}
+      </h2>
+      <div class="muted">
+        {% if player and player.name %}Player: <strong>{{ player.name }}</strong>{% endif %}
+        {% if template_label %}{% if player and player.name %} — {% endif %}Price: <strong>{{ template_label }}</strong>{% endif %}
+      </div>
+      <div class="pill pill-recv" style="margin-top:8px;">No trades will be sent until you confirm.</div>
+    </div>
+    <a href="javascript:history.back()" class="btn-secondary">Back</a>
+  </div>
+
+  <div class="tile tile-pad" style="margin-top:12px;">
+    <div style="font-weight:700; margin-bottom:6px;">Preview</div>
+    <div class="muted" style="font-size:13px;">Review each offer below, then click <strong>Confirm</strong> to send them to MFL.</div>
+
+    <table class="conf-table" id="offers-table">
+      <thead>
+        <tr>
+          <th style="width:22%;">League</th>
+          <th style="width:18%;">From</th>
+          <th style="width:18%;">To</th>
+          <th style="width:22%;">You Give</th>
+          <th style="width:22%;">You Receive</th>
+          <th style="width:16%;">Expires</th>
+        </tr>
+      </thead>
+      <tbody id="offers-tbody">
+        <!-- rows injected by JS -->
+      </tbody>
+    </table>
+
+    <form method="POST" action="{{ url_for('offers.perform_offers') }}" style="margin-top:12px; display:flex; gap:10px; align-items:center;">
+      <input type="hidden" name="pending_json" id="pending_json_field" value="{{ pending_json|e }}">
+      <button type="submit" class="btn-main">Confirm: Send {{ count }} offer{{ '' if count == 1 else 's' }}</button>
+      <a href="javascript:history.back()" class="btn-secondary">Cancel</a>
+    </form>
+  </div>
+</div>
+
+<script>
+(function() {
+  const raw = document.getElementById('pending_json_field').value || "[]";
+  let items;
+  try { items = JSON.parse(raw); } catch (e) { items = []; }
+
+  const tbody = document.getElementById('offers-tbody');
+  const fmtDate = (unix) => {
+    try { return new Date(parseInt(unix, 10) * 1000).toLocaleString(); }
+    catch (e) { return String(unix); }
+  };
+
+  function pill(text, cls) {
+    const span = document.createElement('span');
+    span.className = `pill ${cls}`;
+    span.textContent = text;
+    return span;
+  }
+
+  items.forEach(it => {
+    const tr = document.createElement('tr');
+
+    const tdLeague = document.createElement('td');
+    tdLeague.innerHTML = `<div style="font-weight:700;">${(it.league_name||'')}</div>
+                          <div class="muted" style="font-size:12px;">ID ${it.league_id||''}${it.host?(' • '+it.host):''}</div>`;
+
+    const tdFrom = document.createElement('td');
+    tdFrom.textContent = `${it.offered_by_name || ''}${it.offered_by_record ? ' (' + it.offered_by_record + ')' : ''}${it.offered_by_fid ? ' [' + it.offered_by_fid + ']' : ''}`;
+
+    const tdTo = document.createElement('td');
+    tdTo.textContent = `${it.offered_to_name || ''}${it.offered_to_record ? ' (' + it.offered_to_record + ')' : ''}${it.offered_to_fid ? ' [' + it.offered_to_fid + ']' : ''}`;
+
+    const tdGive = document.createElement('td');
+    const give = Array.isArray(it.will_give_up) ? it.will_give_up : [];
+    give.forEach(tok => {
+      const name = (it.will_give_up_names && it.will_give_up_names[tok]) || null;
+      tdGive.appendChild(pill(name || tok, "pill-give"));
+    });
+
+    const tdRecv = document.createElement('td');
+    const recv = Array.isArray(it.will_receive) ? it.will_receive : [];
+    recv.forEach(tok => {
+      const name = (it.will_receive_names && it.will_receive_names[tok]) || null;
+      tdRecv.appendChild(pill(name || tok, "pill-recv"));
+    });
+
+    const tdExp = document.createElement('td');
+    tdExp.textContent = fmtDate(it.expires_unix || 0);
+
+    tr.appendChild(tdLeague);
+    tr.appendChild(tdFrom);
+    tr.appendChild(tdTo);
+    tr.appendChild(tdGive);
+    tr.appendChild(tdRecv);
+    tr.appendChild(tdExp);
+
+    tbody.appendChild(tr);
+  });
+})();
+</script>
+{% endblock %}

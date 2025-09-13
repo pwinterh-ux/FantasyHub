@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .hud-wrap { max-width: 1100px; margin: 24px auto; }
+  .tile {
+    background: radial-gradient(120% 120% at 10% 0%, rgba(22,22,26,.90), rgba(10,12,14,.94));
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    color: #eaf1f7;
+  }
+  .tile.pad { padding: 16px; }
+  .tile.dark { background: radial-gradient(120% 120% at 10% 0%, rgba(10,12,14,.92), rgba(6,8,10,.96)); }
+  .hdr { color: #f4f7fa; text-shadow: 0 1px 2px rgba(0,0,0,.35); margin: 0; }
+  .muted { opacity: .85; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .btn {
+    background: linear-gradient(180deg, #10b981, #059669);
+    color:#fff; border:none; border-radius:10px; padding:10px 14px; font-weight:700;
+    box-shadow: 0 6px 18px rgba(16,185,129,.35);
+    text-decoration:none; display:inline-block;
+  }
+  .btn-ghost {
+    background: #0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,.08);
+    border-radius:10px; padding:10px 14px; text-decoration:none;
+  }
+  .field { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .field label { font-weight:700; min-width: 90px; }
+  .input, select {
+    background:#0b1220; border:1px solid rgba(255,255,255,.12); color:#e5e7eb;
+    border-radius:10px; padding:10px 12px; outline:none; min-height:40px;
+  }
+  .input::placeholder { color:#94a3b8; }
+  .pill {
+    padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .2px; display: inline-block;
+    border: 1px solid rgba(255,255,255,.18); background:#0b1220; color:#e2e8f0;
+  }
+  .results { margin-top:6px; border-top:1px dashed rgba(255,255,255,.12); padding-top:8px; }
+  .hint { font-size:12px; opacity:.8; }
+</style>
+
+<div class="hud-wrap">
+
+  <!-- Header tile -->
+  <div class="tile pad" style="margin-bottom:12px;">
+    <div class="row">
+      <div>
+        <h2 class="hdr">Trade Builder</h2>
+        <div class="muted" style="margin-top:4px;">Pick a player, then choose Buy/Sell and a template.</div>
+      </div>
+      <a href="{{ url_for('offers.search') }}" class="btn-ghost">Reset</a>
+    </div>
+  </div>
+
+  <!-- Search + options tile (darkened) -->
+  <div class="tile pad dark">
+
+    <!-- Search bar (always visible) -->
+    <form method="GET" action="{{ url_for('offers.search') }}" style="margin:0 0 12px;">
+      <div class="field">
+        <label for="q">Player</label>
+        <input id="q" name="q" class="input" type="text" value="{{ q or '' }}" placeholder="Search player by name…" autocomplete="off" style="flex:1;">
+        <button type="submit" class="btn">Search</button>
+      </div>
+      <div class="hint" style="margin-top:6px;">Type a few letters (max 50 results). Choose from the dropdown after searching.</div>
+    </form>
+
+    <!-- Build form: hidden until results exist -->
+    {% if players and players|length > 0 %}
+    <form id="build-form" method="POST" action="{{ url_for('offers.search') }}" style="margin:0; display:block;">
+
+      <!-- player dropdown (compact) -->
+      <div class="results">
+        <div class="field">
+          <label for="player_id">Choose</label>
+          <select id="player_id" name="player_id" class="input" style="flex:1; min-width:280px;">
+            {% for p in players %}
+              <option value="{{ p.id }}">{{ p.name }} — ID {{ p.id }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <!-- mode -->
+      <div class="field" style="margin-top:12px;">
+        <label>Mode</label>
+        <label style="display:inline-flex;align-items:center;gap:6px;">
+          <input type="radio" name="mode" value="buy" {% if request.args.get('mode','buy') == 'buy' %}checked{% endif %}> Buy
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:6px;">
+          <input type="radio" name="mode" value="sell" {% if request.args.get('mode') == 'sell' %}checked{% endif %}> Sell
+        </label>
+      </div>
+
+      <!-- template (row 1) -->
+      <div class="field" style="margin-top:6px;">
+        <label>Template</label>
+        <select id="template_code" name="template_code">
+          {% for code, label, _req in price_templates %}
+            <option value="{{ code }}">{{ label }}</option>
+          {% endfor %}
+          <option value="upgrade" data-sell-only="1">Pick Upgrade (give round ➜ receive round)</option>
+        </select>
+        <span class="pill" id="upgrade-pill" style="display:none;">Pick Upgrade</span>
+      </div>
+
+      <!-- template (row 2) — upgrade controls on a NEW LINE -->
+      <div class="field" id="upgrade-controls-row" style="margin-top:6px; display:none;">
+        <label></label> <!-- spacer to align under "Template" -->
+        <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+          <label>Give round
+            <select name="upgrade_give_round" id="upgrade_give_round" style="margin-left:6px;">
+              <option value="1">1st</option>
+              <option value="2" selected>2nd</option>
+              <option value="3">3rd</option>
+              <option value="4">4th</option>
+            </select>
+          </label>
+          <label>Receive round
+            <select name="upgrade_recv_round" id="upgrade_recv_round" style="margin-left:6px;">
+              <option value="1" selected>1st</option>
+              <option value="2">2nd</option>
+              <option value="3">3rd</option>
+              <option value="4">4th</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:12px;">
+        <div class="muted hint">Choose a player, set mode and template, then build offers.</div>
+        <button type="submit" class="btn">Build Offers</button>
+      </div>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+(function() {
+  const modeEls = Array.from(document.querySelectorAll('input[name="mode"]'));
+  const templateSel = document.getElementById('template_code');
+  const upRow = document.getElementById('upgrade-controls-row');
+  const upPill = document.getElementById('upgrade-pill');
+  const giveSel = document.getElementById('upgrade_give_round');
+  const recvSel = document.getElementById('upgrade_recv_round');
+
+  function isSell() {
+    const checked = modeEls.find(m => m.checked);
+    return checked && checked.value === 'sell';
+  }
+
+  function syncUpgradeVisibility() {
+    if (!templateSel) return; // form is hidden when no results
+    const isUpgrade = templateSel.value === 'upgrade';
+    const visible = isSell() && isUpgrade;
+
+    upRow.style.display = visible ? 'flex' : 'none';
+    upPill.style.display = visible ? 'inline-block' : 'none';
+    if (giveSel) giveSel.toggleAttribute('required', visible);
+    if (recvSel) recvSel.toggleAttribute('required', visible);
+
+    // Hide Pick Upgrade in BUY mode
+    Array.from(templateSel.options).forEach(opt => {
+      const sellOnly = opt.getAttribute('data-sell-only') === '1';
+      opt.hidden = (!isSell() && sellOnly);
+      if (opt.hidden && opt.selected) {
+        const first = Array.from(templateSel.options).find(o => !o.hidden);
+        if (first) first.selected = true;
+      }
+    });
+  }
+
+  if (templateSel) {
+    modeEls.forEach(m => m.addEventListener('change', syncUpgradeVisibility));
+    templateSel.addEventListener('change', syncUpgradeVisibility);
+    syncUpgradeVisibility();
+  }
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,437 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+  .toolbar{
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    background: var(--tile-dark);
+    border: 1px solid var(--border);
+    border-radius: 14px; padding: 14px;
+  }
+  .toolbar h2{ margin:0; font-size: 22px; }
+  .toolbar .sub{ font-size:12px; opacity:.9; }
+  .btn { cursor:pointer; }
+
+  /* ---- Full-width Roster Showdown ---- */
+  details.showdown{
+    width:100%; margin-top:16px;
+    background: var(--tile-bg);
+    border: 1px solid var(--border);
+    border-radius:14px; color:#e5e7eb;
+  }
+  .showdown > summary{ list-style:none; cursor:pointer; padding:14px; }
+  .showdown > summary::-webkit-details-marker{ display:none; }
+  .showdown-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .big-scores{ display:flex; gap:14px; align-items:baseline; }
+  .big-score{ font-size:28px; font-weight:800; line-height:1; }
+  .you{ color:#22c55e; } .opp{ color:#ef4444; }
+  .bars{ margin-top:8px; display:grid; gap:6px; }
+  .bar{ position:relative; height:8px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; }
+  .bar .fill{ position:absolute; inset:0 auto 0 0; width:0; background:#22c55e; }
+  .bar.opp .fill{ left:auto; right:0; background:#ef4444; }
+  .summary-note{ font-size:11px; opacity:.9; margin-top:6px; }
+
+  .showdown-body{ padding: 0 14px 14px 14px; }
+  .sorter{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  .sorter select,.sorter button{
+    background: rgba(255,255,255,.08); color:#e5e7eb; border:1px solid var(--border);
+    border-radius:8px; padding:6px 8px; font-size:13px;
+  }
+
+  .tables{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px; }
+  @media (max-width: 1000px){ .tables{ grid-template-columns:1fr; } }
+
+  .side-card{
+    background: rgba(255,255,255,.04);
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:10px; padding:10px;
+  }
+  .side-card h4{ margin:0 0 6px 0; font-size:14px; font-weight:800; }
+
+  table.roster{ width:100%; border-collapse:collapse; font-size:13px; table-layout:fixed; }
+  table.roster th, table.roster td{
+    border-bottom:1px solid rgba(255,255,255,.10);
+    padding:6px 8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  table.roster th{ font-size:12px; letter-spacing:.2px; text-transform:uppercase; opacity:.9; }
+  .col-pos{ width:10%; text-align:center; }
+  .col-name{ width:auto; position:relative; }
+  .col-nfl{ width:12%; text-align:center; }
+  .col-pts{ width:14%; text-align:right; }
+  .col-min{ width:14%; text-align:right; }
+  .col-name::after{
+    content: attr(data-league);
+    position:absolute; right:8px; top:50%; transform:translateY(-50%);
+    background: rgba(2,6,23,.9); border:1px solid rgba(255,255,255,.2);
+    padding:2px 6px; border-radius:999px; font-size:10px; color:#e5e7eb;
+    opacity:0; pointer-events:none; transition:opacity .15s; max-width:55%;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  tr:hover .col-name::after{ opacity:.95; }
+
+  /* ---- League tiles grid via FLEX (avoid collisions with global CSS) ---- */
+  .league-grid{
+    display:flex; flex-wrap:wrap; gap:14px; margin-top:16px;
+  }
+  .league-grid .tile{
+    flex: 1 1 360px;           /* 2–3 per row depending on width */
+    min-width: 320px;
+  }
+  .tile h3{ margin:0 0 6px 0; font-size:16px; font-weight:800; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .scoreboard{ display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+  .score-you{ font-size:24px; font-weight:800; color:#22c55e; }
+  .score-opp{ font-size:24px; font-weight:800; color:#ef4444; }
+  .btn-ghost{ padding:6px 10px; }
+
+  /* ---- Full-width league detail ---- */
+  #leagueDetail{ display:none; margin-top:16px; }
+  #leagueDetail header{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px; }
+  #leagueDetail .title{ font-size:18px; font-weight:800; }
+</style>
+
+<!-- Toolbar -->
+<div class="toolbar tile">
+  <div>
+    <h2>Live Scoring Beta</h2>
+    <div class="sub">
+      {% if fetched_at %}Last refresh: {{ fetched_at }}{% else %}Not refreshed yet{% endif %}
+      {% if next_refresh_in is not none %} • Next refresh in ~{{ (next_refresh_in // 60)|int }}m {{ (next_refresh_in % 60)|int }}s{% endif %}
+    </div>
+  </div>
+  <button id="refreshBtn" class="btn">Refresh Now</button>
+</div>
+
+<!-- Full-width Roster Showdown (collapsed on load) -->
+<details class="showdown" id="showdown">
+  <summary>
+    <div class="showdown-head">
+      <div class="big-scores">
+        <div class="big-score you">{{ (aggregate.my_total_score or 0) | round(1) }}</div>
+        <div class="big-score opp">{{ (aggregate.opp_total_score or 0) | round(1) }}</div>
+      </div>
+      <div class="sub">Aggregate across all active leagues</div>
+    </div>
+    <div class="bars">
+      <div class="bar you"><div class="fill" style="width: {{ aggregate.my_progress_pct or 0 }}%;"></div></div>
+      <div class="bar opp"><div class="fill" style="width: {{ aggregate.opp_progress_pct or 0 }}%;"></div></div>
+    </div>
+    <div class="summary-note">Click to view starters & sort</div>
+  </summary>
+
+  <div class="showdown-body">
+    <div class="sorter">
+      <label for="sortKey">Sort by:</label>
+      <select id="sortKey">
+        <option value="pos">Position (QB, RB, WR, TE)</option>
+        <option value="league">League (A–Z)</option>
+        <option value="player">Player (Last Name A–Z)</option>
+        <option value="points">Fantasy Points (High→Low)</option>
+        <option value="minutes">Minutes Left (High→Low)</option>
+      </select>
+      <button id="toggleDir" type="button" class="btn-ghost" title="Toggle direction">▲/▼</button>
+    </div>
+
+    <div class="tables">
+      <div class="side-card">
+        <h4>Your Starters</h4>
+        <table class="roster" id="tblYou">
+          <thead>
+            <tr>
+              <th class="col-pos">Pos</th>
+              <th class="col-name">Player</th>
+              <th class="col-nfl">NFL</th>
+              <th class="col-pts">Points</th>
+              <th class="col-min">Min Left</th>
+            </tr>
+          </thead>
+          <tbody id="bodyYou">
+            {% for s in aggregate.my_starters %}
+              {% set pl = player_lookup.get(s.player_id|string) or {} %}
+              <tr>
+                <td class="col-pos">{{ (pl.pos or '—')|upper }}</td>
+                <td class="col-name" data-league="{{ s.league or '' }}" title="{{ s.league or '' }}">{{ pl.name or ('#' ~ s.player_id) }}</td>
+                <td class="col-nfl">{{ pl.team or '—' }}</td>
+                <td class="col-pts">{{ (s.score or 0) | round(1) }}</td>
+                <td class="col-min">{{ ((s.seconds_remaining or 0) // 60 + (1 if ((s.seconds_remaining or 0) % 60) else 0)) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="side-card">
+        <h4>Opponents</h4>
+        <table class="roster" id="tblOpp">
+          <thead>
+            <tr>
+              <th class="col-pos">Pos</th>
+              <th class="col-name">Player</th>
+              <th class="col-nfl">NFL</th>
+              <th class="col-pts">Points</th>
+              <th class="col-min">Min Left</th>
+            </tr>
+          </thead>
+          <tbody id="bodyOpp">
+            {% for s in aggregate.opp_starters %}
+              {% set pl = player_lookup.get(s.player_id|string) or {} %}
+              <tr>
+                <td class="col-pos">{{ (pl.pos or '—')|upper }}</td>
+                <td class="col-name" data-league="{{ s.league or '' }}" title="{{ s.league or '' }}">{{ pl.name or ('#' ~ s.player_id) }}</td>
+                <td class="col-nfl">{{ pl.team or '—' }}</td>
+                <td class="col-pts">{{ (s.score or 0) | round(1) }}</td>
+                <td class="col-min">{{ ((s.seconds_remaining or 0) // 60 + (1 if ((s.seconds_remaining or 0) % 60) else 0)) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</details>
+
+<!-- Full-width league detail -->
+<section class="showdown" id="leagueDetail">
+  <div class="showdown-body" style="padding:14px;">
+    <header>
+      <div class="title" id="ldTitle">League Detail</div>
+      <button type="button" class="btn-ghost" id="ldClose">Close</button>
+    </header>
+
+    <div class="big-scores" style="gap:16px;">
+      <div class="big-score you" id="ldMyScore">0.0</div>
+      <div class="big-score opp" id="ldOppScore">0.0</div>
+    </div>
+    <div class="bars" style="margin-top:8px;">
+      <div class="bar you"><div class="fill" id="ldMyBar" style="width:0%;"></div></div>
+      <div class="bar opp"><div class="fill" id="ldOppBar" style="width:0%;"></div></div>
+    </div>
+
+    <div class="tables">
+      <div class="side-card">
+        <h4>Your Starters</h4>
+        <table class="roster">
+          <thead>
+            <tr>
+              <th class="col-pos">Pos</th>
+              <th class="col-name">Player</th>
+              <th class="col-nfl">NFL</th>
+              <th class="col-pts">Points</th>
+              <th class="col-min">Min Left</th>
+            </tr>
+          </thead>
+          <tbody id="ldBodyYou"></tbody>
+        </table>
+      </div>
+      <div class="side-card">
+        <h4>Opponents</h4>
+        <table class="roster">
+          <thead>
+            <tr>
+              <th class="col-pos">Pos</th>
+              <th class="col-name">Player</th>
+              <th class="col-nfl">NFL</th>
+              <th class="col-pts">Points</th>
+              <th class="col-min">Min Left</th>
+            </tr>
+          </thead>
+          <tbody id="ldBodyOpp"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- League tiles (2–3 per row) -->
+<section class="league-grid" id="tiles">
+  {% for t in tiles %}
+    <article class="tile pad" data-tile='{{ t|tojson }}'>
+      <h3>
+        <span>{{ t.league_name }}</span>
+        {% if not t.note %}
+          <button type="button" class="btn-ghost btn-expand">▸ Expand</button>
+        {% else %}
+          <span class="sub">{{ t.note }}</span>
+        {% endif %}
+      </h3>
+
+      <div class="scoreboard">
+        <div class="score-you">{{ (t.my_score or 0)|round(1) }}</div>
+        <div class="score-opp">{{ (t.opp_score or 0)|round(1) }}</div>
+      </div>
+
+      <div class="bars" style="margin-top:8px;">
+        <div class="bar you"><div class="fill" style="width: {{ t.my_progress_pct or 0 }}%;"></div></div>
+        <div class="bar opp"><div class="fill" style="width: {{ t.opp_progress_pct or 0 }}%;"></div></div>
+      </div>
+    </article>
+  {% endfor %}
+</section>
+
+<script>
+  // Refresh button
+  (function(){
+    const btn = document.getElementById('refreshBtn');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      const original = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Refreshing…';
+      try{
+        const res = await fetch('{{ url_for("live.refresh_live") }}', { method:'POST', credentials:'same-origin' });
+        const json = await res.json();
+        if (json.cached) {
+          btn.textContent = `Available again in ~${Math.ceil((json.next_in||0)/60)}m`;
+          setTimeout(() => window.location.reload(), 600);
+        } else {
+          window.location.reload();
+        }
+      } catch(e){
+        btn.disabled = false; btn.textContent = original;
+        alert('Refresh failed. Please try again.');
+      }
+    });
+  })();
+
+  // Sorting for Showdown
+  const AGG = {{ aggregate|tojson }};
+  const PLAYERS = {{ player_lookup|tojson }};
+  const POS_ORDER = {QB:0, RB:1, WR:2, TE:3};
+
+  function enrich(arr){
+    return (arr||[]).map(s => {
+      const pl = PLAYERS[String(s.player_id)] || {};
+      const name = pl.name || ('#' + s.player_id);
+      return {
+        league: s.league || '',
+        pos: (pl.pos || '').toUpperCase(),
+        name,
+        nfl: pl.team || '',
+        points: Number(s.score || 0),
+        minutes: Math.ceil(Number(s.seconds_remaining || 0) / 60)
+      };
+    });
+  }
+  let YOU = enrich(AGG.my_starters);
+  let OPP = enrich(AGG.opp_starters);
+
+  function comparator(key, dir){
+    const mul = (dir==='desc') ? -1 : 1;
+    if (key==='pos') {
+      return (a,b) => mul * (((a.pos in POS_ORDER)?POS_ORDER[a.pos]:99) - ((b.pos in POS_ORDER)?POS_ORDER[b.pos]:99));
+    }
+    if (key==='league') return (a,b) => mul * a.league.localeCompare(b.league, undefined, {sensitivity:'base'});
+    if (key==='player') {
+      const last = x => (x.name||'').split(' ').slice(-1)[0].toLowerCase();
+      return (a,b) => mul * last(a).localeCompare(last(b), undefined, {sensitivity:'base'});
+    }
+    if (key==='points')  return (a,b) => mul * (a.points - b.points);
+    if (key==='minutes') return (a,b) => mul * (a.minutes - b.minutes);
+    return () => 0;
+  }
+
+  function renderRows(id, rows){
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = rows.map(r => `
+      <tr>
+        <td class="col-pos">${r.pos || '—'}</td>
+        <td class="col-name" data-league="${r.league || ''}" title="${r.league || ''}">${r.name}</td>
+        <td class="col-nfl">${r.nfl || '—'}</td>
+        <td class="col-pts">${r.points.toFixed(1)}</td>
+        <td class="col-min">${r.minutes}</td>
+      </tr>
+    `).join('');
+  }
+
+  const sortKeyEl = document.getElementById('sortKey');
+  const toggleDirEl = document.getElementById('toggleDir');
+  let dir = 'asc';
+  function defaultDirFor(k){ return (k==='points' || k==='minutes') ? 'desc' : 'asc'; }
+  function applySort(){
+    const key = sortKeyEl.value;
+    if (!toggleDirEl.dataset.userSet) dir = defaultDirFor(key);
+    YOU = [...YOU].sort(comparator(key, dir));
+    OPP = [...OPP].sort(comparator(key, dir));
+    renderRows('bodyYou', YOU);
+    renderRows('bodyOpp', OPP);
+  }
+  sortKeyEl.addEventListener('change', () => { toggleDirEl.dataset.userSet=''; applySort(); });
+  toggleDirEl.addEventListener('click', () => { dir=(dir==='asc')?'desc':'asc'; toggleDirEl.dataset.userSet='1'; applySort(); });
+  dir = defaultDirFor('pos'); sortKeyEl.value='pos'; applySort();
+
+  // League detail
+  const PLAYER_LOOKUP = {{ player_lookup|tojson }};
+  const detail = document.getElementById('leagueDetail');
+  const ldTitle = document.getElementById('ldTitle');
+  const ldMyScore = document.getElementById('ldMyScore');
+  const ldOppScore = document.getElementById('ldOppScore');
+  const ldMyBar = document.getElementById('ldMyBar');
+  const ldOppBar = document.getElementById('ldOppBar');
+  const ldBodyYou = document.getElementById('ldBodyYou');
+  const ldBodyOpp = document.getElementById('ldBodyOpp');
+  document.getElementById('ldClose').addEventListener('click', () => { detail.style.display='none'; ldBodyYou.innerHTML=''; ldBodyOpp.innerHTML=''; });
+
+  function sortByPos(list){
+    return [...(list||[])].sort((a,b) => {
+      const pa = (PLAYER_LOOKUP[String(a.player_id)]?.pos || '').toUpperCase();
+      const pb = (PLAYER_LOOKUP[String(b.player_id)]?.pos || '').toUpperCase();
+      const ai = (pa in POS_ORDER) ? POS_ORDER[pa] : 99;
+      const bi = (pb in POS_ORDER) ? POS_ORDER[pb] : 99;
+      return ai - bi;
+    });
+  }
+  function renderLeagueRows(container, starters){
+    const arr = sortByPos(starters);
+    container.innerHTML = arr.map(s => {
+      const pl = PLAYER_LOOKUP[String(s.player_id)] || {};
+      const pos = (pl.pos || '').toUpperCase();
+      const name = pl.name || ('#' + s.player_id);
+      const nfl = pl.team || '—';
+      const pts = Number(s.score || 0).toFixed(1);
+      const mins = Math.ceil(Number(s.seconds_remaining || 0) / 60);
+      return `
+        <tr>
+          <td class="col-pos">${pos || '—'}</td>
+          <td class="col-name" title="${name}">${name}</td>
+          <td class="col-nfl">${nfl}</td>
+          <td class="col-pts">${pts}</td>
+          <td class="col-min">${mins}</td>
+        </tr>`;
+    }).join('');
+  }
+  function openLeagueDetail(tileData){
+    ldTitle.textContent = tileData.league_name || 'League Detail';
+    ldMyScore.textContent = Number(tileData.my_score || 0).toFixed(1);
+    ldOppScore.textContent = Number(tileData.opp_score || 0).toFixed(1);
+    ldMyBar.style.width = String(tileData.my_progress_pct || 0) + '%';
+    ldOppBar.style.width = String(tileData.opp_progress_pct || 0) + '%';
+    renderLeagueRows(ldBodyYou, tileData.my_starters || []);
+    renderLeagueRows(ldBodyOpp, tileData.opp_starters || []);
+    detail.style.display = 'block';
+    detail.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+  document.querySelectorAll('.tile').forEach(tile => {
+    tile.addEventListener('click', (e) => {
+      // only handle clicks that aren't on "None Available"
+      const dataStr = tile.getAttribute('data-tile') || '{}';
+      let data = {};
+      try{ data = JSON.parse(dataStr); } catch(_){}
+      if (data && !data.note) openLeagueDetail(data);
+    });
+  });
+  document.querySelectorAll('.btn-expand').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const tile = e.target.closest('.tile');
+      if (!tile) return;
+      try {
+        const data = JSON.parse(tile.getAttribute('data-tile') || '{}');
+        if (data && !data.note) openLeagueDetail(data);
+      } catch(_){}
+    });
+  });
+
+  // Start collapsed
+  document.getElementById('showdown').open = false;
+</script>
+
+{% endblock %}

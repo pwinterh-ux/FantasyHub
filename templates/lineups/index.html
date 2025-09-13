@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="tile pad" style="max-width:1100px;margin:24px auto;">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px;">
+    <h2 class="hdr" style="margin:0;">Lineups</h2>
+    <span class="mini" style="opacity:.85;">Hidden tool • Requires a league sync in the last 4 hours</span>
+  </div>
+
+  <div class="grid" style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;">
+    <!-- Tile 1: Review & Submit All Lineups -->
+    <div class="tile pad dark" style="display:flex; flex-direction:column; gap:12px;">
+      <div>
+        <h3 style="margin:0 0 6px;">Review &amp; Submit All Lineups</h3>
+        <div style="opacity:.85;">Pick a week and review projected points for every synced league, then submit starters in one pass.</div>
+      </div>
+
+      <form method="POST" action="{{ url_for('lineups.lineups_review') }}" style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">
+        <div>
+          <label for="week" style="display:block; font-size:12px; opacity:.9; margin-bottom:4px;">Week</label>
+          <select id="week" name="week"
+                  style="appearance:none; background:#0b1220; color:#eaf1f7; border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:8px 10px; min-width:120px;">
+            {% for w in weeks %}
+              <option value="{{ w }}" {% if selected_week == w %}selected{% endif %}>Week {{ w }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <button type="submit" class="btn-ghost" style="padding:10px 14px; border-radius:10px;">
+          Review Lineups
+        </button>
+      </form>
+
+      <div style="font-size:12px; opacity:.8;">
+        Tip: We’ll fetch projections for all players on your roster in each league. Blank projections show as “—”.
+      </div>
+    </div>
+
+    <!-- Tile 2: Optimize (Coming Soon) -->
+    <div class="tile pad dark" style="display:flex; flex-direction:column; gap:12px; opacity:.9;">
+      <div>
+        <h3 style="margin:0 0 6px;">Optimize Lineups</h3>
+        <div style="opacity:.85;">Coming soon — one-click fill using projections and your roster slots.</div>
+      </div>
+
+      <!-- Broken/placeholder link by request -->
+      <a href="#"
+         class="btn-ghost"
+         style="pointer-events:none; opacity:.6; padding:10px 14px; border-radius:10px;">
+        Optimize (Coming Soon)
+      </a>
+    </div>
+  </div>
+</div>
+
+<style>
+  .mini { font-size:12px; }
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+{% endblock %}

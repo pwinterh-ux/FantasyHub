@@ -167,6 +167,13 @@ class MFLClient:
         """Future draft picks per franchise (fallback when assets is blocked)."""
         return self._export("futureDraftPicks", params={"L": league_id}, cookie=cookie)
 
+    def get_pending_trades(self, league_id: str, cookie: str) -> bytes:
+        """
+        Open/pending trades only (no completed history).
+        Maps to export TYPE=pendingTrades.
+        """
+        return self._export("pendingTrades", params={"L": league_id}, cookie=cookie)
+
     # ---------------------------- Internals ----------------------------------
 
     def _export(

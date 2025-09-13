@@ -69,7 +69,7 @@ def create_app():
     _configure_logging(app)
 
     # Optional: cap MFL response body logging length (used by mfl_client)
-    app.config.setdefault("MFL_LOG_BODY_CHARS", 800)
+    app.config.setdefault("MFL_LOG_BODY_CHARS", 5000)
 
     # Import models after db is ready to avoid circulars
     from models import User, League  # noqa: F401
@@ -85,10 +85,16 @@ def create_app():
     from auth.routes import auth_bp
     from leagues.routes import leagues_bp
     from mfl.routes import mfl_bp
+    from offers.routes import offers_bp
+    from live.routes import live_bp
+    from lineups.routes import lineups_bp
 
+    app.register_blueprint(offers_bp)
     app.register_blueprint(mfl_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(leagues_bp)
+    app.register_blueprint(live_bp)
+    app.register_blueprint(lineups_bp)
 
     # ----- Routes -----
     @app.route("/")

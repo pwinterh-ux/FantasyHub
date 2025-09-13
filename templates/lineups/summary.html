@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="tile pad" style="max-width:1100px;margin:24px auto;">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px;">
+    <h2 class="hdr" style="margin:0;">Lineup Submission Summary</h2>
+    <div class="mini" style="opacity:.85;">Week {{ week }}</div>
+  </div>
+
+  <div class="results-grid" style="display:grid; grid-template-columns: 1fr; gap:16px;">
+    {% for r in results %}
+      {% set lg = r.league %}
+      <div class="tile pad dark" style="border-radius:12px; border:1px solid rgba(255,255,255,.12);">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+          <div>
+            <h3 style="margin:0 0 4px;">{{ lg.name }}</h3>
+            <div class="mini" style="opacity:.85;">
+              MFL {{ lg.mfl_id }} • Season {{ lg.year }}
+            </div>
+          </div>
+
+          {% if r.ok %}
+            <span class="pill ok">Success</span>
+          {% else %}
+            <span class="pill err">Failed</span>
+          {% endif %}
+        </div>
+
+        <div class="mini" style="opacity:.9; margin-bottom:8px;">
+          Response:
+        </div>
+        <pre class="resp">{{ r.message or (r.ok and 'Lineup submitted successfully') or '—' }}</pre>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div style="display:flex; align-items:center; justify-content:flex-end; gap:10px; margin-top:16px;">
+    <form method="POST" action="{{ url_for('lineups.lineups_review') }}">
+      <input type="hidden" name="week" value="{{ week }}"/>
+      <button type="submit" class="btn-ghost" style="padding:10px 14px; border-radius:10px;">Back to Review</button>
+    </form>
+    <a class="btn-ghost" href="{{ url_for('lineups.lineups_index') }}" style="padding:10px 14px; border-radius:10px;">
+      Lineups Home
+    </a>
+  </div>
+</div>
+
+<style>
+  .mini { font-size:12px; }
+  .pill {
+    display:inline-block;
+    padding:6px 10px;
+    border-radius:999px;
+    font-size:12px;
+    border:1px solid rgba(255,255,255,.18);
+    background:#0b1220;
+  }
+  .pill.ok { border-color: rgba(16,185,129,.5); color:#86f3c0; }
+  .pill.err { border-color: rgba(239,68,68,.5); color:#ffb4b4; }
+  .resp {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 10px;
+    padding: 10px;
+    margin: 0;
+    color: #eaf1f7;
+    font-size: 12px;
+    max-height: 240px;
+    overflow:auto;
+  }
+</style>
+{% endblock %}

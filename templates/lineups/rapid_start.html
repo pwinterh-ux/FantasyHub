@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="tile pad" style="max-width:600px;margin:20px auto;">
+  <h2 class="hdr" style="margin:0 0 10px;">Rapid Lineups</h2>
+  <p class="mini" style="opacity:.9;margin:0 0 14px;">
+    Review and submit lineups one league at a time. We’ll auto-pick by projections and you can tweak before submitting.
+  </p>
+
+  <form method="POST" action="{{ url_for('lineups.lineups_rapid_start') }}">
+    <div style="display:flex; align-items:center; gap:12px;">
+      <label for="week" style="font-weight:600;">Week</label>
+      <select id="week" name="week" class="btn-ghost" style="min-width:120px;">
+        {% for w in weeks %}
+          <option value="{{ w }}" {% if w == selected_week %}selected{% endif %}>{{ w }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn-ghost" type="submit">Begin</button>
+      <a class="btn-ghost" href="{{ url_for('lineups.lineups_index') }}">Back</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

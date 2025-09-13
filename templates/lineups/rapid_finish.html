@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-wrap">
+  <!-- Header / Summary -->
+  <div class="tile pad" style="max-width:1200px;margin:12px auto 8px;">
+    <div class="hdr-row">
+      <div>
+        <h2 class="hdr" style="margin:0;">Rapid Lineups — Week {{ week or '—' }}</h2>
+        <div class="sub">Results summary across your leagues</div>
+      </div>
+      <div class="chips">
+        <span class="chip">Leagues: <b>{{ total_leagues or (grouped_events|length) }}</b></span>
+        <span class="chip ok">Submitted: <b>{{ submitted_count or 0 }}</b></span>
+        <span class="chip err">Errors: <b>{{ error_count or 0 }}</b></span>
+        <span class="chip sk">Skipped: <b>{{ skipped_count or 0 }}</b></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div class="tile pad dark" style="max-width:1200px;margin:0 auto 14px;">
+    {% if grouped_events and grouped_events|length %}
+      <div class="grid">
+        {% for item in grouped_events %}
+          {% set evs = item.events or [] %}
+          {% set submitted_n = (evs | selectattr('status','equalto','submitted') | list | length) %}
+          {% set error_n = (evs | selectattr('status','equalto','error') | list | length) %}
+          {% set skipped_n = (evs | selectattr('status','equalto','skipped') | list | length) %}
+
+          <div class="card">
+            <div class="card-head">
+              <div class="lh">
+                <div class="name">{{ item.league_name or '—' }}</div>
+                <div class="meta">League ID: {{ item.league_id }}</div>
+              </div>
+              <div class="rh">
+                <span class="mini chip ok">Submitted: {{ submitted_n }}</span>
+                <span class="mini chip err">Errors: {{ error_n }}</span>
+                <span class="mini chip sk">Skipped: {{ skipped_n }}</span>
+              </div>
+            </div>
+
+            <div class="timeline">
+              {% for e in evs %}
+                {% set cls = 'ok' if e.status == 'submitted' else ('err' if e.status == 'error' else 'sk') %}
+                <div class="trow {{ cls }}">
+                  <div class="dot"></div>
+                  <div class="tmain">
+                    <div class="tline">
+                      <span class="status">{{ e.status|capitalize }}</span>
+                      <span class="sep">•</span>
+                      <span class="ts">{{ e.ts or '' }}</span>
+                    </div>
+                    {% if e.message %}
+                      <div class="msg" title="{{ e.message }}">{{ e.message }}</div>
+                    {% else %}
+                      <div class="msg dim">No additional message</div>
+                    {% endif %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty">
+        <div class="emoji">📝</div>
+        <div>No events were recorded for this run.</div>
+        <div class="dim">Submit at least one lineup to see results here.</div>
+      </div>
+    {% endif %}
+
+    <div class="actions">
+      <a class="btn-ghost" href="{{ url_for('lineups.lineups_index') }}">Back to Lineups</a>
+      <a class="btn-primary" href="{{ url_for('lineups.lineups_rapid_start') }}">Run Rapid Lineups Again</a>
+    </div>
+  </div>
+</div>
+
+<!-- Toast (restores any persisted error/success) -->
+<div id="fh-toast">
+  <div id="fh-toast-card">
+    <div class="toast-row">
+      <div id="fh-toast-dot"></div>
+      <div id="fh-toast-text"></div>
+      <button id="fh-toast-close" class="btn-ghost sm">Close</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .page-wrap { --fg:#eaf1f7; --mut:#aeb7c3; --bd:rgba(255,255,255,.12); --bg2:#0b1220; }
+  .hdr-row { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; }
+  .hdr { font-size:18px; }
+  .sub { font-size:12px; color:var(--mut); }
+  .chips { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .chip { border:1px solid var(--bd); padding:2px 8px; border-radius:999px; font-size:12px; background:rgba(255,255,255,.04); }
+  .chip.ok { border-color: rgba(34,197,94,.35); }
+  .chip.err { border-color: rgba(239,68,68,.35); }
+  .chip.sk { border-color: rgba(148,163,184,.35); }
+
+  .grid {
+    display:grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap:10px;
+  }
+  @media (max-width: 1100px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 720px)  { .grid { grid-template-columns: 1fr; } }
+
+  .card { border:1px solid var(--bd); border-radius:12px; background:rgba(10,12,14,.9); }
+  .card-head {
+    display:flex; align-items:flex-start; justify-content:space-between; gap:8px;
+    padding:10px 12px; border-bottom:1px solid rgba(255,255,255,.08);
+  }
+  .name { font-weight:700; }
+  .meta { font-size:12px; color: var(--mut); }
+  .rh { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .mini { font-size:11px; }
+
+  .timeline { padding:8px 8px 10px; }
+  .trow {
+    display:flex; gap:8px; align-items:flex-start;
+    padding:6px 6px; border-radius:8px;
+  }
+  .trow + .trow { margin-top:4px; }
+  .trow.ok  { background: rgba(34,197,94,.08); border:1px solid rgba(34,197,94,.20); }
+  .trow.err { background: rgba(239,68,68,.08); border:1px solid rgba(239,68,68,.20); }
+  .trow.sk  { background: rgba(148,163,184,.08); border:1px solid rgba(148,163,184,.20); }
+
+  .dot { width:10px; height:10px; border-radius:50%; margin-top:7px; }
+  .trow.ok .dot { background:#22c55e; }
+  .trow.err .dot { background:#ef4444; }
+  .trow.sk .dot { background:#94a3b8; }
+
+  .tmain { flex:1; min-width:0; }
+  .tline { font-size:12px; display:flex; gap:6px; align-items:center; color:#eaf1f7; }
+  .tline .status { font-weight:700; text-transform:capitalize; }
+  .tline .sep { opacity:.6; }
+  .tline .ts { opacity:.85; font-variant-numeric: tabular-nums; }
+  .msg { font-size:12px; color:#eaf1f7; opacity:.95; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .msg.dim { opacity:.6; }
+
+  .empty { text-align:center; padding:32px 10px; }
+  .empty .emoji { font-size:26px; margin-bottom:6px; }
+
+  .actions {
+    margin-top:12px; display:flex; gap:8px; justify-content:flex-end; align-items:center;
+  }
+  .btn-primary { padding:8px 12px; font-size:13px; border-radius:10px; }
+  .btn-ghost { padding:8px 10px; font-size:13px; border-radius:10px; }
+
+  /* Toast */
+  #fh-toast { position:fixed; right:16px; bottom:24px; max-width:520px; z-index:99; display:none; }
+  #fh-toast-card { background: var(--bg2); border:1px solid var(--bd); border-radius:12px; padding:8px 10px; color:var(--fg); box-shadow:0 10px 24px rgba(0,0,0,.35); }
+  .toast-row { display:flex; align-items:flex-start; gap:8px; }
+  #fh-toast-dot { width:10px; height:10px; border-radius:50%; margin-top:6px; }
+</style>
+
+<script>
+(function(){
+  // Restore any persisted toast (errors remain until closed)
+  const TOAST_KEY = 'fh_persist_toast';
+  const toastEl   = document.getElementById('fh-toast');
+  const toastDot  = document.getElementById('fh-toast-dot');
+  const toastText = document.getElementById('fh-toast-text');
+  const toastClose= document.getElementById('fh-toast-close');
+
+  function setToastAppearance(kind){
+    if (kind === 'success') {
+      toastDot.style.background = '#22c55e';
+      toastEl.style.borderColor = 'rgba(34,197,94,.25)';
+    } else {
+      toastDot.style.background = '#ef4444';
+      toastEl.style.borderColor = 'rgba(239,68,68,.25)';
+    }
+  }
+  function showToast(kind, text){
+    setToastAppearance(kind);
+    toastText.textContent = text || '';
+    toastEl.style.display = 'block';
+  }
+  function hideToast(){
+    toastEl.style.display = 'none';
+    try { sessionStorage.removeItem(TOAST_KEY); } catch(e){}
+  }
+  toastClose.addEventListener('click', hideToast);
+
+  (function restoreToast(){
+    try {
+      const raw = sessionStorage.getItem(TOAST_KEY);
+      if (!raw) return;
+      const {kind, text} = JSON.parse(raw);
+      // Keep it persistent until user closes
+      showToast(kind || 'success', text || '');
+    } catch(e){}
+  })();
+})();
+</script>
+{% endblock %}

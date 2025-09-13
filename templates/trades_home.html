@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="glass-container" style="max-width:1100px;margin:22px auto;">
+  <h2 style="margin:0 0 14px 0;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.35);">
+    Trades — {{ year }}
+  </h2>
+  <div class="cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;">
+    <!-- Open Trades -->
+    <a href="{{ url_for('mfl.trades_open') }}"
+       class="glass-card"
+       style="display:block;padding:22px;border-radius:14px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);box-shadow:0 10px 25px rgba(0,0,0,.25);text-decoration:none;color:#fff;border:1px solid rgba(255,255,255,.2);">
+      <div style="font-size:20px;font-weight:700;margin-bottom:6px;">Open Trades</div>
+      <div style="opacity:.9;line-height:1.4;">
+        See all open trades in your sync’d leagues, both sent and received, in one place.
+        Can be refreshed once per 15 minutes.
+      </div>
+      {% if has_cached %}
+        <div style="margin-top:12px;font-size:13px;opacity:.85;">
+          Next refresh available in ~{{ (next_refresh_in // 60)|int }}m {{ (next_refresh_in % 60)|int }}s
+        </div>
+      {% else %}
+        <div style="margin-top:12px;font-size:13px;opacity:.85;">No cached result yet — fetch now.</div>
+      {% endif %}
+    </a>
+
+    <!-- Automated Offers (now links to Offers search) -->
+    <a href="{{ url_for('offers.search') }}"
+       class="glass-card"
+       style="display:block;padding:22px;border-radius:14px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);box-shadow:0 10px 25px rgba(0,0,0,.25);text-decoration:none;color:#fff;border:1px solid rgba(255,255,255,.2);">
+      <div style="font-size:20px;font-weight:700;margin-bottom:6px;">Automated Offers</div>
+      <div style="opacity:.9;line-height:1.4;">
+        Build and send trade offers across your synced leagues.
+      </div>
+    </a>
+  </div>
+</div>
+{% endblock %}
