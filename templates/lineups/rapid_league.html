@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-wrap">
+  <!-- Header (compact) -->
+  <div class="tile pad" style="max-width:1200px;margin:10px auto 6px;">
+    <div class="hdr-row">
+      <div class="hdr-left">
+        <h2 class="hdr">Week {{ week }} — {{ league.name }}</h2>
+        <div class="sub">Team: {{ my_team_name or '—' }} • MFL {{ league.mfl_id }} • {{ index }}/{{ total_leagues }}</div>
+      </div>
+      <div class="rules">
+        <strong>Rules:</strong>
+        <span id="slotsText">{{ starters_label or '—' }}</span>
+        {% if total_required %}
+          <span class="totalReq" id="totalReqBadge">Total: <b id="totalNeed">{{ total_required }}</b></span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Body (very compact grid) -->
+  <div class="tile pad dark body" style="max-width:1200px;margin:0 auto 90px;">
+    <form id="lineupForm" method="POST" action="{{ url_for('lineups.lineups_rapid_submit') }}">
+      <input type="hidden" name="league_id" value="{{ league.id }}">
+      <input type="hidden" name="week" value="{{ week }}">
+
+      <div class="pos-grid">
+        {% for pos, rows in grouped_players.items() %}
+          <div class="pos-card" data-pos="{{ pos }}">
+            <div class="pos-head">
+              <span class="chip">{{ pos }}</span>
+              <span class="req" data-pos-req>{{ ranges.get(pos, '') }}</span>
+              <span class="cnt"><span data-pos-count>0</span></span>
+            </div>
+
+            <div class="list">
+              {% for r in rows %}
+                <label class="row">
+                  <input type="checkbox"
+                         name="starters[]"
+                         value="{{ r.player_id }}"
+                         {% if r.player_id in auto_selected %}checked{% endif %}
+                         data-pos="{{ r.position }}"
+                         data-proj="{{ r.projected if r.projected is not none else '' }}">
+                  <span class="nm">{{ r.name }}</span>
+                  {% if r.team %}<span class="tm">— {{ r.team }}</span>{% endif %}
+                  <span class="pj">{{ r.projected if r.projected is not none else '—' }}</span>
+                </label>
+              {% endfor %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </form>
+  </div>
+
+  <!-- Bottom action bar -->
+  <div class="action-bar">
+    <div class="ab-left">
+      <span id="abStatus">Review & submit your starters. Requirements turn green when valid.</span>
+    </div>
+    <div class="ab-right">
+      <button type="button" class="btn-ghost" id="skipBtn">Skip</button>
+      <button type="submit" form="lineupForm" class="btn-primary" id="submitBtn">Submit</button>
+      <a class="btn-ghost" href="{{ url_for('lineups.lineups_index') }}">Exit</a>
+    </div>
+  </div>
+</div>
+
+<!-- Toast (persistent-on-error only) -->
+<div id="fh-toast">
+  <div id="fh-toast-card">
+    <div class="toast-row">
+      <div id="fh-toast-dot"></div>
+      <div id="fh-toast-text"></div>
+      <button id="fh-toast-close" class="btn-ghost sm">Close</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* Ultra-compact look */
+  .page-wrap { --fg:#eaf1f7; --mut:#aeb7c3; --bd:rgba(255,255,255,.12); --bg2:#0b1220; font-size:13px; }
+  .hdr-row { display:flex; align-items:flex-end; justify-content:space-between; gap:10px; }
+  .hdr { margin:0; font-size:16px; font-weight:700; }
+  .sub { font-size:11px; color: var(--mut); }
+  .rules { font-size:12px; display:flex; gap:8px; align-items:center; }
+  .rules .totalReq { border:1px solid var(--bd); padding:1px 6px; border-radius:999px; font-size:11px; }
+
+  .body { padding:10px !important; }
+  .pos-grid {
+    display:grid;
+    grid-template-columns: repeat(3, minmax(0,1fr));
+    gap:8px;
+  }
+  @media (max-width: 1100px) { .pos-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+  @media (max-width: 720px) { .pos-grid { grid-template-columns: 1fr; } }
+
+  .pos-card { border:1px solid var(--bd); border-radius:10px; padding:6px; background:rgba(10,12,14,.9); }
+  .pos-head { display:flex; align-items:center; gap:6px; margin-bottom:4px; }
+  .chip { font-size:11px; padding:1px 6px; border-radius:999px; border:1px solid var(--bd); }
+  .req { font-size:11px; }
+  .req.bad { color:#ff6b6b; }
+  .req.good { color:#8be28b; }
+  .cnt { margin-left:auto; font-size:11px; opacity:.85; }
+
+  .list { display:block; }
+  .row {
+    display:grid;
+    grid-template-columns: 16px 1fr auto;
+    gap:6px;
+    align-items:center;
+    padding:3px 6px;
+    border-radius:6px;
+    cursor:pointer;
+    user-select:none;
+  }
+  .row:hover { background: rgba(255,255,255,.05); }
+  .row input { width:16px; height:16px; margin:0; }
+  .nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; }
+  .tm { font-size:11px; color:var(--mut); margin-left:6px; white-space:nowrap; }
+  .pj { font-size:11px; white-space:nowrap; margin-left:6px; }
+
+  /* Bottom action bar (fixed) */
+  .action-bar {
+    position:fixed; left:0; right:0; bottom:0; z-index:50;
+    background: rgba(11,18,32,.95);
+    border-top:1px solid var(--bd);
+    padding:8px 12px;
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+  }
+  .ab-left { font-size:12px; color:var(--mut); }
+  .btn-primary { padding:6px 12px; font-size:12px; border-radius:10px; }
+  .btn-ghost { padding:6px 10px; font-size:12px; border-radius:10px; }
+  .btn-ghost.sm { padding:4px 8px; font-size:11px; }
+
+  /* Toast */
+  #fh-toast { position:fixed; right:16px; bottom:64px; max-width:520px; z-index:99; display:none; }
+  #fh-toast-card { background: var(--bg2); border:1px solid var(--bd); border-radius:12px; padding:8px 10px; color:var(--fg); box-shadow:0 10px 24px rgba(0,0,0,.35); }
+  .toast-row { display:flex; align-items:flex-start; gap:8px; }
+  #fh-toast-dot { width:10px; height:10px; border-radius:50%; margin-top:6px; }
+</style>
+
+<script>
+(function(){
+  // ---------- Toast (persist only for errors) ----------
+  const TOAST_KEY = 'fh_persist_toast'; // {kind:'success'|'error', text:string}
+  const toastEl = document.getElementById('fh-toast');
+  const toastDot = document.getElementById('fh-toast-dot');
+  const toastText = document.getElementById('fh-toast-text');
+  const toastClose = document.getElementById('fh-toast-close');
+  let toastTimer = null;
+
+  function setToastAppearance(kind){
+    if (kind === 'success') {
+      toastDot.style.background = '#22c55e';
+      toastEl.style.borderColor = 'rgba(34,197,94,.25)';
+    } else {
+      toastDot.style.background = '#ef4444';
+      toastEl.style.borderColor = 'rgba(239,68,68,.25)';
+    }
+  }
+  function showToast(kind, text, {persist=false, autohideMs=null} = {}){
+    if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+    setToastAppearance(kind);
+    toastText.textContent = text || '';
+    toastEl.style.display = 'block';
+    if (persist) {
+      try { sessionStorage.setItem(TOAST_KEY, JSON.stringify({kind, text})); } catch(e){}
+    } else {
+      try { sessionStorage.removeItem(TOAST_KEY); } catch(e){}
+    }
+    if (autohideMs && autohideMs > 0) {
+      toastTimer = setTimeout(() => { hideToast(); }, autohideMs);
+    }
+  }
+  function hideToast(){
+    if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+    toastEl.style.display = 'none';
+    try { sessionStorage.removeItem(TOAST_KEY); } catch(e){}
+  }
+  toastClose.addEventListener('click', hideToast);
+  (function restoreToast(){
+    try {
+      const raw = sessionStorage.getItem(TOAST_KEY);
+      if (!raw) return;
+      const {kind, text} = JSON.parse(raw);
+      // restore persisted (error) toast
+      showToast(kind || 'error', text || '', {persist:true});
+    } catch(e){}
+  })();
+
+  // ---------- Requirements + counts ----------
+  const ranges = {{ ranges|tojson }};
+  const totalRequired = {{ total_required or 0 }};
+  const form = document.getElementById('lineupForm');
+
+  function parseRange(s){
+    if (!s) return null;
+    const m = String(s).trim().match(/^(\d+)(?:-(\d+))?$/);
+    if (!m) return null;
+    const lo = parseInt(m[1],10);
+    const hi = m[2] ? parseInt(m[2],10) : lo;
+    return {lo, hi};
+  }
+
+  function updateCounts(){
+    const byPos = {};
+    const boxes = form.querySelectorAll('input[type="checkbox"][name="starters[]"]');
+    boxes.forEach(cb => {
+      if (cb.checked){
+        const p = (cb.getAttribute('data-pos') || 'Other').toUpperCase();
+        byPos[p] = (byPos[p] || 0) + 1;
+      }
+    });
+
+    document.querySelectorAll('[data-pos-req]').forEach(el => {
+      const card = el.closest('.pos-card');
+      const pos = (card?.getAttribute('data-pos') || 'Other').toUpperCase();
+      const rangeText = ranges[pos] || '';
+      const countEl = card.querySelector('[data-pos-count]');
+      const count = byPos[pos] || 0;
+      if (countEl) countEl.textContent = count;
+
+      el.classList.remove('bad','good');
+      const rng = parseRange(rangeText);
+      if (rng) {
+        if (count < rng.lo || count > rng.hi) {
+          el.classList.add('bad');
+        } else {
+          el.classList.add('good');
+        }
+      }
+    });
+
+    // total requirement color
+    if (totalRequired > 0){
+      const totalSelected = Object.values(byPos).reduce((a,b)=>a+b,0);
+      const badge = document.getElementById('totalReqBadge');
+      if (badge){
+        badge.style.color = (totalSelected === totalRequired) ? '#8be28b' : '#ff6b6b';
+      }
+    }
+  }
+
+  form.addEventListener('change', (e) => {
+    if (e.target.matches('input[type="checkbox"][name="starters[]"]')) {
+      updateCounts();
+    }
+  });
+  updateCounts(); // after auto-selects
+
+  // ---------- Submit / Skip (AJAX) ----------
+  const submitBtn = document.getElementById('submitBtn');
+  const skipBtn = document.getElementById('skipBtn');
+
+  async function doSubmit(){
+    submitBtn.disabled = true; skipBtn.disabled = true;
+    try {
+      const fd = new FormData(form);
+      const res = await fetch('{{ url_for("lineups.lineups_rapid_submit") }}', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd
+      });
+      const data = await res.json().catch(()=>({ok:false,message:'Unexpected response',next:false}));
+      const kind = data.ok ? 'success' : 'error';
+      const msg = data.message || (data.ok ? 'Lineup submitted successfully' : 'Failed to submit lineup');
+
+      // Success -> quick auto-dismiss, no persistence
+      // Error   -> persist until closed
+      if (data.ok) {
+        showToast('success', msg, {persist:false, autohideMs:1200});
+      } else {
+        showToast('error', msg, {persist:true});
+      }
+
+      if (data.next) {
+        window.location = '{{ url_for("lineups.lineups_rapid_league") }}';
+      } else {
+        window.location = '{{ url_for("lineups.lineups_rapid_finish") }}';
+      }
+    } catch (err) {
+      // Persist a network error (tends to recur)
+      showToast('error', 'Network error. Please try again.', {persist:true});
+    } finally {
+      submitBtn.disabled = false; skipBtn.disabled = false;
+    }
+  }
+
+  form.addEventListener('submit', function(e){ e.preventDefault(); doSubmit(); });
+
+  skipBtn.addEventListener('click', async () => {
+    submitBtn.disabled = true; skipBtn.disabled = true;
+    try {
+      const res = await fetch('{{ url_for("lineups.lineups_rapid_skip") }}', {method:'POST', credentials:'same-origin'});
+      const data = await res.json().catch(()=>({ok:false,next:false}));
+      // Skip is a benign success -> auto-hide, no persistence
+      showToast('success', 'Skipped.', {persist:false, autohideMs:1000});
+      if (data.next) {
+        window.location = '{{ url_for("lineups.lineups_rapid_league") }}';
+      } else {
+        window.location = '{{ url_for("lineups.lineups_rapid_finish") }}';
+      }
+    } catch (err) {
+      showToast('error', 'Could not skip. Try again.', {persist:true});
+    } finally {
+      submitBtn.disabled = false; skipBtn.disabled = false;
+    }
+  });
+})();
+</script>
+{% endblock %}

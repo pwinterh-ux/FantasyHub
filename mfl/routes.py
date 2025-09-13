@@ -27,6 +27,9 @@ from services.mfl_sync import (
     sync_league_standings,
 )
 
+# ---- NEW: lightweight per-host threading utilities
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 mfl_bp = Blueprint("mfl", __name__, url_prefix="/mfl")
 
 # --------------------------- lightweight in-proc cache -----------------------
@@ -277,6 +280,9 @@ def mfl_config_submit():
       - Upsert/delete leagues per checkbox selection
       - Persist user's franchise_id per league (from config form)
       - For each, load league info + assets + standings
+
+    UPDATED: Network fetches are grouped by host and run with one worker per host.
+    DB writes (sync_* fns) occur on the main thread to keep SQLAlchemy session safe.
     """
     miss = _require_mfl_cookie()
     if miss:
@@ -329,7 +335,7 @@ def mfl_config_submit():
             db.session.delete(lg)
             db.session.flush()
         except Exception as e:
-            db.session.rollback()
+            db.session.rollback
             current_app.logger.exception("Failed deleting league %s: %s", lg.mfl_id, e)
             flash(f"Failed deleting league {lg.mfl_id}: {e}", "danger")
             continue
@@ -362,8 +368,11 @@ def mfl_config_submit():
 
     # Targets to sync
     targets = to_resync + created_leagues
+    if not targets:
+        flash("No leagues selected.", "warning")
+        return redirect(url_for("mfl.mfl_config", year=year))
 
-    # Base API client (used to discover league host)
+    # Base API client (used to discover league host, assets/standings fallback)
     api_client = MFLClient(year=year)
 
     # --- build a host map like trades does (once) ---
@@ -394,43 +403,111 @@ def mfl_config_submit():
             base_cookie = (base_cookie + "; " if base_cookie else "") + f"MFL_USER_ID={uid}"
         return base_cookie
 
+    # -------------------- FETCH PHASE (per-host threads) ---------------------
+    # Prepare per-league immutable fetch spec (avoid ORM objects in threads)
+    fetch_specs: list[dict] = []
+    league_by_lid: dict[str, League] = {lg.mfl_id: lg for lg in targets}
+    for lg in targets:
+        spec = {
+            "lid": lg.mfl_id,
+            "year": year,
+            "franchise_id": lg.franchise_id,
+            "prefer_host": getattr(lg, "league_host", None) or host_by_lid.get(lg.mfl_id),
+        }
+        fetch_specs.append(spec)
+
+    # Group by host key (use 'api.myfantasyleague.com' when unknown)
+    groups: dict[str, list[dict]] = {}
+    for spec in fetch_specs:
+        host = spec["prefer_host"] or "api.myfantasyleague.com"
+        groups.setdefault(host, []).append(spec)
+
+    # Make thread-safe clients/cookies per host group (strings only)
+    clients_by_host: dict[str, MFLClient] = {}
+    cookie_by_host: dict[str, str | None] = {}
+    for host in groups.keys():
+        if host == "api.myfantasyleague.com":
+            clients_by_host[host] = api_client
+            cookie_by_host[host] = _append_user_id_cookie(api_cookie, api_cookie)
+        else:
+            clients_by_host[host] = MFLClient(year=year, base_url=f"https://{host}/{year}/")
+            cookie_by_host[host] = _append_user_id_cookie(host_cookies.get(host), api_cookie)
+
+    # Worker: fetch info/assets/standings (no DB access here!)
+    def _worker(host_key: str, specs: list[dict]) -> list[dict]:
+        results: list[dict] = []
+        data_client = clients_by_host[host_key]
+        data_cookie = cookie_by_host[host_key]
+        for spec in specs:
+            lid = spec["lid"]
+            out: dict = {"lid": lid, "host_used": host_key, "errors": [], "fallback_used": False}
+            try:
+                # 1) league info from API host (consistent source)
+                info_xml = api_client.get_league_info(lid, api_cookie)
+                try:
+                    franchise_meta, roster_text, league_base_url = parse_league_info(info_xml) if info_xml else ({}, None, None)
+                except Exception as e:
+                    franchise_meta, roster_text, league_base_url = {}, None, None
+                    out["errors"].append(f"parse_league_info:{e}")
+                out["franchise_meta"] = franchise_meta
+                out["roster_text"] = roster_text
+                out["resolved_host"] = spec["prefer_host"] or _host_only(league_base_url) or host_by_lid.get(lid) or host_key
+
+                # 2) assets (host first, fallback to API if blocked)
+                assets_xml = data_client.get_assets(lid, data_cookie)
+                want_api_fallback = bool(assets_xml and b"<error" in assets_xml and b"API requires logged in user" in assets_xml)
+                if want_api_fallback:
+                    assets_xml = api_client.get_assets(lid, api_cookie)
+                use_fallbacks = bool(assets_xml and b"<error" in assets_xml and b"API requires logged in user" in assets_xml)
+                if use_fallbacks:
+                    out["fallback_used"] = True
+                    rosters_xml = data_client.get_rosters(lid, data_cookie)
+                    try:
+                        picks_xml = data_client.get_future_picks(lid, data_cookie)
+                    except Exception:
+                        picks_xml = None
+                    assets = parse_rosters_fallback(rosters_xml, picks_xml)
+                else:
+                    assets = parse_assets(assets_xml)
+                out["assets"] = assets
+
+                # 3) standings (host first, fallback to API if blocked)
+                standings_xml = data_client.get_standings(lid, data_cookie)
+                if standings_xml and b"<error" in standings_xml and b"API requires logged in user" in standings_xml:
+                    standings_xml = api_client.get_standings(lid, api_cookie)
+                out["standings"] = parse_standings(standings_xml)
+            except Exception as e:
+                out["errors"].append(str(e))
+            results.append(out)
+        return results
+
+    # Execute per-host workers
+    fetched: dict[str, dict] = {}  # lid -> result bundle
+    with ThreadPoolExecutor(max_workers=len(groups)) as ex:
+        futures = [ex.submit(_worker, host, specs) for host, specs in groups.items()]
+        for fut in as_completed(futures):
+            try:
+                for bundle in fut.result():
+                    fetched[bundle["lid"]] = bundle
+            except Exception as e:
+                current_app.logger.info("fetch worker failed: %s", e)
+
+    # -------------------- SYNC PHASE (main thread DB writes) -----------------
     leagues_synced = 0
     teams_total = 0
     roster_rows_total = 0
     picks_total = 0
+    any_fallback = False
 
     for lg in targets:
-        # 1) League info: discover baseURL and franchise meta from API host
+        bundle = fetched.get(lg.mfl_id)
+        if not bundle:
+            flash(f"Sync skipped for league {lg.mfl_id} (no data fetched).", "warning")
+            continue
+
         try:
-            info_xml = api_client.get_league_info(lg.mfl_id, api_cookie)
-        except Exception:
-            info_xml = None
-
-        league_base_url = None
-        franchise_meta = {}
-        roster_text = None
-        try:
-            franchise_meta, roster_text, league_base_url = parse_league_info(info_xml) if info_xml else ({}, None, None)
-        except Exception as e:
-            current_app.logger.info("parse_league_info failed for L=%s: %s", lg.mfl_id, e)
-            franchise_meta, roster_text, league_base_url = {}, None, None
-
-        # Resolve host (mirror trades): prefer stamped league_host, then base_url host, then myleagues host
-        resolved_host = getattr(lg, "league_host", None) or _host_only(league_base_url) or host_by_lid.get(lg.mfl_id)
-
-        # Build data client pinned to the league host if we have it
-        data_client = api_client
-        if resolved_host:
-            data_client = MFLClient(year=year, base_url=f"https://{resolved_host}/{year}/")
-
-        # Choose the best cookie; then append MFL_USER_ID if missing (so host sees the user id)
-        cookie_for_data = host_cookies.get(resolved_host) if resolved_host else None
-        if not cookie_for_data:
-            cookie_for_data = api_cookie or getattr(current_user, "session_key", None)
-        cookie_for_data = _append_user_id_cookie(cookie_for_data, api_cookie)
-
-        # Save host/home on the league row (handy for templates/link-outs)
-        try:
+            # Stamp host/home if changed
+            resolved_host = bundle.get("resolved_host")
             if resolved_host and getattr(lg, "league_host", None) != resolved_host:
                 lg.league_host = resolved_host
             if hasattr(lg, "home_url"):
@@ -439,42 +516,16 @@ def mfl_config_submit():
         except Exception as e:
             current_app.logger.info("could not stamp league_host/home_url for L=%s: %s", lg.mfl_id, e)
 
-        # 2) Upsert franchise names/owners + roster slots
+        # Sync info
         try:
-            sync_league_info(lg, franchise_meta, roster_slots=roster_text)
+            sync_league_info(lg, bundle.get("franchise_meta") or {}, roster_slots=bundle.get("roster_text"))
         except Exception as e:
             current_app.logger.info("sync_league_info error for L=%s: %s", lg.mfl_id, e)
 
-        # 3) Assets & Standings — host-first (with MFL_USER_ID) then fallback to API host
+        # Sync assets + standings
         try:
-            # Assets: try league host first
-            assets_xml = data_client.get_assets(lg.mfl_id, cookie_for_data)
-            want_api_fallback = bool(assets_xml and b"<error" in assets_xml and b"API requires logged in user" in assets_xml)
-            if want_api_fallback:
-                current_app.logger.info("assets blocked for L=%s at %s; trying API host fallback",
-                                        lg.mfl_id, getattr(data_client, "base", "?"))
-                assets_xml = api_client.get_assets(lg.mfl_id, api_cookie)
-
-            # If still blocked, use roster/picks fallbacks like before
-            use_fallbacks = bool(assets_xml and b"<error" in assets_xml and b"API requires logged in user" in assets_xml)
-            if use_fallbacks:
-                flash("Some league data requires a per-league login; using roster/picks fallbacks for one or more leagues.", "warning")
-                rosters_xml = data_client.get_rosters(lg.mfl_id, cookie_for_data)
-                try:
-                    picks_xml = data_client.get_future_picks(lg.mfl_id, cookie_for_data)
-                except Exception:
-                    picks_xml = None
-                assets = parse_rosters_fallback(rosters_xml, picks_xml)
-            else:
-                assets = parse_assets(assets_xml)
-
-            # Standings: try host first then API host if blocked
-            standings_xml = data_client.get_standings(lg.mfl_id, cookie_for_data)
-            if standings_xml and b"<error" in standings_xml and b"API requires logged in user" in standings_xml:
-                standings_xml = api_client.get_standings(lg.mfl_id, api_cookie)
-
-            metrics = sync_league_assets(lg, assets)
-            updated = sync_league_standings(lg, parse_standings(standings_xml))
+            metrics = sync_league_assets(lg, bundle.get("assets") or {})
+            updated = sync_league_standings(lg, bundle.get("standings") or {})
 
             lg.synced_at = datetime.utcnow()
             db.session.commit()
@@ -483,21 +534,17 @@ def mfl_config_submit():
             teams_total += metrics.get("teams_touched", 0)
             roster_rows_total += metrics.get("rosters_inserted", 0)
             picks_total += metrics.get("picks_inserted", 0)
+            any_fallback = any_fallback or bool(bundle.get("fallback_used"))
 
-            current_app.logger.info(
-                "synced L=%s via %s: fid=%s teams=%s roster_rows=%s picks=%s standings_updated=%s",
-                lg.mfl_id,
-                (resolved_host or "api"),
-                lg.franchise_id,
-                metrics.get("teams_touched", 0),
-                metrics.get("rosters_inserted", 0),
-                metrics.get("picks_inserted", 0),
-                updated,
-            )
+            if bundle.get("errors"):
+                current_app.logger.info("sync L=%s completed with warnings: %s", lg.mfl_id, "; ".join(bundle["errors"]))
         except Exception as e:
             db.session.rollback()
             current_app.logger.info("sync failed for L=%s: %s", lg.mfl_id, e)
             flash(f"Sync failed for league {lg.mfl_id}: {e}", "danger")
+
+    if any_fallback:
+        flash("Some league data required a per-league login; used roster/picks fallbacks for one or more leagues.", "warning")
 
     # Consolidated banner (brief)
     flash(
@@ -514,6 +561,9 @@ def _gather_open_trades(year: int) -> dict:
     """
     Core fetcher: returns the same shape the JSON endpoint exposes.
     Uses league-host cookie when available, else falls back to API host.
+
+    UPDATED: per-host concurrency (one worker per distinct host). Threads do
+    network + parsing only; final packaging is assembled in the main thread.
     """
     # Cookies
     api_cookie = getattr(current_user, "mfl_cookie_api", None) or getattr(current_user, "session_key", None)
@@ -538,85 +588,101 @@ def _gather_open_trades(year: int) -> dict:
     # All leagues for this user/season
     leagues = League.query.filter_by(user_id=current_user.id, year=year).all()
 
-    results = []
+    # Group by resolved host
+    groups: dict[str, list[str]] = {}
+    for lg in leagues:
+        host = getattr(lg, "league_host", None) or host_by_lid.get(lg.mfl_id) or "api.myfantasyleague.com"
+        groups.setdefault(host, []).append(lg.mfl_id)
+
+    # Prepare clients/cookies per host
+    clients_by_host: dict[str, MFLClient] = {}
+    cookie_by_host: dict[str, str | None] = {}
+    for host in groups.keys():
+        if host == "api.myfantasyleague.com":
+            clients_by_host[host] = api_client
+            cookie_by_host[host] = api_cookie
+        else:
+            clients_by_host[host] = MFLClient(year=year, base_url=f"https://{host}/{year}/")
+            cookie_by_host[host] = host_cookies.get(host) or api_cookie
+
+    # Worker: fetch + parse pending trades for the leagues on a host
+    def _worker(host_key: str, lids: list[str]) -> list[dict]:
+        results: list[dict] = []
+        client = clients_by_host[host_key]
+        cookie = cookie_by_host[host_key]
+        for lid in lids:
+            league_payload = {
+                "league_id": lid,
+                "host_used": host_key,
+                "trades": [],
+                "error": None,
+            }
+            try:
+                xml = client.get_pending_trades(lid, cookie)
+                trades = parse_pending_trades(xml)
+
+                def _side_to_dict(side):
+                    return {
+                        "franchise_id": side.franchise_id,
+                        "player_ids": side.player_ids,
+                        "future_picks": [
+                            {"season": s, "round": r, "original_team": o} for (s, r, o) in side.future_picks
+                        ],
+                        "faab": side.faab,
+                    }
+
+                t_list = []
+                for t in trades:
+                    offered_to = None
+                    if getattr(t, "proposed_by", None) and t.franchises and len(t.franchises) == 2:
+                        others = [f for f in t.franchises if f != t.proposed_by]
+                        if len(others) == 1:
+                            offered_to = others[0]
+                    t_list.append({
+                        "trade_id": t.trade_id,
+                        "status": t.status,
+                        "created_ts": t.created_ts,
+                        "expires_ts": t.expires_ts,
+                        "franchises": t.franchises,
+                        "sides": [_side_to_dict(s) for s in t.sides],
+                        "comments": t.comments,
+                        "proposed_by": t.proposed_by,
+                        "offered_to": offered_to,
+                    })
+                league_payload["trades"] = t_list
+            except Exception as e:
+                league_payload["error"] = str(e)
+            results.append(league_payload)
+        return results
+
     flat = []
+    results = []
     total_trades = 0
 
-    for lg in leagues:
-        # Resolve host: prefer stamped league_host, otherwise myleagues host
-        resolved_host = getattr(lg, "league_host", None) or host_by_lid.get(lg.mfl_id)
-        host_cookie = host_cookies.get(resolved_host) if resolved_host else None
-
-        # Choose client + cookie:
-        if resolved_host and host_cookie:
-            data_client = MFLClient(year=year, base_url=f"https://{resolved_host}/{year}/")
-            cookie_for_data = host_cookie
-            used_host = resolved_host
-            auth_mode = "host_cookie"
-        else:
-            data_client = api_client
-            cookie_for_data = api_cookie or getattr(current_user, "session_key", None)
-            used_host = "api.myfantasyleague.com"
-            auth_mode = "api_cookie"
-
-        league_payload = {
-            "league_id": lg.mfl_id,
-            "league_name": lg.name,
-            "year": lg.year,
-            "host": resolved_host,
-            "franchise_id": lg.franchise_id,
-            "trades": [],
-            "auth_mode": auth_mode,
-        }
-
-        try:
-            xml = data_client.get_pending_trades(lg.mfl_id, cookie_for_data)
-            trades = parse_pending_trades(xml)
-
-            # Transform dataclasses to plain dicts
-            def _side_to_dict(side):
-                return {
-                    "franchise_id": side.franchise_id,
-                    "player_ids": side.player_ids,
-                    "future_picks": [
-                        {"season": s, "round": r, "original_team": o} for (s, r, o) in side.future_picks
-                    ],
-                    "faab": side.faab,
-                }
-
-            for t in trades:
-                # best-effort offered_to when it's a simple two-team trade
-                offered_to = None
-                if getattr(t, "proposed_by", None) and t.franchises and len(t.franchises) == 2:
-                    others = [f for f in t.franchises if f != t.proposed_by]
-                    if len(others) == 1:
-                        offered_to = others[0]
-
-                t_dict = {
-                    "trade_id": t.trade_id,
-                    "status": t.status,
-                    "created_ts": t.created_ts,
-                    "expires_ts": t.expires_ts,
-                    "franchises": t.franchises,
-                    "sides": [_side_to_dict(s) for s in t.sides],
-                    "comments": t.comments,
-                    "proposed_by": t.proposed_by,
-                    "offered_to": offered_to,
-                }
-                league_payload["trades"].append(t_dict)
-
-                flat.append({
-                    "league_id": lg.mfl_id,
-                    "league_name": lg.name,
-                    "host_used": used_host,
-                    **t_dict,
-                })
-
-            total_trades += len(league_payload["trades"])
-        except Exception as e:
-            league_payload["error"] = str(e)
-
-        results.append(league_payload)
+    # Execute workers
+    with ThreadPoolExecutor(max_workers=len(groups)) as ex:
+        futures = [ex.submit(_worker, host, lids) for host, lids in groups.items()]
+        for fut in as_completed(futures):
+            try:
+                for lp in fut.result():
+                    # Attach name/year/host from DB row (main thread, safe)
+                    lg = next((L for L in leagues if L.mfl_id == lp["league_id"]), None)
+                    if lg:
+                        lp["league_name"] = lg.name
+                        lp["year"] = lg.year
+                        lp["franchise_id"] = lg.franchise_id
+                        lp["host"] = getattr(lg, "league_host", None) or host_by_lid.get(lg.mfl_id)
+                    results.append(lp)
+                    for t in (lp.get("trades") or []):
+                        flat.append({
+                            "league_id": lp["league_id"],
+                            "league_name": lg.name if lg else "",
+                            "host_used": lp.get("host_used"),
+                            **t,
+                        })
+                    total_trades += len(lp.get("trades") or [])
+            except Exception as e:
+                current_app.logger.info("trades worker failed: %s", e)
 
     return {
         "ok": True,

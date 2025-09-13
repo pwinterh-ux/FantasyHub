@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-wrap">
+  <!-- Header -->
+  <div class="tile pad" style="max-width:1200px;margin:10px auto 6px;">
+    <div class="hdr-row">
+      <div class="hdr-left">
+        <h2 class="hdr">Submit Lineup — {{ league.name }}</h2>
+        <div class="sub">Team: {{ my_team_name or '—' }} • MFL {{ league.mfl_id }}</div>
+      </div>
+
+      <div class="hdr-right">
+        <label for="weekSelect" class="wk-label">Week</label>
+        <select id="weekSelect" class="wk-select">
+          {% for w in weeks %}
+            <option value="{{ w }}" {% if w == week %}selected{% endif %}>{{ w }}</option>
+          {% endfor %}
+        </select>
+
+        <div class="rules">
+          <strong>Rules:</strong>
+          <span id="slotsText">{{ starters_label or '—' }}</span>
+          {% if total_required %}
+            <span class="totalReq" id="totalReqBadge">Total: <b id="totalNeed">{{ total_required }}</b></span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Body (compact grid) -->
+  <div class="tile pad dark body" style="max-width:1200px;margin:0 auto 90px;">
+    <form id="lineupForm" method="POST" action="{{ url_for('lineups.lineups_single_submit', league_id=league.id) }}">
+      <input type="hidden" name="week" value="{{ week }}">
+      <input type="hidden" name="next" value="{{ next_url }}">
+
+      <div class="pos-grid">
+        {% for pos, rows in grouped_players.items() %}
+          <div class="pos-card" data-pos="{{ pos }}">
+            <div class="pos-head">
+              <span class="chip">{{ pos }}</span>
+              <span class="req" data-pos-req>{{ ranges.get(pos, '') }}</span>
+              <span class="cnt"><span data-pos-count>0</span></span>
+            </div>
+
+            <div class="list">
+              {% for r in rows %}
+                <label class="row">
+                  <input type="checkbox"
+                         name="starters[]"
+                         value="{{ r.player_id }}"
+                         {% if r.player_id in auto_selected %}checked{% endif %}
+                         data-pos="{{ r.position }}"
+                         data-proj="{{ r.projected if r.projected is not none else '' }}">
+                  <span class="nm">{{ r.name }}</span>
+                  {% if r.team %}<span class="tm">— {{ r.team }}</span>{% endif %}
+                  <span class="pj">{{ r.projected if r.projected is not none else '—' }}</span>
+                </label>
+              {% endfor %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </form>
+  </div>
+
+  <!-- Bottom action bar -->
+  <div class="action-bar">
+    <div class="ab-left">
+      <span id="abStatus">Review & submit your starters. Requirements turn green when valid.</span>
+    </div>
+    <div class="ab-right">
+      <a class="btn-ghost" id="backBtn" href="{{ next_url }}">Back</a>
+      <button type="submit" form="lineupForm" class="btn-primary" id="submitBtn">Submit</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="fh-toast" style="display:none;">
+  <div id="fh-toast-card">
+    <div class="toast-row">
+      <div id="fh-toast-dot"></div>
+      <div id="fh-toast-text"></div>
+      <button id="fh-toast-close" class="btn-ghost sm" type="button">Close</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .page-wrap { --fg:#eaf1f7; --mut:#aeb7c3; --bd:rgba(255,255,255,.12); --bg2:#0b1220; font-size:13px; }
+  .hdr-row { display:flex; align-items:flex-end; justify-content:space-between; gap:10px; }
+  .hdr { margin:0; font-size:16px; font-weight:700; }
+  .sub { font-size:11px; color: var(--mut); }
+
+  .hdr-right { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .wk-label { font-size:12px; color:var(--mut); }
+  .wk-select { background:#0b1220; color:var(--fg); border:1px solid var(--bd); border-radius:8px; padding:4px 8px; font-size:12px; }
+  .rules { font-size:12px; display:flex; gap:8px; align-items:center; }
+  .rules .totalReq { border:1px solid var(--bd); padding:1px 6px; border-radius:999px; font-size:11px; }
+
+  .body { padding:10px !important; }
+  .pos-grid { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:8px; }
+  @media (max-width: 1100px) { .pos-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+  @media (max-width: 720px) { .pos-grid { grid-template-columns: 1fr; } }
+
+  .pos-card { border:1px solid var(--bd); border-radius:10px; padding:6px; background:rgba(10,12,14,.9); }
+  .pos-head { display:flex; align-items:center; gap:6px; margin-bottom:4px; }
+  .chip { font-size:11px; padding:1px 6px; border-radius:999px; border:1px solid var(--bd); }
+  .req { font-size:11px; }
+  .req.bad { color:#ff6b6b; }
+  .req.good { color:#8be28b; }
+  .cnt { margin-left:auto; font-size:11px; opacity:.85; }
+
+  .list { display:block; }
+  .row {
+    display:grid; grid-template-columns: 16px 1fr auto; gap:6px; align-items:center;
+    padding:3px 6px; border-radius:6px; cursor:pointer; user-select:none;
+  }
+  .row:hover { background: rgba(255,255,255,.05); }
+  .row input { width:16px; height:16px; margin:0; }
+  .nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600; }
+  .tm { font-size:11px; color:var(--mut); margin-left:6px; white-space:nowrap; }
+  .pj { font-size:11px; white-space:nowrap; margin-left:6px; }
+
+  .action-bar {
+    position:fixed; left:0; right:0; bottom:0; z-index:50;
+    background: rgba(11,18,32,.95);
+    border-top:1px solid var(--bd);
+    padding:8px 12px;
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+  }
+  .ab-left { font-size:12px; color:var(--mut); }
+  .btn-primary { padding:6px 12px; font-size:12px; border-radius:10px; }
+  .btn-ghost { padding:6px 10px; font-size:12px; border-radius:10px; }
+  .btn-ghost.sm { padding:4px 8px; font-size:11px; }
+
+  /* Toast */
+  #fh-toast { position:fixed; right:16px; bottom:64px; max-width:520px; z-index:99; }
+  #fh-toast-card { background: var(--bg2); border:1px solid var(--bd); border-radius:12px; padding:8px 10px; color:var(--fg); box-shadow:0 10px 24px rgba(0,0,0,.35); }
+  .toast-row { display:flex; align-items:flex-start; gap:8px; }
+  #fh-toast-dot { width:10px; height:10px; border-radius:50%; margin-top:6px; }
+</style>
+
+<script>
+(function(){
+  // ---------- Toast ----------
+  const toastEl = document.getElementById('fh-toast');
+  const toastDot = document.getElementById('fh-toast-dot');
+  const toastText = document.getElementById('fh-toast-text');
+  const toastClose = document.getElementById('fh-toast-close');
+
+  function setToastAppearance(kind){
+    if (kind === 'success') {
+      toastDot.style.background = '#22c55e';
+      toastEl.style.borderColor = 'rgba(34,197,94,.25)';
+    } else {
+      toastDot.style.background = '#ef4444';
+      toastEl.style.borderColor = 'rgba(239,68,68,.25)';
+    }
+  }
+  function showToast(kind, text){
+    setToastAppearance(kind);
+    toastText.textContent = text || '';
+    toastEl.style.display = 'block';
+  }
+  function hideToast(){
+    toastEl.style.display = 'none';
+  }
+  toastClose.addEventListener('click', hideToast);
+
+  // ---------- Requirements + counts ----------
+  const ranges = {{ ranges|tojson }};
+  const totalRequired = {{ total_required or 0 }};
+  const form = document.getElementById('lineupForm');
+
+  function parseRange(s){
+    if (!s) return null;
+    const m = String(s).trim().match(/^(\d+)(?:-(\d+))?$/);
+    if (!m) return null;
+    const lo = parseInt(m[1],10);
+    const hi = m[2] ? parseInt(m[2],10) : lo;
+    return {lo, hi};
+  }
+
+  function updateCounts(){
+    const byPos = {};
+    const boxes = form.querySelectorAll('input[type="checkbox"][name="starters[]"]');
+    boxes.forEach(cb => {
+      if (cb.checked){
+        const p = (cb.getAttribute('data-pos') || 'Other').toUpperCase();
+        byPos[p] = (byPos[p] || 0) + 1;
+      }
+    });
+
+    document.querySelectorAll('[data-pos-req]').forEach(el => {
+      const card = el.closest('.pos-card');
+      const pos = (card?.getAttribute('data-pos') || 'Other').toUpperCase();
+      const rangeText = ranges[pos] || '';
+      const countEl = card.querySelector('[data-pos-count]');
+      const count = byPos[pos] || 0;
+      if (countEl) countEl.textContent = count;
+
+      el.classList.remove('bad','good');
+      const rng = parseRange(rangeText);
+      if (rng) {
+        if (count < rng.lo || count > rng.hi) el.classList.add('bad');
+        else el.classList.add('good');
+      }
+    });
+
+    if (totalRequired > 0){
+      const totalSelected = Object.values(byPos).reduce((a,b)=>a+b,0);
+      const badge = document.getElementById('totalReqBadge');
+      if (badge){
+        badge.style.color = (totalSelected === totalRequired) ? '#8be28b' : '#ff6b6b';
+      }
+    }
+  }
+
+  form.addEventListener('change', (e) => {
+    if (e.target.matches('input[type="checkbox"][name="starters[]"]')) {
+      updateCounts();
+    }
+  });
+  updateCounts(); // after auto-selects
+
+  // ---------- Week selector ----------
+  const weekSel = document.getElementById('weekSelect');
+  weekSel.addEventListener('change', () => {
+    const w = weekSel.value;
+    const base = '{{ url_for("lineups.lineups_single_league", league_id=league.id) }}';
+    const next = encodeURIComponent('{{ next_url }}');
+    window.location = `${base}?week=${encodeURIComponent(w)}&next=${next}`;
+  });
+
+  // ---------- Submit ----------
+  const submitBtn = document.getElementById('submitBtn');
+
+  form.addEventListener('submit', async function(e){
+    e.preventDefault();
+    submitBtn.disabled = true;
+    try {
+      const fd = new FormData(form);
+      const res = await fetch('{{ url_for("lineups.lineups_single_submit", league_id=league.id) }}', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd
+      });
+      let data;
+      try { data = await res.json(); }
+      catch { data = { ok:false, message:'Unexpected response' }; }
+
+      if (data.ok) {
+        // Success: show quick toast then bounce back to My Leagues
+        showToast('success', data.message || 'OK');
+        setTimeout(() => {
+          window.location = data.redirect || '{{ next_url }}';
+        }, 600);
+      } else {
+        // Error: persist toast until user closes
+        showToast('error', data.message || 'Failed');
+      }
+    } catch (err) {
+      showToast('error', 'Network error. Please try again.');
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+})();
+</script>
+{% endblock %}

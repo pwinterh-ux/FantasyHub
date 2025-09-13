@@ -17,7 +17,7 @@
             <th style="padding:10px;">My Team</th>
             <th style="padding:10px;">Record</th>
             <th style="padding:10px;">Standing</th>
-            <th style="padding:10px;">Roster</th>
+            <th style="padding:10px;">Starters</th>
           </tr>
         </thead>
         <tbody id="leagues-tbody">
@@ -26,6 +26,7 @@
             <tr class="league-row"
                 data-league-row="{{ league.id }}"
                 data-details-url="{{ url_for('leagues.league_details_json', league_id=league.id) }}"
+                data-submit-url="{{ url_for('lineups.lineups_single_league', league_id=league.id, next=request.url) }}"
                 style="
                   background: radial-gradient(120% 120% at 10% 0%, rgba(12,14,18,.86), rgba(8,10,12,.9));
                   color:#eaf1f7;
@@ -42,6 +43,7 @@
               <td style="padding:14px; cursor:pointer;">{{ my_team.record if my_team and my_team.record else '—' }}</td>
               <td style="padding:14px; cursor:pointer;">{{ my_team.standing if my_team and my_team.standing is not none else '—' }}</td>
               <td style="padding:14px; border-top-right-radius:12px; border-bottom-right-radius:12px; cursor:pointer;">
+                <!-- RAW DB VALUE -->
                 <span class="roster-slots" data-raw="{{ league.roster_slots or '' }}">{{ league.roster_slots or 'Not set' }}</span>
               </td>
             </tr>
@@ -61,7 +63,8 @@
     border-radius: 12px;
   }
   .details-panel { padding: 16px 6px 6px; }
-  .details-header { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin:0 0 10px; }
+  .details-top { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0 0 10px; }
+  .details-header { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
   .details-header h3 { margin:0; font-size:18px; color:#f4f7fa; }
   .mini { font-size:12px; opacity:.85; }
 
@@ -95,6 +98,8 @@
 
   .group-start td { padding-top: 12px; border-top: 1px dashed rgba(255,255,255,.15); }
   .pos-chip { font-size:11px; padding:2px 6px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background:#0b1220; }
+
+  .btn-compact { padding:6px 10px; font-size:12px; border-radius:10px; }
 </style>
 
 <script>
@@ -103,35 +108,6 @@
   const baseOffersSearch = "{{ url_for('offers.search') }}";
 
   function pad4(x){ x = String(x || ''); return x.padStart(4, '0'); }
-
-  // Normalize duplicated/zero roster slot ranges, e.g.
-  // "QB:1,RB:2-4,WR:3-5,TE:1-3,QB:0-0,RB:0-0,WR:0-0,TE:0-0" -> "QB:1,RB:2-4,WR:3-5,TE:1-3"
-  function cleanRosterSlots(s) {
-    if (!s) return 'Not set';
-    const parts = String(s).split(',').map(p => p.trim()).filter(Boolean);
-    const seen = {};
-    const order = [];
-    for (const p of parts) {
-      const m = p.match(/^([A-Z]+)\s*:\s*([0-9]+(?:-[0-9]+)?)$/i);
-      if (!m) continue;
-      const pos = m[1].toUpperCase();
-      const val = m[2];
-      const isZero = /^0(?:-0)?$/.test(val);
-      if (!(pos in seen)) {
-        seen[pos] = { val, nonzero: !isZero };
-        order.push(pos);
-      } else {
-        // If first occurrence was zero and this one is non-zero, upgrade it
-        if (!seen[pos].nonzero && !isZero) {
-          seen[pos] = { val, nonzero: true };
-        }
-      }
-    }
-    const nonZero = order.filter(pos => seen[pos].nonzero).map(pos => `${pos}:${seen[pos].val}`);
-    if (nonZero.length) return nonZero.join(',');
-    const all = order.map(pos => `${pos}:${seen[pos].val}`);
-    return all.join(',') || 'Not set';
-  }
 
   function closeOpenDetails(exceptLeagueId) {
     document.querySelectorAll('tr.details-row').forEach(tr => {
@@ -156,7 +132,7 @@
     }).join('');
   }
 
-  // Roster: sort QB, RB, WR, TE, then others; inline team; Action column with Sell link
+  // RESTORED: roster with Sell action
   function renderRoster(roster) {
     const order = { QB: 0, RB: 1, WR: 2, TE: 3 };
     const items = (roster || []).slice().sort((a,b) => {
@@ -183,7 +159,7 @@
           <td style="width:64px;"><span class="pos-chip">${pos || '—'}</span></td>
           <td>${r.name || '—'} ${team}</td>
           <td style="width:100px;">
-            <a class="btn-ghost" href="${sellHref}" style="padding:6px 10px;font-size:12px;">Sell</a>
+            <a class="btn-ghost btn-compact" href="${sellHref}">Sell</a>
           </td>
         </tr>
       `;
@@ -204,7 +180,6 @@
     `;
   }
 
-  // Picks: map original team FID -> name using teams array
   function renderPicks(picks, teams) {
     const teamMap = {};
     (teams || []).forEach(t => { teamMap[pad4(t.mfl_id)] = t.name || pad4(t.mfl_id); });
@@ -237,37 +212,17 @@
     `;
   }
 
-  function renderStandings(teams, myFranchise) {
-    return `
-      <div>
-        <h4 style="margin:0 0 6px;">Standings</h4>
-        <table class="standings-table">
-          <thead>
-            <tr>
-              <th style="width:56px;">#</th>
-              <th>Team</th>
-              <th>Record</th>
-              <th>PF</th>
-              <th>PA</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${standingsRows(teams, myFranchise) || '<tr><td colspan="5" style="padding:10px;">No team data found.</td></tr>'}
-          </tbody>
-        </table>
-      </div>
-    `;
-  }
-
   async function toggleDetails(rowEl) {
     const leagueId = rowEl.getAttribute('data-league-row');
     const url = rowEl.getAttribute('data-details-url');
+    const submitUrl = rowEl.getAttribute('data-submit-url');
 
+    // close others
     const existing = document.querySelector(`tr.details-row[data-for-league="${leagueId}"]`);
     if (existing) { existing.remove(); return; }
-
     closeOpenDetails(leagueId);
 
+    // placeholder row
     const loadingRow = document.createElement('tr');
     loadingRow.className = 'details-row';
     loadingRow.setAttribute('data-for-league', leagueId);
@@ -280,27 +235,58 @@
     rowEl.insertAdjacentElement('afterend', loadingRow);
 
     try {
-      const res = await fetch(url, { credentials: 'same-origin' });
-      if (!res.ok) throw new Error('Failed to load details');
+      const res = await fetch(url, {
+        credentials: 'same-origin',
+        headers: {
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        }
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(()=> '');
+        throw new Error(`HTTP ${res.status} ${res.statusText} ${txt ? '— ' + txt.slice(0,200) : ''}`);
+      }
       const data = await res.json();
 
       const myFranchise = data.league && data.league.franchise_id ? String(data.league.franchise_id) : null;
       const synced = data.league && data.league.synced_at ? new Date(data.league.synced_at).toLocaleString() : '—';
       const teams = data.teams || [];
-      const slots = cleanRosterSlots(data.league && data.league.roster_slots ? data.league.roster_slots : '');
+      const slots = (data.league && data.league.roster_slots) ? data.league.roster_slots : 'Not set';
 
       td.innerHTML = `
         <div class="details-panel">
-          <div class="details-header">
-            <h3>${data.league.name}</h3>
-            <span class="mini">Season ${data.league.year} • MFL ${data.league.mfl_id} • Last sync: ${synced}</span>
+          <div class="details-top">
+            <div class="details-header">
+              <h3>${data.league.name}</h3>
+              <span class="mini">Season ${data.league.year} • MFL ${data.league.mfl_id} • Last sync: ${synced}</span>
+            </div>
+            <div>
+              <a href="${submitUrl}" class="btn-ghost btn-compact" title="Submit lineup for this league">Submit Lineup</a>
+            </div>
           </div>
+
           <div style="margin-bottom: 8px;">
             <strong>Lineup:</strong> ${slots}
           </div>
 
           <div class="grid-2">
-            ${renderStandings(teams, myFranchise)}
+            <div>
+              <h4 style="margin:0 0 6px;">Standings</h4>
+              <table class="standings-table">
+                <thead>
+                  <tr>
+                    <th style="width:56px;">#</th>
+                    <th>Team</th>
+                    <th>Record</th>
+                    <th>PF</th>
+                    <th>PA</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${standingsRows(teams, myFranchise) || '<tr><td colspan="5" style="padding:10px;">No team data found.</td></tr>'}
+                </tbody>
+              </table>
+            </div>
             <div>
               ${renderRoster(data.my_roster)}
               ${renderPicks(data.my_draft_picks, teams)}
@@ -309,23 +295,19 @@
         </div>
       `;
     } catch (err) {
+      console.error('League details fetch failed:', err);
       td.innerHTML = `<div class="details-panel">Could not load league details. Please try again.</div>`;
-      console.error(err);
     }
   }
 
-  // Click to expand/collapse details
+  // Row click -> expand/collapse
   tbody.addEventListener('click', (e) => {
     const row = e.target.closest('tr.league-row');
     if (!row) return;
     toggleDetails(row);
   });
 
-  // Clean roster-slot strings in the top list rows
-  document.querySelectorAll('.roster-slots').forEach(el => {
-    const raw = el.getAttribute('data-raw') || '';
-    el.textContent = cleanRosterSlots(raw);
-  });
+  // NOTE: We show raw roster-slots from DB (no cleaning).
 })();
 </script>
 {% endblock %}

@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Iterable
+from typing import Dict, Any, List, Optional
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock, Semaphore
 
-from flask import Blueprint, render_template, current_app, session
+from flask import Blueprint, render_template, current_app, session, redirect, url_for
 from flask_login import login_required, current_user
 
 from app import db
@@ -19,15 +22,15 @@ CACHE_KEY = "live_cache"
 STALE_SECONDS = 300  # 5 minutes
 
 # --- lightweight server-side cache for live scoring (per-process) ---
-from threading import Lock
-
 _LIVE_CACHE_STORE: dict[int, dict] = {}
 _LIVE_CACHE_LOCK = Lock()
 _LIVE_CACHE_MAX_USERS = 200   # soft cap to avoid unbounded growth
 
+
 def _get_live_cache(user_id: int) -> dict | None:
     with _LIVE_CACHE_LOCK:
         return _LIVE_CACHE_STORE.get(user_id)
+
 
 def _set_live_cache(user_id: int, payload: dict) -> None:
     with _LIVE_CACHE_LOCK:
@@ -174,29 +177,52 @@ def _aggregate_from_tiles(tiles: List[Dict[str, Any]]) -> Dict[str, Any]:
         "opp_starters": starters_opp,
     }
 
+
 def _norm_starter(item: Any) -> Dict[str, Any]:
     """
-    Normalize a starter (object or dict) to a dict.
+    Normalize a starter (object or dict) to a dict the templates expect.
+    Supports seconds remaining from several field names.
     """
     if isinstance(item, dict):
-        return {
-            "player_id": item.get("player_id"),
-            "score": float(item.get("score") or 0.0),
-            "seconds_remaining": int(item.get("seconds_remaining") or 0),
-            "game_seconds": int(item.get("game_seconds") or 3600),
-        }
-    # object-ish
+        pid = item.get("player_id", item.get("pid"))
+        score = float(item.get("score", item.get("fp", 0.0)) or 0.0)
+        if "seconds_remaining" in item and item["seconds_remaining"] is not None:
+            rem = int(item["seconds_remaining"])
+        elif "sec_remaining" in item and item["sec_remaining"] is not None:
+            rem = int(item["sec_remaining"])
+        elif "game_seconds_remaining" in item and item["game_seconds_remaining"] is not None:
+            rem = int(item["game_seconds_remaining"])
+        else:
+            rem = 0
+        gs = int(item.get("game_seconds", 3600) or 3600)
+    else:
+        pid = getattr(item, "player_id", None)
+        score = float(getattr(item, "score", 0.0) or 0.0)
+        if hasattr(item, "seconds_remaining") and getattr(item, "seconds_remaining") is not None:
+            rem = int(getattr(item, "seconds_remaining") or 0)
+        elif hasattr(item, "game_seconds_remaining") and getattr(item, "game_seconds_remaining") is not None:
+            rem = int(getattr(item, "game_seconds_remaining") or 0)
+        else:
+            rem = 0
+        gs = int(getattr(item, "game_seconds", 3600) or 3600)
+
+    rem = max(0, rem)
+    gs = 3600 if gs is None else int(gs) or 3600  # NFL game assumed 60 min
+    minutes_left = (rem + 59) // 60
+
     return {
-        "player_id": getattr(item, "player_id", None),
-        "score": float(getattr(item, "score", 0.0) or 0.0),
-        "seconds_remaining": int(getattr(item, "seconds_remaining", 0) or 0),
-        "game_seconds": int(getattr(item, "game_seconds", 3600) or 3600),
+        "player_id": pid,
+        "score": score,
+        "seconds_remaining": rem,
+        "game_seconds": gs,
+        "minutes_remaining": minutes_left,
     }
 
 
 def _normalize_side(side: Any) -> Dict[str, Any]:
     """
     Convert any side shape (dict or object) into the payload the template expects.
+    Computes starters' total/left seconds from normalized starters.
     """
     if isinstance(side, dict):
         starters_raw = side.get("starters") or []
@@ -204,25 +230,24 @@ def _normalize_side(side: Any) -> Dict[str, Any]:
         total_secs = sum(int(s.get("game_seconds", 3600) or 0) for s in starters)
         total_left = sum(int(s.get("seconds_remaining", 0) or 0) for s in starters)
         return {
-            "franchise_id": side.get("franchise_id"),
+            "franchise_id": side.get("franchise_id", side.get("fid")),
             "name": side.get("name"),
             "score": float(side.get("score") or 0.0),
-            "starters_seconds_total": int(side.get("starters_seconds_total") or total_secs),
-            "starters_seconds_left": int(side.get("starters_seconds_left") or total_left),
+            "starters_seconds_total": int(total_secs),
+            "starters_seconds_left": int(total_left),
             "starters": starters,
         }
 
-    # object-ish
     starters_raw = getattr(side, "starters", None) or []
     starters = [_norm_starter(s) for s in starters_raw]
     total_secs = sum(int(s.get("game_seconds", 3600) or 0) for s in starters)
     total_left = sum(int(s.get("seconds_remaining", 0) or 0) for s in starters)
     return {
-        "franchise_id": getattr(side, "franchise_id", None),
+        "franchise_id": getattr(side, "franchise_id", getattr(side, "fid", None)),
         "name": getattr(side, "name", None),
         "score": float(getattr(side, "score", 0.0) or 0.0),
-        "starters_seconds_total": total_secs,
-        "starters_seconds_left": total_left,
+        "starters_seconds_total": int(total_secs),
+        "starters_seconds_left": int(total_left),
         "starters": starters,
     }
 
@@ -230,9 +255,7 @@ def _normalize_side(side: Any) -> Dict[str, Any]:
 def _iter_sides_from_matchup(m: Any) -> List[Any]:
     """
     Pull two sides from a LiveMatchup-like object, regardless of attribute names.
-    Tries common attributes, then any iterable attr that looks like sides.
     """
-    # 1) obvious named pairs
     for a_name, b_name in [
         ("a", "b"),
         ("home", "away"),
@@ -245,14 +268,12 @@ def _iter_sides_from_matchup(m: Any) -> List[Any]:
         if hasattr(m, a_name) and hasattr(m, b_name):
             return [getattr(m, a_name), getattr(m, b_name)]
 
-    # 2) list/tuple attributes that look like participants
     for list_name in ["sides", "participants", "franchises", "teams", "entries"]:
         if hasattr(m, list_name):
             val = getattr(m, list_name)
             if isinstance(val, (list, tuple)) and len(val) >= 2:
                 return list(val[:2])
 
-    # 3) last resort: scan attributes for objects with franchise_id
     candidates = []
     for name in dir(m):
         if name.startswith("_"):
@@ -277,6 +298,10 @@ def _iter_sides_from_matchup(m: Any) -> List[Any]:
 @login_required
 @live_bp.route("/", methods=["GET"])
 def live_index():
+    # Hard guard to avoid sporadic AnonymousUser access before decorator runs
+    if not current_user.is_authenticated:
+        return redirect(url_for("auth.login"))
+
     cache = _get_live_cache(current_user.id)
     if not cache or (_now_ts() - float(cache.get("ts", 0))) > STALE_SECONDS:
         cache = _refresh_all_live()
@@ -302,6 +327,10 @@ def live_index():
 @login_required
 @live_bp.route("/refresh", methods=["POST"])
 def refresh_live():
+    # Hard guard to avoid sporadic AnonymousUser access before decorator runs
+    if not current_user.is_authenticated:
+        return {"ok": False, "error": "auth"}, 401
+
     cache = _get_live_cache(current_user.id)
     age = (_now_ts() - float(cache.get("ts", 0))) if cache else 1e9
     if age < STALE_SECONDS:
@@ -330,57 +359,83 @@ def _refresh_all_live() -> Dict[str, Any]:
         .all()
     )
 
-    tiles: List[Dict[str, Any]] = []
-    all_player_ids: set[str] = set()
+    # ---- Precompute everything needed in worker threads (no DB inside threads) ----
+    league_infos: List[Dict[str, Any]] = []
     team_lookup: Dict[str, Dict[str, str]] = {}
-
     for lg in leagues:
         host = _league_host(lg) or "api.myfantasyleague.com"
         base_url = f"https://{host}/{lg.year}/"
-        cookie = _cookie_for_host(host)
-        client = MFLClient(year=lg.year, base_url=base_url)
-
+        cookie = _cookie_for_host(host)  # read from session/current_user on main thread
         my_fid = str(lg.franchise_id).zfill(4) if lg.franchise_id else None
-        if not my_fid:
-            current_app.logger.warning("Live scoring skipped: no franchise_id for league %s", lg.mfl_id)
-            tiles.append({
-                "league_id": lg.mfl_id,
-                "league_name": lg.name,
-                "host": host,
-                "week": None,
-                "note": "None Available",
-                "my_team_name": None,
-                "opp_team_name": None,
-                "my_score": 0.0,
-                "opp_score": 0.0,
-                "my_progress_pct": 0,
-                "opp_progress_pct": 0,
-                "my_starters": [],
-                "opp_starters": [],
-            })
-            continue
+        names_map = _team_names_map(lg.id)  # DB read on main thread
+        team_lookup[str(lg.mfl_id)] = names_map
 
-        try:
-            xml = client._export("liveScoring", params={"L": lg.mfl_id}, cookie=cookie)
-            parsed = parse_live_scoring(xml, my_franchise_id=my_fid)
-        except Exception as e:
-            current_app.logger.warning("Live scoring fetch failed for league %s: %s", lg.mfl_id, e)
-            tiles.append({
-                "league_id": lg.mfl_id,
-                "league_name": lg.name,
-                "host": host,
-                "week": None,
-                "note": "None Available",
-                "my_team_name": None,
-                "opp_team_name": None,
-                "my_score": 0.0,
-                "opp_score": 0.0,
-                "my_progress_pct": 0,
-                "opp_progress_pct": 0,
-                "my_starters": [],
-                "opp_starters": [],
-            })
-            continue
+        league_infos.append({
+            "league_id": lg.mfl_id,
+            "league_name": lg.name,
+            "year": lg.year,
+            "host": host,
+            "base_url": base_url,
+            "cookie": cookie,
+            "my_fid": my_fid,
+            "names_map": names_map,
+        })
+
+    # Early out when no leagues
+    if not league_infos:
+        cache = {
+            "ts": _now_ts(),
+            "tiles": [],
+            "player_lookup": {},
+            "team_lookup": {},
+            "aggregate": {"my_total_score": 0, "opp_total_score": 0, "my_progress_pct": 0, "opp_progress_pct": 0,
+                          "my_starters": [], "opp_starters": []},
+        }
+        return cache
+
+    logger = current_app.logger
+
+    # Concurrency: parallel across hosts, 1-at-a-time per host
+    host_locks: dict[str, Semaphore] = defaultdict(lambda: Semaphore(1))
+    unique_hosts = {info["host"] for info in league_infos}
+    max_workers = min(8, max(2, len(unique_hosts)))  # small pool; IO-bound
+
+    def build_empty_tile(info: Dict[str, Any], note: str = "None Available") -> Dict[str, Any]:
+        return {
+            "league_id": info["league_id"],
+            "league_name": info["league_name"],
+            "host": info["host"],
+            "week": None,
+            "note": note,
+            "my_team_name": None,
+            "opp_team_name": None,
+            "my_score": 0.0,
+            "opp_score": 0.0,
+            "my_progress_pct": 0,
+            "opp_progress_pct": 0,
+            "my_starters": [],
+            "opp_starters": [],
+        }
+
+    def worker(info: Dict[str, Any]) -> Dict[str, Any]:
+        # Returns {"tile": tile_dict, "player_ids": set_of_ids}
+        host = info["host"]
+        my_fid = info["my_fid"]
+        names_map = info["names_map"]
+
+        # If franchise id missing, we can't render a proper matchup
+        if not my_fid:
+            return {"tile": build_empty_tile(info), "player_ids": set()}
+
+        # Serialize per-host calls
+        with host_locks[host]:
+            try:
+                client = MFLClient(year=info["year"], base_url=info["base_url"])
+                xml = client._export("liveScoring", params={"L": info["league_id"]}, cookie=info["cookie"])
+                parsed = parse_live_scoring(xml, my_franchise_id=my_fid)
+            except Exception as e:
+                logger.warning("Live scoring fetch failed for league %s: %s", info["league_id"], e)
+                return {"tile": build_empty_tile(info), "player_ids": set()}
 
         # ---- Normalize parser output to me/opp/week dicts ----
         if isinstance(parsed, dict):
@@ -392,24 +447,8 @@ def _refresh_all_live() -> Dict[str, Any]:
             try:
                 side_a, side_b = _iter_sides_from_matchup(parsed)
             except Exception as e:
-                current_app.logger.warning("Could not extract sides for league %s: %s", lg.mfl_id, e)
-                tiles.append({
-                    "league_id": lg.mfl_id,
-                    "league_name": lg.name,
-                    "host": host,
-                    "week": week,
-                    "note": "None Available",
-                    "my_team_name": None,
-                    "opp_team_name": None,
-                    "my_score": 0.0,
-                    "opp_score": 0.0,
-                    "my_progress_pct": 0,
-                    "opp_progress_pct": 0,
-                    "my_starters": [],
-                    "opp_starters": [],
-                })
-                continue
-
+                logger.warning("Could not extract sides for league %s: %s", info["league_id"], e)
+                return {"tile": build_empty_tile(info), "player_ids": set()}
             # pick my side by franchise id
             def _fid(x: Any) -> Optional[str]:
                 if isinstance(x, dict):
@@ -417,42 +456,22 @@ def _refresh_all_live() -> Dict[str, Any]:
                 else:
                     fid = getattr(x, "franchise_id", None)
                 return str(fid).zfill(4) if fid is not None else None
-
             if _fid(side_a) == my_fid:
                 my_side, opp_side = side_a, side_b
             elif _fid(side_b) == my_fid:
                 my_side, opp_side = side_b, side_a
             else:
-                # fallback so we don't crash
                 my_side, opp_side = side_a, side_b
-
             me = _normalize_side(my_side)
             opp = _normalize_side(opp_side)
         else:
-            current_app.logger.warning("Unexpected live parser result type for league %s: %r", lg.mfl_id, type(parsed))
-            tiles.append({
-                "league_id": lg.mfl_id,
-                "league_name": lg.name,
-                "host": host,
-                "week": None,
-                "note": "None Available",
-                "my_team_name": None,
-                "opp_team_name": None,
-                "my_score": 0.0,
-                "opp_score": 0.0,
-                "my_progress_pct": 0,
-                "opp_progress_pct": 0,
-                "my_starters": [],
-                "opp_starters": [],
-            })
-            continue
+            logger.warning("Unexpected live parser result type for league %s: %r", info["league_id"], type(parsed))
+            return {"tile": build_empty_tile(info), "player_ids": set()}
 
-        # Team names map
-        names_map = _team_names_map(lg.id)
-        team_lookup[str(lg.mfl_id)] = names_map
-
+        # Names
         my_name = me.get("name") or names_map.get(my_fid, my_fid)
-        opp_fid = me.get("franchise_id")  # ensure we keep my_fid in me
+        if not my_name:
+            my_name = my_fid
         opp_name = opp.get("name")
         if not opp_name:
             opp_id = opp.get("franchise_id")
@@ -474,22 +493,23 @@ def _refresh_all_live() -> Dict[str, Any]:
         my_pct = int(round((my_played / my_total) * 100)) if my_total > 0 else 0
         opp_pct = int(round((opp_played / opp_total) * 100)) if opp_total > 0 else 0
 
-        # Starters lists + collect IDs
+        # Starters and collect player ids
         my_starters = me.get("starters") or []
         opp_starters = opp.get("starters") or []
+        pids: set[str] = set()
         for s in my_starters:
             pid = s.get("player_id")
             if pid is not None:
-                all_player_ids.add(str(pid))
+                pids.add(str(pid))
         for s in opp_starters:
             pid = s.get("player_id")
             if pid is not None:
-                all_player_ids.add(str(pid))
+                pids.add(str(pid))
 
-        tiles.append({
-            "league_id": lg.mfl_id,
-            "league_name": lg.name,
-            "host": host,
+        tile = {
+            "league_id": info["league_id"],
+            "league_name": info["league_name"],
+            "host": info["host"],
             "week": week,
             "my_fid": my_fid,
             "opp_fid": opp.get("franchise_id"),
@@ -501,8 +521,25 @@ def _refresh_all_live() -> Dict[str, Any]:
             "opp_progress_pct": opp_pct,
             "my_starters": my_starters,
             "opp_starters": opp_starters,
-        })
+        }
+        return {"tile": tile, "player_ids": pids}
 
+    # Run workers
+    tiles: List[Dict[str, Any]] = []
+    all_player_ids: set[str] = set()
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(worker, info) for info in league_infos]
+        for fut in as_completed(futures):
+            try:
+                res = fut.result()
+            except Exception as e:
+                logger.warning("Live worker crashed: %s", e)
+                continue
+            tiles.append(res.get("tile") or {})
+            all_player_ids.update(res.get("player_ids") or set())
+
+    # Player lookup after all results (DB on main thread)
     lookup = _player_lookup([int(x) for x in all_player_ids]) if all_player_ids else {}
     aggregate = _aggregate_from_tiles(tiles)
 

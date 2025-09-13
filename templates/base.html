@@ -157,7 +157,8 @@
           <li><a href="{{ url_for('start') }}">Leagues</a></li>
           <li><a href="{{ url_for('mfl.trades_home') }}">Trades</a></li>
           <li><a href="{{ url_for('live.live_index') }}">Live Scoring</a></li>
-          <li><a href="#" class="disabled" aria-disabled="true" title="Coming soon">Lineups</a></li>
+          <!-- UPDATED: Link Lineups to rapid start page -->
+          <li><a href="{{ url_for('lineups.lineups_rapid_start') }}">Lineups</a></li>
           <li><a href="#" class="disabled" aria-disabled="true" title="Coming soon">Waivers</a></li>
 
           {% if current_user.is_authenticated %}

@@ -151,36 +151,57 @@ def parse_league_info(xml: bytes) -> tuple[dict[str, dict], str | None, str | No
 
 
 def _extract_lineup_string(root: ET.Element) -> Optional[str]:
+    # Read total starters from <starters count="...">
+    total_count = None
+    starters_el = root.find(".//starters")
+    if starters_el is not None:
+        for attr in ("count", "total", "lineupCount", "numStarters"):
+            v = starters_el.get(attr)
+            if v:
+                try:
+                    total_count = int(v)
+                    break
+                except Exception:
+                    pass
+
+    # Only read positions under <starters> (ignore <rosterLimits>)
     positions = []
-    for pos in root.findall(".//position"):
+    for pos in root.findall(".//starters/position"):
         pname = (pos.get("name") or "").strip()
-        limit = pos.get("limit") or pos.get("max") or pos.get("count") or pos.get("required") or ""
         if not pname:
             continue
-        minv = pos.get("min") or pos.get("minStarters")
-        maxv = pos.get("max") or pos.get("limit")
+        limit_attr = (pos.get("limit") or "").strip()  # handles "1-8" or "2"
+        minv = (pos.get("min") or pos.get("minStarters") or "").strip()
+        maxv = (pos.get("max") or "").strip()
+
         if minv and maxv and minv != maxv:
             val = f"{minv}-{maxv}"
-        elif limit:
-            val = str(limit)
+        elif limit_attr:
+            val = limit_attr
+        elif minv:
+            val = minv
+        elif maxv:
+            val = maxv
         else:
             val = "1"
+
         positions.append(f"{pname}:{val}")
 
-    if positions:
-        return ",".join(positions)
+    text = ",".join(positions) if positions else None
 
-    starter_block = root.find(".//starterPositions") or root.find(".//starters")
-    if starter_block is not None:
-        names = [el.text.strip() for el in starter_block.findall(".//position") if (el.text or "").strip()]
-        counts: Dict[str, int] = {}
-        for n in names:
-            counts[n] = counts.get(n, 0) + 1
-        if counts:
-            return ",".join(f"{k}:{v}" for k, v in counts.items())
+    # Fallback: if a league returns only a flat list of starter positions
+    if not text and starters_el is not None:
+        names = [(el.text or "").strip() for el in starters_el.findall(".//position")]
+        names = [n for n in names if n]
+        if names:
+            counts: Dict[str, int] = {}
+            for n in names:
+                counts[n] = counts.get(n, 0) + 1
+            text = ",".join(f"{k}:{v}" for k, v in counts.items())
 
-    return None
-
+    if text and total_count:
+        return f"{total_count}:{text}"
+    return text
 
 # ---------- League assets (rosters + future picks in one call) --------------
 
