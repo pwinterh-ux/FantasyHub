@@ -28,6 +28,32 @@ class User(UserMixin, db.Model):
     mfl_cookie_hosts_json = db.Column(db.Text, nullable=True)    # JSON: {"www43.myfantasyleague.com": "...", ...}
     mfl_cookie_updated_at = db.Column(db.DateTime, nullable=True)
 
+    # models.py (inside class User, add these fields)
+
+    plan = db.Column(db.String(32))                      # e.g. FREE, MGR5_SEASON, etc.
+    league_cap = db.Column(db.Integer)                   # nullable until entitlements wired
+    mass_offer_daily_cap = db.Column(db.Integer)         # nullable
+    bonus_mass_offers = db.Column(db.Integer, default=0)
+
+    stripe_customer_id = db.Column(db.String(64))
+    stripe_price_id = db.Column(db.String(64))
+    founder_expires_at = db.Column(db.DateTime)
+
+    tos_version = db.Column(db.String(16))
+    privacy_version = db.Column(db.String(16))
+    aup_version = db.Column(db.String(16))
+    terms_accepted_at = db.Column(db.DateTime)
+    terms_accepted_ip = db.Column(db.String(45))
+
+    # Optional helpers (still inside User)
+    def has_accepted_current_terms(self, versions: dict[str, str]) -> bool:
+        """Compare stored versions to the current versions dict keys: tos, privacy, aup."""
+        return (
+            self.tos_version == versions.get("tos")
+            and self.privacy_version == versions.get("privacy")
+            and self.aup_version == versions.get("aup")
+        )
+
 
     # relationships
     leagues = db.relationship(

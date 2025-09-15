@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="tile pad">
+  <h2 style="margin-top:0;">Review & Accept</h2>
+  <p class="muted">
+    Open each document below in the popup, then confirm. You’ll only need to accept again if versions change.
+  </p>
+
+  <ul style="list-style:none; padding:0; margin:0 0 8px 0; display:grid; gap:10px;">
+    <li>
+      <button class="btn-ghost" data-doc="tos" data-url="{{ url_for('legal_terms') }}?embed=1">
+        View Terms of Service (v{{ versions['tos'] }})
+      </button>
+      <small id="tosStatus" class="muted" style="margin-left:8px;">Required</small>
+    </li>
+    <li>
+      <button class="btn-ghost" data-doc="privacy" data-url="{{ url_for('legal_privacy') }}?embed=1">
+        View Privacy Policy (v{{ versions['privacy'] }})
+      </button>
+      <small id="privacyStatus" class="muted" style="margin-left:8px;">Required</small>
+    </li>
+    <li>
+      <button class="btn-ghost" data-doc="aup" data-url="{{ url_for('legal_aup') }}?embed=1">
+        View Acceptable Use Policy (v{{ versions['aup'] }})
+      </button>
+      <small id="aupStatus" class="muted" style="margin-left:8px;">Required</small>
+    </li>
+  </ul>
+
+  <form id="acceptForm" method="POST" action="{{ url_for('legal_accept') }}" style="margin-top: 14px;">
+    <input type="hidden" name="next" value="{{ next_url }}">
+
+    <label style="display:block; margin: 10px 0;">
+      <input id="agreeAll" type="checkbox" disabled required>
+      I have viewed and agree to the Terms of Service, Privacy Policy, and Acceptable Use Policy.
+    </label>
+
+    <div style="display:flex; gap:8px; align-items:center;">
+      <button id="submitBtn" class="btn" type="submit" disabled>I Agree</button>
+      <a href="{{ next_url }}" class="btn-ghost">Cancel</a>
+      <small id="hint" class="muted" style="margin-left:6px;">Open all three documents to enable.</small>
+    </div>
+  </form>
+</div>
+
+<!-- Modal overlay -->
+<style>
+  .modal-overlay{ position:fixed; inset:0; display:none; z-index:999; }
+  .modal-overlay.show{ display:block; }
+  .modal-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.6); }
+  .modal-dialog{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:min(1100px, 92vw); height:min(80vh, 820px);
+    border-radius:14px; overflow:hidden; border:1px solid rgba(255,255,255,.12);
+    background: var(--tile-dark, rgba(12,16,22,.96));
+    box-shadow: 0 25px 60px rgba(0,0,0,.45);
+    display:flex; flex-direction:column;
+  }
+  .modal-head{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 12px; border-bottom:1px solid rgba(255,255,255,.08);
+  }
+  .modal-title{ font-weight:700; }
+  .modal-close{ background:transparent; color:#e5e7eb; border:none; font-size:20px; cursor:pointer; }
+  .modal-body{ flex:1; }
+  .modal-body iframe{ width:100%; height:100%; border:0; background:#0b1220; }
+</style>
+
+<div id="docModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="docModalTitle">
+  <div class="modal-backdrop" tabindex="-1"></div>
+  <div class="modal-dialog">
+    <div class="modal-head">
+      <div id="docModalTitle" class="modal-title">Document</div>
+      <button class="modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <iframe id="docFrame" src="" title="Legal document"></iframe>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const clicked = { tos: false, privacy: false, aup: false };
+  let currentDoc = null;
+
+  const els = {
+    agreeAll: document.getElementById('agreeAll'),
+    submitBtn: document.getElementById('submitBtn'),
+    hint: document.getElementById('hint'),
+    statuses: {
+      tos: document.getElementById('tosStatus'),
+      privacy: document.getElementById('privacyStatus'),
+      aup: document.getElementById('aupStatus'),
+    },
+    modal: document.getElementById('docModal'),
+    modalBackdrop: null,
+    modalClose: null,
+    modalTitle: document.getElementById('docModalTitle'),
+    frame: document.getElementById('docFrame'),
+  };
+
+  function allViewed() { return clicked.tos && clicked.privacy && clicked.aup; }
+
+  function markViewed(which) {
+    clicked[which] = true;
+    const s = els.statuses[which];
+    if (s) { s.textContent = 'Viewed ✓'; s.style.opacity = '0.9'; }
+  }
+
+  function updateUI() {
+    const ready = allViewed();
+    els.agreeAll.disabled = !ready;
+    els.submitBtn.disabled = !(ready && els.agreeAll.checked);
+    els.hint.textContent = ready
+      ? (els.agreeAll.checked ? '' : 'Check the box to continue.')
+      : 'Open all three documents to enable.';
+  }
+
+  function openModal(which, url, titleText) {
+    currentDoc = which;
+    els.modalTitle.textContent = titleText || 'Document';
+    els.frame.src = url;
+    els.modal.classList.add('show');
+    if (els.modalClose) { els.modalClose.focus(); }
+  }
+
+  function closeModal() {
+    els.modal.classList.remove('show');
+    els.frame.src = '';  // stop background loading
+    currentDoc = null;
+  }
+
+  // After the iframe loads, mark that doc as viewed
+  els.frame.addEventListener('load', function () {
+    if (currentDoc) {
+      markViewed(currentDoc);
+      updateUI();
+    }
+  });
+
+  // Wire modal chrome
+  els.modalBackdrop = els.modal.querySelector('.modal-backdrop');
+  els.modalClose = els.modal.querySelector('.modal-close');
+  els.modalBackdrop.addEventListener('click', closeModal);
+  els.modalClose.addEventListener('click', closeModal);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+  // Wire the three buttons
+  document.querySelectorAll('button[data-doc][data-url]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const which = btn.getAttribute('data-doc');
+      const url = btn.getAttribute('data-url');
+      const titleText = btn.textContent.trim();
+      openModal(which, url, titleText);
+    });
+  });
+
+  // Keep submit state in sync
+  els.agreeAll.addEventListener('change', updateUI);
+
+  // Final form guard
+  document.getElementById('acceptForm').addEventListener('submit', function (e) {
+    if (!allViewed() || !els.agreeAll.checked) {
+      e.preventDefault();
+      updateUI();
+    }
+  });
+
+  updateUI();
+})();
+</script>
+{% endblock %}

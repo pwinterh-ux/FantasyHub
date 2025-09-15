@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .legal h1{ margin:6px 0 10px; font-size:22px; letter-spacing:.2px; }
+  .legal h2{ margin:18px 0 8px; font-size:18px; }
+  .legal p, .legal li{ color: var(--muted); line-height: 1.55; }
+  .legal .meta{ font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .legal .tile{ margin-bottom: 12px; }
+  .legal ul{ margin:6px 0 10px; }
+</style>
+
+<div class="tile pad legal">
+  <h1>Terms of Service</h1>
+  <div class="meta">
+    Effective: September 12, 2025 · Provider: Kingdom Tools LLC (Dupage County, Illinois)
+  </div>
+
+  <p>Welcome to FantasyHub, a multi-league management tool for MyFantasyLeague.com (“MFL”). These Terms of Service (“Terms”) are a legal agreement between you and <strong>Kingdom Tools LLC</strong> (“we,” “us,” “our”). By accessing or using FantasyHub (the “Service”), you agree to these Terms.</p>
+
+  <h2>1) Description of the Service</h2>
+  <p>The Service provides tools to help fantasy football players manage multiple MFL leagues, including (a) league syncing (standings/rosters/future picks), (b) live scoring views, (c) rapid-fire lineup submission, and (d) trade utilities, including consolidated trade inboxes and mass-offer workflows. The Service is for <strong>entertainment and efficiency</strong> only. We do not guarantee wins, best lineup selections, or specific trade outcomes.</p>
+
+  <h2>2) Relationship with MyFantasyLeague.com</h2>
+  <p>We are an independent tool that interacts with MFL via their public and developer APIs. We are not owned by, affiliated with, or endorsed by MFL. Your use of MFL remains subject to MFL’s terms, policies, and technical limits. Where our functionality relies on MFL availability or permissions, those constraints apply.</p>
+
+  <h2>3) Eligibility & Accounts</h2>
+  <ul>
+    <li>You must be able to form a binding contract and comply with applicable laws.</li>
+    <li>You are responsible for your account credentials and for activity under your account.</li>
+    <li>Do not share access or impersonate others.</li>
+  </ul>
+
+  <h2>4) Fees & Plans</h2>
+  <p>We offer free and paid plans (weekly and seasonal) and limited special passes (e.g., Founder). Pricing and plan features are shown on our pricing page and at checkout. Seasonal plans include offseason coverage through MFL rollover; weekly passes are optimized for the first 10–12 NFL weeks.</p>
+  <p>Payments are processed by Stripe. Taxes, if any, are handled per Stripe configuration. Refunds follow the policy shown at checkout unless required by law.</p>
+
+  <h2>5) Authorization with MFL (No Password Storage)</h2>
+  <p>To access your MFL league data or submit league-level actions, you must authenticate to MFL. We follow MFL’s documented login and authorization approach:</p>
+  <ul>
+    <li><strong>No MFL password storage:</strong> We do <em>not</em> store your MFL password. You enter it to authenticate against MFL’s login endpoint over HTTPS.</li>
+    <li><strong>Cookies/API keys:</strong> Upon successful MFL login, MFL returns cookies (e.g., <code>MFL_USER_ID</code>) and/or league-scoped API keys. We store and reuse these tokens solely to make authorized API calls on your behalf in accordance with your league permissions.</li>
+    <li><strong>Scope & permissions:</strong> Access is controlled by MFL. Private leagues require valid credentials for the relevant league/host. Some requests require commissioner privileges; others are owner-only.</li>
+  </ul>
+  <p><em>Important:</em> We recommend verifying all important submissions (lineups, trades) directly on MFL. If any discrepancy appears, the MFL site is the system of record.</p>
+
+  <h2>6) Technical Limits, Throttling & Caching</h2>
+  <p>To comply with MFL’s Acceptable Use and rate limits, we may throttle or queue certain requests (especially during NFL live games) and cache data that does not change frequently. If MFL responds with rate-limit or maintenance signals, we may delay or retry requests. Features can be affected by MFL outages, changes, or policy updates.</p>
+
+  <h2>7) Your Responsibilities</h2>
+  <ul>
+    <li>Use the Service lawfully and in compliance with both these Terms and MFL’s terms.</li>
+    <li>Do not attempt to harvest data, overload MFL or our Service, automate beyond allowed limits, or circumvent league rules.</li>
+    <li>Review outputs, projections, and trade tools critically; they are informational only.</li>
+  </ul>
+
+  <h2>8) Prohibited Conduct</h2>
+  <p>You may not: (i) access another user’s accounts or leagues without permission; (ii) scrape or misuse MFL or our endpoints; (iii) transmit malware or attempt to disrupt the Service or MFL; (iv) violate any applicable laws; (v) use the Service for abusive, harassing, or fraudulent activity. See our Acceptable Use Policy for details.</p>
+
+  <h2>9) Intellectual Property</h2>
+  <p>We retain all rights in our software, design, and content. Using the Service does not grant you ownership. You may not copy, modify, reverse engineer, or redistribute our code or content, except as permitted by law or explicit license.</p>
+
+  <h2>10) Third-Party Services</h2>
+  <p>We may link to or incorporate third-party services (e.g., MFL, projections providers, payment processors). We are not responsible for third-party content, availability, or policies.</p>
+
+  <h2>11) Disclaimers</h2>
+  <ul>
+    <li>The Service is provided “as is” and “as available.” To the fullest extent permitted by law, we disclaim warranties of merchantability, fitness for a particular purpose, and non-infringement.</li>
+    <li>We do not guarantee wins, optimal lineups, trade acceptance, or fantasy outcomes.</li>
+    <li>Features may change or be removed, including during beta periods.</li>
+  </ul>
+
+  <h2>12) Limitation of Liability</h2>
+  <p>To the fullest extent permitted by law, Kingdom Tools LLC is not liable for any indirect, incidental, special, consequential, or exemplary damages (including lost profits, lost data, or loss of goodwill) arising from or related to your use of the Service, even if advised of the possibility. Our total liability for any claim will not exceed the amounts you paid us for the Service in the 12 months preceding the claim.</p>
+
+  <h2>13) Indemnification</h2>
+  <p>You agree to defend, indemnify, and hold harmless Kingdom Tools LLC from and against any claims, liabilities, damages, losses, and expenses (including reasonable attorneys’ fees) arising from your misuse of the Service, breach of these Terms, or violation of laws or third-party rights.</p>
+
+  <h2>14) Suspension & Termination</h2>
+  <p>We may suspend or terminate access if you violate these Terms, abuse MFL or our Service, or if required by law. You may stop using the Service at any time. Certain provisions survive termination (e.g., IP, disclaimers, limitations, indemnities).</p>
+
+  <h2>15) Changes to the Service or Terms</h2>
+  <p>We may modify features or these Terms. If changes are material, we will notify you by reasonable means (e.g., in-app notice). Your continued use after changes take effect constitutes acceptance.</p>
+
+  <h2>16) Governing Law & Venue</h2>
+  <p>These Terms are governed by the laws of the State of Illinois, without regard to conflict-of-law rules. You agree to exclusive jurisdiction and venue in the state or federal courts located in Dupage County, Illinois.</p>
+
+  <h2>17) Contact</h2>
+  <p>Questions? Contact Kingdom Tools LLC at the support channel listed in the app.</p>
+
+  <p class="meta">Last updated: September 12, 2025</p>
+</div>
+{% endblock %}

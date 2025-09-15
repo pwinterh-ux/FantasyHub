@@ -3,8 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FantasyHub</title>
+  <title>RosterDash</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  <link rel="preload" as="image" href="{{ url_for('static', filename='img/field.jpg') }}">
+  <link rel="preload" as="image" href="{{ url_for('static', filename='img/rosterdash-wordmark.png') }}">
   <style>
     :root{
       --tile-bg: radial-gradient(120% 120% at 10% 0%, rgba(22,22,26,.90), rgba(10,12,14,.94));
@@ -31,7 +33,7 @@
       z-index:-1;
     }
 
-    /* --------- Reusable tiles / buttons (to match other screens) --------- */
+    /* --------- Reusable tiles / buttons --------- */
     .tile{
       background: var(--tile-bg);
       border: 1px solid var(--border);
@@ -55,7 +57,7 @@
 
     .page-wrap{ max-width: 1200px; margin: 0 auto; padding: 16px; }
 
-    /* --------- Header / Nav (darker inlaid bar) --------- */
+    /* --------- Header / Nav --------- */
     .site-header{
       position: sticky; top:0; z-index: 50;
       padding: 8px 0;
@@ -70,9 +72,11 @@
       background: var(--tile-dark);
       padding: 10px 14px;
     }
-    .logo h1{
-      margin:0; font-size: 22px; letter-spacing:.2px; color:#f4f7fa; text-shadow:0 1px 2px rgba(0,0,0,.35);
-    }
+
+    /* Logo: image-only */
+    .logo{ display:flex; align-items:center; }
+    .logo img{ display:block; height:28px; width:auto; }
+
     .nav-links{ display:flex; gap: 14px; list-style:none; margin:0; padding:0; align-items:center; }
     .nav-links a{
       color:#e5e7eb; text-decoration:none; padding:8px 10px; border-radius:8px;
@@ -81,19 +85,18 @@
     .nav-links a:hover{
       background:#0b1220; border-color: rgba(255,255,255,.08);
     }
-    /* Disabled/inactive nav items */
     .nav-links a.disabled, .nav-links a[aria-disabled="true"]{
       opacity:.5; pointer-events:none; cursor: default;
     }
 
-    /* --------- Main content area --------- */
+    /* --------- Main / Footer --------- */
     main.content{ padding: 8px 0 24px; }
     footer.site-footer{
       text-align:center; color:#cbd5e1; font-size: 13px; padding: 12px 0 18px;
       opacity:.9;
     }
 
-    /* --------- Toasts (dark theme to match) --------- */
+    /* --------- Toasts --------- */
     #toast-stack{
       position: fixed; top: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 9999;
     }
@@ -120,18 +123,20 @@
     .toast-warning { border-left-color: #eab308; }
     .toast-danger  { border-left-color: #ef4444; }
 
-    /* Donate pill */
     .donate a{
       background: #0070ba; color: white; padding: 8px 14px; border-radius: 10px; text-decoration: none; font-weight: bold;
       border:1px solid rgba(255,255,255,.18);
     }
 
-    /* Utility */
     .muted{ opacity:.85; }
   </style>
 </head>
 <body>
+  {# Only allow embed mode on legal pages to avoid accidental global embed #}
+  {% set _embed_requested = request.args.get('embed') in ['1', 'true', 'yes'] %}
+  {% set embed = _embed_requested and request.endpoint in ['legal_terms', 'legal_privacy', 'legal_aup'] %}
 
+  {% if not embed %}
   <!-- Toasts -->
   {% with messages = get_flashed_messages(with_categories=True) %}
   {% if messages %}
@@ -146,23 +151,30 @@
   </div>
   {% endif %}
   {% endwith %}
+  {% endif %}
 
+  {% if not embed %}
   <!-- Header -->
   <header class="site-header">
     <div class="page-wrap nav-bar">
-      <div class="logo"><h1>FantasyHub</h1></div>
+      <div class="logo">
+        <a href="{{ url_for('start') }}" aria-label="RosterDash home" style="display:flex;align-items:center;text-decoration:none;">
+          <img src="{{ url_for('static', filename='img/rosterdash-wordmark.png') }}" alt="">
+        </a>
+      </div>
 
       <nav>
         <ul class="nav-links">
           <li><a href="{{ url_for('start') }}">Leagues</a></li>
           <li><a href="{{ url_for('mfl.trades_home') }}">Trades</a></li>
           <li><a href="{{ url_for('live.live_index') }}">Live Scoring</a></li>
-          <!-- UPDATED: Link Lineups to rapid start page -->
           <li><a href="{{ url_for('lineups.lineups_rapid_start') }}">Lineups</a></li>
           <li><a href="#" class="disabled" aria-disabled="true" title="Coming soon">Waivers</a></li>
 
           {% if current_user.is_authenticated %}
-            <li class="muted">Hi, {{ current_user.username }}</li>
+            <li class="muted">
+              Hi, <a class="username-link" href="{{ url_for('account') }}">{{ current_user.username }}</a>
+            </li>
             <li>
               <form method="POST" action="{{ url_for('auth.logout') }}" style="display:inline;">
                 <button type="submit" class="btn-ghost">Logout</button>
@@ -180,6 +192,7 @@
       </div>
     </div>
   </header>
+  {% endif %}
 
   <!-- Content -->
   <main class="content">
@@ -188,32 +201,44 @@
     </div>
   </main>
 
+  {% if not embed %}
   <!-- Footer -->
   <footer class="site-footer">
     <div class="page-wrap">
-      <p>&copy; {{ current_year }} FantasyHub &mdash; Contact @pwindynasty on X with feedback</p>
+      <p>&copy; {{ current_year }} RosterDash &mdash; Contact @pwindynasty on X with feedback</p>
     </div>
   </footer>
+  {% endif %}
 
-  <script>
-    // Auto-hide toasts after ~1.5s; allow manual dismiss.
-    (function () {
-      const toasts = document.querySelectorAll('#toast-stack .toast');
-      toasts.forEach((t, i) => {
-        const btn = t.querySelector('.toast-close');
-        if (btn) {
-          btn.addEventListener('click', () => {
-            t.classList.add('hide');
-            setTimeout(() => t.remove(), 400);
-          });
-        }
-        const delay = 1200 + (i * 150);
-        setTimeout(() => {
-          t.classList.add('hide');
-          setTimeout(() => t.remove(), 400);
-        }, delay);
-      });
-    })();
-  </script>
+    <script>
+      // Toasts: success/info auto-hide, warning/danger persist until user closes.
+      (function () {
+        const toasts = document.querySelectorAll('#toast-stack .toast');
+        toasts.forEach((t, i) => {
+          const btn = t.querySelector('.toast-close');
+          if (btn) {
+            btn.addEventListener('click', () => {
+              t.classList.add('hide');
+              setTimeout(() => t.remove(), 400);
+            });
+          }
+
+          // Persist warnings & errors (and anything with data-sticky="true")
+          const isSticky =
+            t.classList.contains('toast-warning') ||
+            t.classList.contains('toast-danger') ||
+            t.dataset.sticky === 'true';
+
+          if (!isSticky) {
+            const delay = 1500 + (i * 150);
+            setTimeout(() => {
+              t.classList.add('hide');
+              setTimeout(() => t.remove(), 400);
+            }, delay);
+          }
+        });
+      })();
+    </script>
+
 </body>
 </html>

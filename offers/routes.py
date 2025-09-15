@@ -1,6 +1,7 @@
+# offers/routes.py
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from typing import Dict, List, Tuple, Optional, Any, Set
 
 from flask import Blueprint, render_template, request, session, current_app, redirect, url_for, flash
@@ -8,6 +9,39 @@ from flask_login import login_required, current_user
 
 from app import db
 from models import League, Team, Roster, DraftPick, Player
+
+# Entitlements & mass-offer guard
+try:
+    from services.entitlements import get_entitlements
+except Exception:
+    def get_entitlements(_user):  # soft fallback
+        return {"plan_key": "free", "mass_offer_daily_cap": 0}
+
+try:
+    from services.guards import consume_mass_offer
+except Exception:
+    # soft fallback that always allows
+    def consume_mass_offer(*args, **kwargs):
+        return True, None
+
+# Counter storage (safe fallback if not wired yet)
+try:
+    from services import store  # expects counter functions
+except Exception:
+    class _NoStore:
+        @staticmethod
+        def get_today_mass_offer_count(user_id: int, d: date) -> int: return 0
+        @staticmethod
+        def increment_today_mass_offer_count(user_id: int, d: date) -> None: return None
+        @staticmethod
+        def get_bonus_balance(user_id: int) -> int: return 0
+        @staticmethod
+        def use_one_bonus(user_id: int) -> int: return 0
+        @staticmethod
+        def get_weekly_free_used(user_id: int, monday: date) -> bool: return False
+        @staticmethod
+        def mark_weekly_free_used(user_id: int, monday: date) -> None: return None
+    store = _NoStore()
 
 offers_bp = Blueprint("offers", __name__, url_prefix="/offers")
 
@@ -281,7 +315,7 @@ def build():
     rows: List[Dict[str, Any]] = []  # per-league blocks for the template
 
     if mode == "buy":
-        # ---------------------------- BUY (unchanged) -------------------------
+        # ---------------------------- BUY -------------------------
         for lg in leagues:
             my_team = _get_my_team_in_league(lg)
             if not my_team:
@@ -427,7 +461,6 @@ def build():
                     recv_list = pbr.get(int(upgrade_recv_round), []) if upgrade_recv_round else []
                     if recv_list:
                         for dp in recv_list:
-                            # collect available years for preferred-year radios
                             if dp.season:
                                 try:
                                     sell_years_set.add(int(dp.season))
@@ -491,7 +524,9 @@ def send_offers():
     """
     Step 4/5: Mock 'send' — log would-be proposeTrade API calls and show a result page.
     Also update session cache to hide these leagues for this (mode, player, template) context.
-    NOTE: Real submission is handled by the /offers/perform route in routes_confirm.py.
+
+    IMPORTANT: No recent-sync gate here (by design).
+    We only check mass-send caps for Free/limited plans.
     """
     try:
         player_id = int(request.form.get("player_id", "0"))
@@ -510,8 +545,34 @@ def send_offers():
         flash("No leagues selected.", "warning")
         return redirect(url_for("offers.build", player_id=player_id, mode=mode, template_code=template_code))
 
-    req = PRICE_INDEX.get(template_code, {})
+    # -------- LIMITED-PLANS ONLY: mass-send gate --------
+    ent = get_entitlements(current_user) or {}
+    plan_key = str(ent.get("plan_key", "free")).lower()
+    try:
+        daily_cap = int(ent.get("mass_offer_daily_cap", 0))
+    except Exception:
+        daily_cap = 0
 
+    # Gate if Free OR finite daily cap
+    should_gate = (plan_key == "free") or (daily_cap < 9999)
+    if should_gate:
+        ok, msg = consume_mass_offer(
+            current_user,
+            recipients_count=len(league_ids),
+            get_today_count=store.get_today_count,                # <— change to this
+            increment_today_count=store.increment_today_count,    # <— and this
+            get_bonus_balance=store.get_bonus_balance,
+            use_one_bonus=store.use_one_bonus,
+            get_weekly_free_used=getattr(store, "get_weekly_free_used", None),
+            mark_weekly_free_used=getattr(store, "mark_weekly_free_used", None),
+        )
+
+        if not ok:
+            flash(msg or "Your plan limits have been reached.", "warning")
+            return redirect(url_for("offers.build", player_id=player_id, mode=mode, template_code=template_code))
+    # -----------------------------------------------
+
+    req = PRICE_INDEX.get(template_code, {})
     offers_log = []
     for lid in league_ids:
         lg = League.query.filter_by(user_id=current_user.id, mfl_id=str(lid)).first()
@@ -567,7 +628,7 @@ def send_offers():
                     if pick_ids:
                         found = DraftPick.query.filter(DraftPick.id.in_(pick_ids)).all()
                         id_to_obj = {str(p.id): p for p in found}
-                        chosen_picks.extend([id_to_obj.get(pid) for pid in pick_ids if pid in id_to_obj])
+                        chosen_picks.extend([id_to_obj.get(pid) for pid in id_to_obj])
 
                 payload = {
                     "league_id": lg.mfl_id,

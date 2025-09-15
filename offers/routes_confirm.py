@@ -13,6 +13,17 @@ from app import db
 from models import League, Team, DraftPick, Player, Roster
 from services.mfl_trade import send_trade_proposal
 
+# NEW: terms + mass-offer gating
+from services.guards import require_terms, consume_mass_offer
+from services.store import (
+    get_today_count,
+    increment_today_count,
+    get_bonus_balance,
+    use_one_bonus,
+    get_weekly_free_used,
+    mark_weekly_free_used,
+)
+
 # Attach to the existing offers blueprint
 try:
     from .routes import offers_bp  # normal package layout
@@ -285,7 +296,6 @@ def preview_offers():
 
     elif mode == "sell" and template_code == "upgrade":
         # --- SELL: Pick Upgrade (now also uses posted buyer pick checkboxes) ---
-        # Params still validated, but selection is user-driven.
         try:
             recv_round = int(request.form.get("upgrade_recv_round") or "0")
             give_round = int(request.form.get("upgrade_give_round") or "0")
@@ -419,10 +429,11 @@ def preview_offers():
 
 @offers_bp.route("/perform", methods=["POST"])
 @login_required
+@require_terms   # NEW: must accept ToS/Privacy/AUP before sending real proposals
 def perform_offers():
     """
     Read `pending_json` from confirm.html and send real proposals via MFL import.
-    Renders offers/send_result.html with a per-league result log.
+    Enforces mass-offer gating (daily cap / weekly free / bonus).
     """
     raw = request.form.get("pending_json") or "[]"
     try:
@@ -433,6 +444,23 @@ def perform_offers():
         flash("Malformed request. Please rebuild your offers.", "warning")
         return redirect(url_for("offers.search"))
 
+    # -------- Mass-offer gate: count this as ONE action regardless of N items --------
+    recipients_count = len(items)  # for messaging only; cap consumption is 1 per perform
+    ok, msg = consume_mass_offer(
+        user=current_user,
+        recipients_count=recipients_count,
+        get_today_count=get_today_count,
+        increment_today_count=increment_today_count,
+        get_bonus_balance=get_bonus_balance,
+        use_one_bonus=use_one_bonus,
+        get_weekly_free_used=get_weekly_free_used,
+        mark_weekly_free_used=mark_weekly_free_used,
+    )
+    if not ok:
+        flash(msg or "Your plan doesn’t allow more mass offers today.", "warning")
+        return redirect(url_for("offers.search"))
+
+    # ------------------------------------------------------------------------
     apikey = None
     try:
         apikey = current_app.config.get("MFL_APIKEY")

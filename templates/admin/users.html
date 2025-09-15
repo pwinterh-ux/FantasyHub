@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="tile pad">
+  {% if view == "list" %}
+    <h2 style="margin-top:0;">Admin · Users</h2>
+    <form method="get" action="{{ url_for('admin.users_list') }}" style="display:flex;gap:8px;align-items:center;margin:8px 0 14px;">
+      <input type="text" name="q" value="{{ q or '' }}" placeholder="Search email or username"
+             style="flex:1;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:#0b1220;color:#e5e7eb;">
+      <button class="btn" type="submit">Search</button>
+      <a class="btn-ghost" href="{{ url_for('admin.users_list') }}">Clear</a>
+    </form>
+
+    <div class="tile dark pad" style="padding:0;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border);">
+            <th style="text-align:left;padding:10px;">ID</th>
+            <th style="text-align:left;padding:10px;">Username</th>
+            <th style="text-align:left;padding:10px;">Email</th>
+            <th style="text-align:left;padding:10px;">Plan</th>
+            <th style="text-align:left;padding:10px;">Bonus</th>
+            <th style="text-align:left;padding:10px;">Admin</th>
+            <th style="text-align:left;padding:10px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for user in users %}
+          <tr style="border-top:1px solid rgba(255,255,255,.06);">
+            <td style="padding:10px;">{{ user.id }}</td>
+            <td style="padding:10px;">{{ user.username }}</td>
+            <td style="padding:10px;">{{ user.email }}</td>
+            <td style="padding:10px;">{{ (user.plan or 'free')|upper }}</td>
+            <td style="padding:10px;">{{ user.bonus_mass_offers or 0 }}</td>
+            <td style="padding:10px;">{{ 'Yes' if user.is_admin else 'No' }}</td>
+            <td style="padding:10px;">
+              <a class="btn-ghost" href="{{ url_for('admin.users_edit', user_id=user.id) }}">Edit</a>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" style="padding:14px;opacity:.8;">No users found.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+  {% elif view == "edit" %}
+    <h2 style="margin-top:0;">Admin · Edit User #{{ u.id }}</h2>
+    <div class="tile dark pad">
+      <form method="post" action="{{ url_for('admin.users_edit', user_id=u.id) }}">
+        <div style="display:grid;grid-template-columns:1fr 2fr;gap:10px;align-items:center;">
+          <label>Email</label>
+          <div>{{ u.email }}</div>
+
+          <label>Username</label>
+          <div>{{ u.username }}</div>
+
+          <label>Plan</label>
+          <div>
+            <select name="plan" style="padding:8px;border-radius:8px;background:#0b1220;color:#e5e7eb;border:1px solid rgba(255,255,255,.15);">
+              {% for p in plans %}
+                <option value="{{ p }}" {% if (u.plan or 'free') == p %}selected{% endif %}>{{ p.upper() }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <label>Bonus Mass Offers</label>
+          <div>
+            <input type="number" name="bonus_mass_offers" min="0" value="{{ u.bonus_mass_offers or 0 }}"
+                   style="width:120px;padding:8px;border-radius:8px;background:#0b1220;color:#e5e7eb;border:1px solid rgba(255,255,255,.15);" />
+          </div>
+
+          <label>Founder Expires</label>
+          <div>
+            <input type="date" name="founder_expires_at"
+                   value="{{ (u.founder_expires_at.date() if u.founder_expires_at and u.founder_expires_at.tzinfo is none else u.founder_expires_at)|string if u.founder_expires_at else '' }}"
+                   style="padding:8px;border-radius:8px;background:#0b1220;color:#e5e7eb;border:1px solid rgba(255,255,255,.15);" />
+            <div class="muted" style="font-size:12px;margin-top:6px;">Only relevant for FOUNDER plan.</div>
+          </div>
+
+          <label>Clear MFL Auth</label>
+          <div>
+            <label style="display:flex;gap:8px;align-items:center;">
+              <input type="checkbox" name="clear_mfl" />
+              <span>Reset MFL login/cookies for this user (forces re-link)</span>
+            </label>
+            <div class="muted" style="font-size:12px;margin-top:6px;">
+              Clears <code>mfl_user</code>, <code>session_key</code>, cookies and timestamps. Leagues remain intact.
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:14px;display:flex;gap:10px;">
+          <button class="btn" type="submit">Save Changes</button>
+          <a class="btn-ghost" href="{{ url_for('admin.users_list') }}">Back</a>
+        </div>
+      </form>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,9 +1,31 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="glass-tile">
-    <h2>Welcome to FantasyHub</h2>
-    <p>Your personal companion for leagues, trades, and live scoring.</p>
-    <a href="{{ url_for('start') }}" class="button">Get Started</a>
+<div class="glass-tile" style="max-width:720px;margin:0 auto;text-align:center;padding:24px;">
+  <!-- Hero logo -->
+  <div style="margin:0 0 10px;">
+    <img
+      src="{{ url_for('static', filename='img/rosterdash-wordmark.png') }}"
+      alt="RosterDash"
+      style="display:block;margin:0 auto;max-width:560px;width:80%;height:auto;"
+      decoding="async"
+      fetchpriority="high">
+  </div>
+
+  <p style="font-size:1.15rem;margin:6px 0;color:#fff;">
+    Click less. <strong><em>Manage more.</em></strong>
+  </p>
+
+  <p style="margin:8px 0 14px;color:#fff;">
+    <strong><em>Live</em></strong> scoring.
+    <strong><em>Rapid</em></strong> lineups.
+    <strong><em>Mass</em></strong> trades.
+  </p>
+
+  <p style="margin:0 0 22px;letter-spacing:.2px;color:#fff;">
+    Sync. Send. Set. Win.
+  </p>
+
+  <a href="{{ url_for('start') }}" class="button">Get Started</a>
 </div>
 {% endblock %}

@@ -1,0 +1,54 @@
+<!-- RosterDash wordmark (football laces in A) -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 150" role="img" aria-label="RosterDash">
+  <defs>
+    <linearGradient id="rdGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+
+  <!-- SPEED WING (left of R) -->
+  <g fill="url(#rdGrad)">
+    <rect x="10"  y="50" rx="8" ry="8" width="120" height="16"/>
+    <rect x="10"  y="78" rx="8" ry="8" width="95"  height="14" opacity=".9"/>
+    <rect x="10"  y="104" rx="7" ry="7" width="75"  height="12" opacity=".85"/>
+  </g>
+
+  <!-- WORDS -->
+  <!-- We outline letters so no external fonts are required -->
+  <!-- ROSTER (green) -->
+  <g fill="url(#rdGrad)" transform="translate(135,0)">
+    <!-- R -->
+    <path d="M0,120 V30 h50 c30,0 48,18 48,42 0,17-10,31-27,37 l31,41 h-30 l-27-36 h-17 v36 h-28 z M28,56 v28 h22 c12,0 20-6 20-14 0-9-8-14-20-14 h-22 z"/>
+    <!-- O -->
+    <path d="M116,30 c40,0 70,28 70,60 0,32-30,60-70,60 s-70-28-70-60 c0-32 30-60 70-60 z m0,26 c-23,0-40,16-40,34 0,18 17,34 40,34 23,0 40-16 40-34 0-18-17-34-40-34 z"/>
+    <!-- S -->
+    <path d="M224,34 c28,0 50,12 50,34 0,38-68,26-68,48 0,7 8,12 21,12 12,0 22-4 31-10 l10,20 c-12,8-29,16-51,16 -30,0-50-14-50-34 0-40 68-28 68-48 0-7-8-12-22-12 -12,0-26,4-37,10 l-10-20 c14-8 35-16 58-16 z"/>
+    <!-- T -->
+    <path d="M314,30 h100 v26 h-36 v94 h-28 v-94 h-36 z"/>
+    <!-- E -->
+    <path d="M438,30 h100 v26 h-72 v20 h64 v24 h-64 v24 h72 v26 h-100 z"/>
+    <!-- R -->
+    <path d="M566,120 V30 h50 c30,0 48,18 48,42 0,17-10,31-27,37 l31,41 h-30 l-27-36 h-17 v36 h-28 z M594,56 v28 h22 c12,0 20-6 20-14 0-9-8-14-20-14 h-22 z"/>
+  </g>
+
+  <!-- DASH (white) -->
+  <g fill="#ffffff" transform="translate(640,0)">
+    <!-- D -->
+    <path d="M0,30 h54 c48,0 86,28 86,60 0,32-38,60-86,60 H0 z M28,56 v68 h26 c34,0 60-18 60-34 0-18-26-34-60-34 h-26 z"/>
+    <!-- A with football laces -->
+    <g>
+      <path d="M170,30 l52,120 h-28 l-10-26 h-60 l-10,26 h-28 l52-120 z M160,62 l-20,50 h40 z"/>
+      <!-- Laces down the A spine -->
+      <g stroke="#ffffff" stroke-linecap="round" stroke-width="6">
+        <line x1="160" y1="60" x2="160" y2="120"/>
+        <line x1="146" y1="84" x2="174" y2="84"/>
+        <line x1="146" y1="98" x2="174" y2="98"/>
+      </g>
+    </g>
+    <!-- S -->
+    <path d="M262,34 c28,0 50,12 50,34 0,38-68,26-68,48 0,7 8,12 21,12 12,0 22-4 31-10 l10,20 c-12,8-29,16-51,16 -30,0-50-14-50-34 0-40 68-28 68-48 0-7-8-12-22-12 -12,0-26,4-37,10 l-10-20 c14-8 35-16 58-16 z"/>
+    <!-- H -->
+    <path d="M342,30 h28 v46 h46 V30 h28 v120 h-28 v-46 h-46 v46 h-28 z"/>
+  </g>
+</svg>

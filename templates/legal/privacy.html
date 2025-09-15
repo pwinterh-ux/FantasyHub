@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .legal h1{ margin:6px 0 10px; font-size:22px; letter-spacing:.2px; }
+  .legal h2{ margin:18px 0 8px; font-size:18px; }
+  .legal p, .legal li{ color: var(--muted); line-height: 1.55; }
+  .legal .meta{ font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .legal .tile{ margin-bottom: 12px; }
+  .legal ul{ margin:6px 0 10px; }
+</style>
+
+<div class="tile pad legal">
+  <h1>Privacy Policy</h1>
+  <div class="meta">
+    Effective: September 12, 2025 · Provider: Kingdom Tools LLC (Dupage County, Illinois)
+  </div>
+
+  <p>This Privacy Policy explains how <strong>Kingdom Tools LLC</strong> (“we,” “us,” “our”) collects, uses, and protects information in connection with FantasyHub (the “Service”). By using the Service, you agree to this Policy.</p>
+
+  <h2>1) What We Collect</h2>
+  <ul>
+    <li><strong>Account Data:</strong> Username, email, and basic profile fields you provide on registration or later.</li>
+    <li><strong>Operational Data from MFL:</strong> League IDs/hosts, standings, rosters, future draft picks, pending trades, and similar data fetched via MFL’s APIs using your authorization. We do <em>not</em> store your MFL password.</li>
+    <li><strong>Auth Tokens/Cookies:</strong> MFL session cookies (e.g., <code>MFL_USER_ID</code>) or league-scoped API keys needed to make authorized API calls on your behalf. We store these securely and tie them to your account.</li>
+    <li><strong>Usage & Logs:</strong> Timestamps, API call metadata, feature usage (e.g., mass-offer counts), error logs. We may store request/response metadata for troubleshooting and abuse prevention.</li>
+    <li><strong>Billing Data:</strong> Stripe provides us with non-sensitive billing metadata (e.g., customer ID, plan/price, subscription status). We do not see full card numbers.</li>
+    <li><strong>Device/Technical Data:</strong> IP address, user agent, and similar standard web logs for security and analytics.</li>
+  </ul>
+
+  <h2>2) How We Use Information</h2>
+  <ul>
+    <li>Operate and improve the Service (e.g., show your leagues, submit lineups/trades you ask us to submit, enforce plan limits).</li>
+    <li>Authenticate to MFL on your behalf using your valid session cookie/API key and your league permissions.</li>
+    <li>Detect abuse (rate limits, unusual automation) and comply with MFL’s acceptable use limits.</li>
+    <li>Provide support, send important notices (service changes, legal updates), and process payments via Stripe.</li>
+    <li>Aggregate/anonymous analytics to improve features and performance.</li>
+  </ul>
+
+  <h2>3) Cookies & Similar Technologies</h2>
+  <p>We use our own cookies/sessions to keep you logged in. We store MFL session cookies/token values server-side to make calls on your behalf. Stripe may set cookies on checkout pages. You can block cookies in your browser, but the Service may not function correctly.</p>
+
+  <h2>4) Sharing</h2>
+  <ul>
+    <li><strong>Service Providers:</strong> Stripe (payments), hosting, logging/monitoring providers. Access is limited to what’s necessary.</li>
+    <li><strong>Legal:</strong> We may disclose information if required by law, subpoena, or to protect rights, safety, or integrity of the Service.</li>
+    <li><strong>No Sale of Personal Data:</strong> We do not sell your personal information.</li>
+  </ul>
+
+  <h2>5) Security</h2>
+  <p>We use reasonable administrative, technical, and physical safeguards. No system is 100% secure. You are responsible for safeguarding your account credentials.</p>
+
+  <h2>6) Data Retention</h2>
+  <p>We retain account and operational data for as long as needed to provide the Service and for legitimate business purposes (e.g., logs, fraud prevention, tax/accounting). Upon account deletion, we’ll delete or de-identify personal data subject to legal/operational limits (e.g., payment records).</p>
+
+  <h2>7) Your Choices & Rights</h2>
+  <ul>
+    <li>Update your profile information in the app.</li>
+    <li>Unlink or reauthenticate MFL if your session expires or you want to revoke access.</li>
+    <li>Contact us to request access, correction, or deletion of your data. We may need to verify your identity and may retain certain data as required by law.</li>
+  </ul>
+
+  <h2>8) Children</h2>
+  <p>The Service is not directed to children under 13, and we do not knowingly collect personal data from them.</p>
+
+  <h2>9) International Users</h2>
+  <p>Our infrastructure may be located in the United States. By using the Service, you consent to processing in the U.S., which may have different data protection laws than your country.</p>
+
+  <h2>10) Changes to This Policy</h2>
+  <p>We may update this Policy from time to time. Material changes will be notified via reasonable means (e.g., in-app notice). Your continued use after changes take effect constitutes acceptance.</p>
+
+  <h2>11) Contact</h2>
+  <p>Questions? Contact Kingdom Tools LLC via the support channel listed in the app.</p>
+
+  <p class="meta">Last updated: September 12, 2025</p>
+</div>
+{% endblock %}

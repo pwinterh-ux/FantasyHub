@@ -11,3 +11,5 @@ DB_NAME = "pwindynasty$fantasyhubapp"
 
 SQLALCHEMY_DATABASE_URI = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
 SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+LEGAL_GATE_ENABLED = True

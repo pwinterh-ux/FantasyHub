@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .account-grid { display:grid; grid-template-columns: 1fr; gap:12px; }
+  @media (min-width: 900px) { .account-grid { grid-template-columns: 2fr 1fr; } }
+  .section-title { margin: 6px 0 10px; font-size: 20px; letter-spacing: .2px; }
+  .kv { display:grid; grid-template-columns: 160px 1fr; gap:6px 10px; margin: 8px 0; }
+  .kv div { padding: 4px 0; }
+  .muted { color: var(--muted); }
+  .chip { display:inline-block; padding:4px 8px; border-radius: 999px; border:1px solid rgba(255,255,255,.14); background:#0f172a; font-size:12px; }
+  .small { font-size: 12px; }
+  .actions { display:flex; gap:8px; flex-wrap: wrap; }
+  .list { list-style:none; padding:0; margin: 6px 0 0; }
+  .list li { margin: 4px 0; }
+  .note { margin-top:10px; font-size:12px; opacity:.9; }
+</style>
+
+<h2 class="section-title">Account</h2>
+
+<div class="account-grid">
+  <!-- Left: Plan & usage -->
+  <div class="tile pad">
+    <h3 style="margin:0 0 8px;">Plan &amp; Usage</h3>
+    <div class="kv">
+      <div class="muted">Username</div>
+      <div>{{ current_user.username if current_user.is_authenticated else '—' }}</div>
+
+      <div class="muted">Email</div>
+      <div>{{ current_user.email if current_user.is_authenticated else '—' }}</div>
+
+      <div class="muted">Plan</div>
+      <div>
+        <span class="chip">
+          {{ plan_label | default('FREE · Up to 3 leagues · Mass offers/day: 0') }}
+        </span>
+      </div>
+
+      <div class="muted">Leagues connected</div>
+      <div>
+        {{ leagues_count | default(0) }} / {{ league_cap | default(3) }}
+        {# Show "at cap" only when league_cap is numeric #}
+        {% if league_cap is number and leagues_count is number and leagues_count|int >= league_cap|int %}
+          <span class="small muted"> &mdash; at cap</span>
+        {% endif %}
+      </div>
+
+      <div class="muted">Mass offers</div>
+      <div>
+        {# Paid daily cap view #}
+        {% if mass_offer_daily_cap|default(0)|int > 0 %}
+          {{ mass_offers_today|default(0) }} / {{ mass_offer_daily_cap|default(0) }}
+          {% if bonus_mass_offers|default(0)|int > 0 %}
+            <span class="small">(+{{ bonus_mass_offers }} bonus)</span>
+          {% endif %}
+
+        {# Free weekly view (e.g., 1 free/week, recipients cap applies) #}
+        {% elif weekly_free_quota|default(0)|int > 0 %}
+          {{ 1 if weekly_free_used else 0 }} / {{ weekly_free_quota }} this week
+          {% if free_recipients_cap %}
+            <span class="small muted"> · up to {{ free_recipients_cap }} recipients</span>
+          {% endif %}
+          {% if bonus_mass_offers|default(0)|int > 0 %}
+            <span class="small">(+{{ bonus_mass_offers }} bonus)</span>
+          {% endif %}
+
+        {# Fallback #}
+        {% else %}
+          0 / 0
+        {% endif %}
+      </div>
+
+      <div class="muted">Founder status</div>
+      <div>
+        {% if founder_expires_at %}
+          Active until {{ founder_expires_at }}
+        {% else %}
+          —
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="actions" style="margin-top:10px;">
+      {% if stripe_customer_id %}
+        <a class="btn" href="/billing/portal">Manage Billing</a>
+      {% else %}
+        <a class="btn" href="/pricing">Choose a Plan</a>
+      {% endif %}
+      <a class="btn-ghost" href="/pricing">View Pricing</a>
+    </div>
+
+    <p class="small muted note">
+      Weekly passes are ideal for the first 10–12 NFL weeks. Seasonal plans include offseason coverage through MFL rollover.
+    </p>
+  </div>
+
+  <!-- Right: Legal & account status -->
+  <div class="tile pad">
+    <h3 style="margin:0 0 8px;">Legal &amp; Status</h3>
+    <ul class="list">
+      <li>
+        Terms of Service:
+        {% if tos_version %}<span class="chip">v{{ tos_version }}</span>{% else %}<span class="muted">not accepted</span>{% endif %}
+        &nbsp; <a class="btn-ghost small" href="/legal/terms">View</a>
+      </li>
+      <li>
+        Privacy Policy:
+        {% if privacy_version %}<span class="chip">v{{ privacy_version }}</span>{% else %}<span class="muted">not accepted</span>{% endif %}
+        &nbsp; <a class="btn-ghost small" href="/legal/privacy">View</a>
+      </li>
+      <li>
+        Acceptable Use:
+        {% if aup_version %}<span class="chip">v{{ aup_version }}</span>{% else %}<span class="muted">not accepted</span>{% endif %}
+        &nbsp; <a class="btn-ghost small" href="/legal/aup">View</a>
+      </li>
+    </ul>
+
+    {% if terms_accepted_at %}
+      <p class="small muted" style="margin-top:10px;">
+        Accepted on {{ terms_accepted_at }}{% if terms_accepted_ip %} from {{ terms_accepted_ip }}{% endif %}
+      </p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

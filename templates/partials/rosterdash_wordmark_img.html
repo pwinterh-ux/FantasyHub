@@ -1,0 +1,14 @@
+{# image-only wordmark link #}
+<a href="{{ url_for('start') }}" aria-label="RosterDash home"
+   style="display:flex;align-items:center;text-decoration:none;">
+  <img
+    src="{{ url_for('static', filename='img/rosterdash-wordmark.png') }}?v=1"
+    srcset="{{ url_for('static', filename='img/rosterdash-wordmark@2x.png') }}?v=1 2x"
+    alt=""                        <!-- decorative; prevents text fallback -->
+    style="display:block;height:28px;width:auto;"
+    fetchpriority="high"
+    decoding="async"
+    onerror="this.onerror=null;
+             this.src='{{ url_for('static', filename='img/rosterdash-wordmark.jpg') }}?v=1';
+             this.removeAttribute('srcset');" />
+</a>
