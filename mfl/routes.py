@@ -26,6 +26,8 @@ from services.mfl_sync import (
     sync_league_assets,
     sync_league_standings,
 )
+# NEW: plan limits
+from services.entitlements import get_entitlements
 
 # ---- NEW: lightweight per-host threading utilities
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -269,8 +271,52 @@ def mfl_config():
                 "checked": (lid, yr) in existing,
             })
 
-    return render_template("mfl_config.html", leagues=leagues, year=year)
+    # -------------------- Plan cap variables for the template --------------------
+    # Pull entitlements; compute this-page allowance based on global cap minus other-years usage
+    try:
+        from services.entitlements import get_entitlements
+        ent = get_entitlements(current_user) or {}
+    except Exception:
+        ent = {}
 
+    plan_key = (ent.get("plan_key") or "").lower()
+    league_cap_val = ent.get("league_cap")
+
+    # Decide unlimited vs finite; default free cap=3 if entitlements is missing
+    is_unlimited = False
+    if league_cap_val is None:
+        is_unlimited = plan_key in {"unlimited", "founder"}
+        if not is_unlimited:
+            league_cap_val = 3  # safe default for FREE
+    else:
+        try:
+            league_cap_val = int(league_cap_val)
+        except Exception:
+            league_cap_val = 3
+
+    # Count leagues the user already uses in OTHER years
+    try:
+        other_years_count = (
+            db.session.query(League)
+            .filter(League.user_id == current_user.id, League.year != year)
+            .count()
+        )
+    except Exception:
+        other_years_count = 0
+
+    # How many can be selected on THIS page (never negative)
+    max_this_year = None if is_unlimited else max(0, int(league_cap_val) - int(other_years_count))
+
+    return render_template(
+        "mfl_config.html",
+        leagues=leagues,
+        year=year,
+        # Cap UI variables:
+        league_cap=league_cap_val,
+        other_years_count=other_years_count,
+        max_this_year=max_this_year,
+        is_unlimited=is_unlimited,
+    )
 
 @mfl_bp.route("/config", methods=["POST"])
 @login_required
@@ -283,6 +329,8 @@ def mfl_config_submit():
 
     UPDATED: Network fetches are grouped by host and run with one worker per host.
     DB writes (sync_* fns) occur on the main thread to keep SQLAlchemy session safe.
+
+    NEW: Enforce plan league cap against the *final* total across all years.
     """
     miss = _require_mfl_cookie()
     if miss:
@@ -293,12 +341,40 @@ def mfl_config_submit():
     except ValueError:
         year = datetime.utcnow().year
 
+    # Plan league cap (entitlements)
+    ent = get_entitlements(current_user)
+    plan_key = (ent.get("plan_key") or "").lower()
+    league_cap = ent.get("league_cap")  # may be None for unlimited/founder in your entitlements
+    is_unlimited = plan_key in {"unlimited", "founder"} or (league_cap is None)
+
     # Prefer new API cookie; fall back to legacy session_key
     api_cookie = getattr(current_user, "mfl_cookie_api", None) or getattr(current_user, "session_key", None)
     host_cookies = current_user.get_mfl_host_cookies() if hasattr(current_user, "get_mfl_host_cookies") else {}
 
     # Selected league IDs
     selected_ids = set(request.form.getlist("league_id"))
+
+    # ---- League-cap enforcement (final across ALL years) ----
+    if not is_unlimited:
+        try:
+            other_years_count = (
+                db.session.query(League)
+                .filter(League.user_id == current_user.id, League.year != year)
+                .count()
+            )
+        except Exception:
+            other_years_count = 0
+        final_total = other_years_count + len(selected_ids)
+        if league_cap is not None and final_total > int(league_cap):
+            over_by = final_total - int(league_cap)
+            msg = (
+                f"Your plan allows up to {league_cap} leagues. "
+                f"You already have {other_years_count} from other years, and selected {len(selected_ids)} here, "
+                f"which would make {final_total}. Please uncheck at least {over_by} "
+                f"league{'s' if over_by != 1 else ''} or upgrade your plan."
+            )
+            flash(msg, "warning")
+            return redirect(url_for("mfl.mfl_config", year=year))
 
     # Maps for names and franchise ids coming from the form
     name_map: dict[str, str] = {}

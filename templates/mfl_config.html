@@ -15,7 +15,16 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   .sync-text { color:#fff; margin-top: 12px; text-align:center; font-weight:600; }
+
   .league-row:hover { background: rgba(255,255,255,0.04); }
+  .small { font-size:.9em; }
+  .cap-wrap { display:flex; flex-direction:column; gap:6px; margin: 6px 0 0; }
+  .cap-line { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .cap-chip { display:inline-block; padding:4px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.14); background:#0f172a; font-size:12px; }
+  .cap-warn { display:none; font-size:.9em; color:#ffd166; }
+  .cap-none { display:none; font-size:.9em; color:#ff6b6b; }
+  .progress { width:240px; max-width:100%; height:6px; background:rgba(255,255,255,.12); border-radius:4px; overflow:hidden; }
+  .progress > div { height:100%; width:0%; background:#60a5fa; } /* no specific color requested; uses a single accent */
 </style>
 
 <div id="syncOverlay">
@@ -36,13 +45,38 @@
     <input type="hidden" name="year" value="{{ year }}">
 
     {% if leagues and leagues|length %}
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0 14px;">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0 6px;">
         <input id="filterBox" placeholder="Filter leagues…" oninput="filterLeagues()" style="flex:1;min-width:220px;">
         <button type="button" class="button" onclick="toggleAll(true)">Select all</button>
         <button type="button" class="button" style="background:#444;" onclick="toggleAll(false)">Select none</button>
       </div>
 
-      <div id="leagueList" style="max-height:55vh; overflow:auto; border:1px solid #2c2c2c; border-radius:8px; padding:10px;">
+      <!-- Plan cap UI (hidden for unlimited) -->
+      {% if not is_unlimited %}
+      <div class="cap-wrap">
+        <div class="cap-line small">
+          <span class="cap-chip">
+            Plan cap: {{ league_cap }} total
+          </span>
+          <span class="cap-chip">
+            Other years in use: {{ other_years_count }}
+          </span>
+          <span class="cap-chip">
+            This page allowed: {{ max_this_year }}
+          </span>
+          <span class="small">Selected: <strong id="selCount">0</strong> / <strong id="selMax">{{ max_this_year }}</strong></span>
+        </div>
+        <div class="progress" aria-hidden="true">
+          <div id="capProg"></div>
+        </div>
+        <div id="capWarn" class="cap-warn">You’re at the selection limit for your current plan. Uncheck a league or upgrade.</div>
+        <div id="capNone" class="cap-none">No remaining league slots on your current plan.</div>
+      </div>
+      {% else %}
+      <div class="small" style="margin:6px 0 0;"><span class="cap-chip">Unlimited leagues</span></div>
+      {% endif %}
+
+      <div id="leagueList" style="max-height:55vh; overflow:auto; border:1px solid #2c2c2c; border-radius:8px; padding:10px; margin-top:10px;">
         {% for lg in leagues %}
           <label class="league-row"
                  data-text="{{ (lg.name ~ ' ' ~ lg.id ~ ' ' ~ lg.year)|lower }}"
@@ -75,9 +109,34 @@
 </div>
 
 <script>
+  const IS_UNLIMITED = {{ (is_unlimited|default(False))|tojson }};
+  const MAX_THIS_YEAR = {{ (max_this_year if max_this_year is not none else 0)|tojson }};
+
   function toggleAll(checked) {
-    document.querySelectorAll('#leagueList input[type="checkbox"]').forEach(cb => cb.checked = checked);
+    const cbs = [...document.querySelectorAll('#leagueList input[type="checkbox"]')];
+    if (IS_UNLIMITED) {
+      cbs.forEach(cb => cb.checked = checked);
+      updateCapUI();
+      return;
+    }
+    if (!checked) {
+      cbs.forEach(cb => cb.checked = false);
+      updateCapUI();
+      return;
+    }
+    // Select up to remaining slots only
+    let selected = cbs.filter(cb => cb.checked).length;
+    let remaining = Math.max(0, MAX_THIS_YEAR - selected);
+    for (const cb of cbs) {
+      if (!cb.checked && remaining > 0) {
+        cb.checked = true;
+        remaining--;
+      }
+      if (remaining === 0) break;
+    }
+    updateCapUI();
   }
+
   function filterLeagues() {
     const q = (document.getElementById('filterBox').value || '').toLowerCase();
     document.querySelectorAll('#leagueList .league-row').forEach(row => {
@@ -86,16 +145,70 @@
     });
   }
 
+  function updateCapUI() {
+    if (IS_UNLIMITED) return;
+
+    const cbs = [...document.querySelectorAll('#leagueList input[type="checkbox"]')];
+    let checked = cbs.filter(cb => cb.checked).length;
+
+    // Counts
+    const selCountEl = document.getElementById('selCount');
+    if (selCountEl) selCountEl.textContent = checked;
+
+    // Progress
+    const pct = MAX_THIS_YEAR > 0 ? Math.min(100, Math.round((checked / MAX_THIS_YEAR) * 100)) : 0;
+    const prog = document.getElementById('capProg');
+    if (prog) prog.style.width = pct + '%';
+
+    // At-cap warning / no-slots message
+    const atCap = checked >= MAX_THIS_YEAR;
+    const capWarn = document.getElementById('capWarn');
+    const capNone = document.getElementById('capNone');
+    if (capNone) capNone.style.display = (MAX_THIS_YEAR === 0) ? 'block' : 'none';
+    if (capWarn) capWarn.style.display = (atCap && MAX_THIS_YEAR > 0) ? 'block' : 'none';
+
+    // Disable all *unchecked* boxes if at cap (keep already-checked enabled)
+    cbs.forEach(cb => {
+      if (cb.checked) {
+        cb.disabled = false;
+      } else {
+        cb.disabled = atCap || MAX_THIS_YEAR === 0;
+      }
+    });
+
+    // Also disable submit if no slots and nothing is selected
+    const canSubmit = (checked > 0) || (MAX_THIS_YEAR > 0);
+    const btn = document.getElementById('syncBtn');
+    if (btn) btn.disabled = !canSubmit && !IS_UNLIMITED;
+  }
+
   // Reliable spinner: prevent default, show overlay, then submit after a tick
   document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('mflConfigForm');
     const btn  = document.getElementById('syncBtn');
+
+    // Hook checkbox changes for live limit enforcement
+    document.querySelectorAll('#leagueList input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener('change', updateCapUI);
+    });
+
+    // Initial paint
+    updateCapUI();
+
     form.addEventListener('submit', function(e) {
+      // Just in case: final client-side check (server still enforces)
+      if (!IS_UNLIMITED) {
+        const checked = document.querySelectorAll('#leagueList input[type="checkbox"]:checked').length;
+        if (checked > MAX_THIS_YEAR) {
+          e.preventDefault();
+          updateCapUI();
+          return;
+        }
+      }
       e.preventDefault();
       if (btn) btn.disabled = true;
       const overlay = document.getElementById('syncOverlay');
       if (overlay) overlay.style.display = 'flex';
-      // give the browser a moment to paint the overlay before the request blocks
       setTimeout(() => form.submit(), 75);
     });
   });

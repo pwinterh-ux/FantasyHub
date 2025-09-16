@@ -87,6 +87,11 @@
   #leagueDetail{ display:none; margin-top:16px; }
   #leagueDetail header{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px; }
   #leagueDetail .title{ font-size:18px; font-weight:800; }
+
+  /* ---- Upsell modal (for free users on header showdown) ---- */
+  .upsell-mask { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; z-index:9999; }
+  .upsell-modal { width: 520px; max-width: calc(100% - 24px); background:#0b1220; border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:18px; box-shadow:0 8px 40px rgba(0,0,0,.5); }
+  .upsell-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:14px; }
 </style>
 
 <!-- Toolbar -->
@@ -100,6 +105,8 @@
   </div>
   <button id="refreshBtn" class="btn">Refresh Now</button>
 </div>
+
+{% set _can_expand = can_expand_aggregate|default(False) %}
 
 <!-- Full-width Roster Showdown (collapsed on load) -->
 <details class="showdown" id="showdown">
@@ -115,9 +122,16 @@
       <div class="bar you"><div class="fill" style="width: {{ aggregate.my_progress_pct or 0 }}%;"></div></div>
       <div class="bar opp"><div class="fill" style="width: {{ aggregate.opp_progress_pct or 0 }}%;"></div></div>
     </div>
-    <div class="summary-note">Click to view starters & sort</div>
+    <div class="summary-note">
+      {% if _can_expand %}
+        Click to view starters & sort
+      {% else %}
+        Totals shown. Upgrade to view roster-by-roster breakdowns.
+      {% endif %}
+    </div>
   </summary>
 
+  <!-- Only visible when expanded; Free users can’t expand (JS blocks it) -->
   <div class="showdown-body">
     <div class="sorter">
       <label for="sortKey">Sort by:</label>
@@ -267,6 +281,24 @@
   {% endfor %}
 </section>
 
+<!-- Upsell modal -->
+<div id="upsellMask" class="upsell-mask" aria-hidden="true">
+  <div class="upsell-modal" role="dialog" aria-modal="true" aria-labelledby="upsellTitle">
+    <h3 id="upsellTitle" style="margin:0 0 6px;">Know where you stand at a glance</h3>
+    <p class="muted" style="margin:8px 0 0;">
+      Scan every matchup’s starters side-by-side and spot opponents’ starter exposure fast.
+      Live view with sorting by points, minutes left, position, or league. 
+      Starters only. Included in Manager 5+.
+    </p>
+    <ul class="muted" style="margin:8px 0 0 18px;">
+    </ul>
+    <div class="upsell-actions">
+      <a class="btn btn-ghost" id="closeUpsell" href="#">Not now</a>
+      <a class="btn btn" style="background:#1f6feb; border-color:#1f6feb; color:#fff;" href="/pricing">See plans</a>
+    </div>
+  </div>
+</div>
+
 <script>
   // Refresh button
   (function(){
@@ -411,7 +443,6 @@
   }
   document.querySelectorAll('.tile').forEach(tile => {
     tile.addEventListener('click', (e) => {
-      // only handle clicks that aren't on "None Available"
       const dataStr = tile.getAttribute('data-tile') || '{}';
       let data = {};
       try{ data = JSON.parse(dataStr); } catch(_){}
@@ -430,8 +461,29 @@
     });
   });
 
-  // Start collapsed
-  document.getElementById('showdown').open = false;
+  // Header showdown gating: prevent expansion for Free
+  (function(){
+    const CAN_EXPAND = {{ _can_expand|tojson }};
+    const showdown = document.getElementById('showdown');
+    const summary = showdown ? showdown.querySelector('summary') : null;
+    const mask = document.getElementById('upsellMask');
+    const close = document.getElementById('closeUpsell');
+
+    // start collapsed either way
+    if (showdown) showdown.open = false;
+
+    if (showdown && summary && !CAN_EXPAND) {
+      summary.addEventListener('click', function(e){
+        e.preventDefault(); // block native <details> toggle
+        if (mask) mask.style.display = 'flex';
+      });
+    }
+
+    if (close && mask) {
+      close.addEventListener('click', function(e){ e.preventDefault(); mask.style.display='none'; });
+      mask.addEventListener('click', function(e){ if (e.target === mask) mask.style.display='none'; });
+    }
+  })();
 </script>
 
 {% endblock %}

@@ -2,15 +2,16 @@
 
 {% block content %}
 <style>
-  /* Minimal layout helpers; reuses your tile/btn styles. */
   .pricing-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin: 6px 0 14px; }
   .pricing-title { margin:0; font-size:22px; letter-spacing:.2px; }
   .billing-toggle { display:flex; gap:8px; align-items:center; background: rgba(15, 23, 42, .75); padding:6px; border-radius:999px; border:1px solid var(--border); }
   .billing-toggle button { border:0; background:transparent; color:var(--muted); padding:6px 12px; border-radius:999px; cursor:pointer; }
   .billing-toggle button.active { background: rgba(11,18,32,.85); color:#fff; border:1px solid rgba(255,255,255,.12); }
+
   .plans-grid { display:grid; grid-template-columns: repeat(1, minmax(0, 1fr)); gap:12px; }
   @media (min-width: 820px) { .plans-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-  .plan { display:flex; flex-direction:column; gap:8px; }
+
+  .plan { display:flex; flex-direction:column; gap:8px; position:relative; }
   .plan h3 { margin:0; font-size:18px; }
   .subtle { color: var(--muted); font-size: 13px; }
   .features { list-style:none; margin:8px 0 2px; padding:0; color: var(--muted); }
@@ -18,39 +19,64 @@
   .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; background:#0f172a; border:1px solid rgba(255,255,255,.14); }
   .price { font-size:24px; font-weight:700; margin-top:4px; }
   .note { margin-top:8px; font-size:12px; color:var(--muted); }
+
+  /* Founder emphasis */
+  .plan--featured {
+    outline: 2px solid rgba(250, 204, 21, .25);
+    box-shadow: 0 0 0 3px rgba(250, 204, 21, .10) inset, 0 6px 22px rgba(250, 204, 21, .08);
+  }
+  .ribbon {
+    position:absolute; top:10px; right:-6px;
+    background: linear-gradient(90deg, #f59e0b, #facc15);
+    color:#0f172a; font-weight:800; font-size:12px;
+    padding:4px 10px; border-radius:999px;
+    border: 1px solid rgba(0,0,0,.25);
+  }
 </style>
 
 <div class="pricing-head">
   <h2 class="pricing-title">Pricing</h2>
   <div class="billing-toggle" role="tablist" aria-label="Billing cadence">
-    <button id="toggle-weekly" class="active" data-mode="weekly" aria-selected="true">Weekly</button>
-    <button id="toggle-season" data-mode="season">Season</button>
+    <button id="toggle-weekly" data-mode="weekly" aria-selected="false">Weekly</button>
+    <button id="toggle-season" class="active" data-mode="season" aria-selected="true">Season</button>
   </div>
 </div>
 
 <div class="plans-grid" id="plans">
-  <!-- Free -->
-  <div class="tile pad plan">
-    <h3>Free</h3>
-    <div class="subtle">Try multi-league tools</div>
-    <div class="price">$0</div>
+  <!-- Founder (featured) -->
+  <div class="tile pad plan plan--featured">
+    <span class="ribbon">Limited Time Offer</span>
+    <h3>Founder</h3>
+    <span class="badge">Limited</span>
+    <div class="subtle">$159.99 one-time</div>
+    <div class="price">$159.99</div>
     <ul class="features">
-      <li>Up to <b>3 leagues</b></li>
-      <li>Live scoring + trade inbox</li>
-      <li><b>1</b> mass offer / week (to <b>6</b> recipients)</li>
-      <li>Rapid Fire lineup (<span class="subtle">1 lineup / week</span>)</li>
+      <li><b>2 seasons</b> of full access</li>
+      <li>Vote on next features</li>
+      <li>Private Discord</li>
     </ul>
-    <div><button class="btn" disabled>Current</button></div>
+    <div>
+      <button
+        class="btn checkout"
+        data-onetime-price-id="{{ (prices.FOUNDER_ONETIME if prices is defined else '') or '' }}"
+        data-mode="payment"
+      >Get Founder</button>
+    </div>
   </div>
 
-  <!-- Manager 5 -->
+  <!-- Manage 5 (keeps MGR5_* ids) -->
   <div class="tile pad plan">
-    <h3>Manager 5</h3>
+    <h3>Manage 5</h3>
     <span class="badge">Starter</span>
-    <div class="subtle" data-weekly-label>$5 / week</div>
-    <div class="price" data-weekly-price>$5</div>
-    <div class="subtle" data-season-label style="display:none;">$30 / season</div>
-    <div class="subtle" data-season-price style="display:none;">$30 total</div>
+
+    <!-- Seasonal default (visible) -->
+    <div class="subtle" data-season-label>$29.99 / season</div>
+    <div class="price"  data-season-price>$29.99 total</div>
+
+    <!-- Weekly (hidden by default; toggled via JS) -->
+    <div class="subtle" data-weekly-label style="display:none;">$6.99 / week</div>
+    <div class="price"  data-weekly-price style="display:none;">$6.99</div>
+
     <ul class="features">
       <li>Up to <b>5 leagues</b></li>
       <li>All Free features</li>
@@ -62,21 +88,26 @@
         class="btn checkout"
         data-weekly-price-id="{{ (prices.MGR5_WEEKLY if prices is defined else '') or '' }}"
         data-season-price-id="{{ (prices.MGR5_SEASON if prices is defined else '') or '' }}"
-      >Get Manager 5</button>
+      >Get Manage 5</button>
     </div>
   </div>
 
-  <!-- Manager 12 -->
+  <!-- Dominate 12 (keeps MGR12_* ids) -->
   <div class="tile pad plan">
-    <h3>Manager 12</h3>
+    <h3>Dominate 12</h3>
     <span class="badge">Most Popular</span>
-    <div class="subtle" data-weekly-label>$8 / week</div>
-    <div class="price" data-weekly-price>$8</div>
-    <div class="subtle" data-season-label style="display:none;">$55 / season</div>
-    <div class="subtle" data-season-price style="display:none;">$55 total</div>
+
+    <!-- Seasonal default -->
+    <div class="subtle" data-season-label>$59.99 / season</div>
+    <div class="price"  data-season-price>$59.99 total</div>
+
+    <!-- Weekly (hidden by default) -->
+    <div class="subtle" data-weekly-label style="display:none;">$10.99 / week</div>
+    <div class="price"  data-weekly-price style="display:none;">$10.99</div>
+
     <ul class="features">
       <li>Up to <b>12 leagues</b></li>
-      <li>All Manager 5 features</li>
+      <li>All Manage 5 features</li>
       <li><b>Unlimited</b> mass offers / day</li>
     </ul>
     <div>
@@ -84,21 +115,26 @@
         class="btn checkout"
         data-weekly-price-id="{{ (prices.MGR12_WEEKLY if prices is defined else '') or '' }}"
         data-season-price-id="{{ (prices.MGR12_SEASON if prices is defined else '') or '' }}"
-      >Get Manager 12</button>
+      >Get Dominate 12</button>
     </div>
   </div>
 
-  <!-- Unlimited -->
+  <!-- Power 50 (keeps UNLIMITED_* ids) -->
   <div class="tile pad plan">
-    <h3>Unlimited</h3>
+    <h3>Power 50</h3>
     <span class="badge">Power User</span>
-    <div class="subtle" data-weekly-label>$12 / week</div>
-    <div class="price" data-weekly-price>$12</div>
-    <div class="subtle" data-season-label style="display:none;">$85 / season</div>
-    <div class="subtle" data-season-price style="display:none;">$85 total</div>
+
+    <!-- Seasonal default -->
+    <div class="subtle" data-season-label>$99.99 / season</div>
+    <div class="price"  data-season-price>$99.99 total</div>
+
+    <!-- Weekly (hidden by default) -->
+    <div class="subtle" data-weekly-label style="display:none;">$17.99 / week</div>
+    <div class="price"  data-weekly-price style="display:none;">$17.99</div>
+
     <ul class="features">
-      <li><b>Unlimited leagues</b></li>
-      <li>All Manager 12 features</li>
+      <li>Up to <b>50 leagues</b></li>
+      <li>All Dominate 12 features</li>
       <li>Priority feedback channel</li>
     </ul>
     <div>
@@ -106,28 +142,22 @@
         class="btn checkout"
         data-weekly-price-id="{{ (prices.UNLIMITED_WEEKLY if prices is defined else '') or '' }}"
         data-season-price-id="{{ (prices.UNLIMITED_SEASON if prices is defined else '') or '' }}"
-      >Get Unlimited</button>
+      >Get Power 50</button>
     </div>
   </div>
 
-  <!-- Founder Pass -->
+  <!-- Free (moved to bottom) -->
   <div class="tile pad plan">
-    <h3>Founder Pass</h3>
-    <span class="badge">Limited</span>
-    <div class="subtle">$150 one-time</div>
-    <div class="price">$150</div>
+    <h3>Free</h3>
+    <div class="subtle">Try multi-league tools</div>
+    <div class="price">$0</div>
     <ul class="features">
-      <li><b>2 seasons</b> Unlimited</li>
-      <li>Vote on next features</li>
-      <li>Private Discord</li>
+      <li>Up to <b>3 leagues</b></li>
+      <li>Live scoring + trade inbox</li>
+      <li><b>1</b> mass offer / week (to <b>6</b> recipients)</li>
+      <li>Rapid Fire lineup (<span class="subtle">1 lineup / week</span>)</li>
     </ul>
-    <div>
-      <button
-        class="btn checkout"
-        data-onetime-price-id="{{ (prices.FOUNDER_ONETIME if prices is defined else '') or '' }}"
-        data-mode="payment"
-      >Get Founder Pass</button>
-    </div>
+    <div><button class="btn" disabled>Current</button></div>
   </div>
 </div>
 
@@ -144,7 +174,10 @@
     function setMode(mode) {
       const weekly = mode === 'weekly';
       weeklyBtn.classList.toggle('active', weekly);
+      weeklyBtn.setAttribute('aria-selected', weekly ? 'true' : 'false');
       seasonBtn.classList.toggle('active', !weekly);
+      seasonBtn.setAttribute('aria-selected', !weekly ? 'true' : 'false');
+
       plans.querySelectorAll('[data-weekly-label]').forEach(el => el.style.display = weekly ? '' : 'none');
       plans.querySelectorAll('[data-weekly-price]').forEach(el => el.style.display = weekly ? '' : 'none');
       plans.querySelectorAll('[data-season-label]').forEach(el => el.style.display = weekly ? 'none' : '');
@@ -154,7 +187,9 @@
 
     weeklyBtn.addEventListener('click', () => setMode('weekly'));
     seasonBtn.addEventListener('click', () => setMode('season'));
-    setMode('weekly');
+
+    // Default to SEASONAL on initial load (markup already shows season by default)
+    setMode('season');
 
     async function postCheckout(priceId, modeOverride) {
       if (!priceId) { alert("This plan isn't available yet."); return; }
@@ -173,7 +208,7 @@
 
     document.querySelectorAll('.checkout').forEach(btn => {
       btn.addEventListener('click', () => {
-        const mode = document.body.dataset.billingMode || 'weekly';
+        const mode = document.body.dataset.billingMode || 'season';
         const onetime = btn.getAttribute('data-onetime-price-id');
         if (onetime) return postCheckout(onetime, 'payment');
         const weeklyId = btn.getAttribute('data-weekly-price-id');

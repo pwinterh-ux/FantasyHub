@@ -31,13 +31,22 @@ def _get_entitlements_for(user: Any) -> dict:
 
 def enforce_league_cap(user: Any, current_league_count: int) -> bool:
     """
-    Return True if the user is within their league cap (OK to add/sync another),
-    False if over/at the cap.
+    Return True only if the user can add/sync another league.
+    (i.e., they are currently BELOW their league cap)
     """
-    ent = _get_entitlements_for(user)
+    from services.entitlements import get_entitlements
+    ent = get_entitlements(user)
     cap = int(ent.get("league_cap", 0))
     return current_league_count < cap
 
+
+def can_view_aggregate_detail(user: Any) -> bool:
+    """
+    True if the user’s plan includes the aggregate roster showdown detail view.
+    (Used to let Free users see totals but block expansion with an upsell.)
+    """
+    ent = _get_entitlements_for(user)
+    return bool(ent.get("aggregate_showdown", False))
 
 # —————————————————————————————————————————————————————————
 # Decorators: feature gate & terms gate

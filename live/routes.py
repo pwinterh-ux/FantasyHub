@@ -15,6 +15,7 @@ from app import db
 from models import League, Team, Player
 from services.mfl_client import MFLClient
 from services.mfl_live import parse_live_scoring, LiveMatchup  # type: ignore
+from services.guards import can_view_aggregate_detail  # <-- added
 
 live_bp = Blueprint("live", __name__, url_prefix="/live")
 
@@ -321,6 +322,7 @@ def live_index():
         team_lookup=team_lookup,
         fetched_at=datetime.fromtimestamp(cache.get("ts", _now_ts()), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if cache else None,
         next_refresh_in=next_in,
+        can_expand_aggregate=can_view_aggregate_detail(current_user),  # <-- added
     )
 
 
