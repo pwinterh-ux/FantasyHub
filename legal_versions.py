@@ -4,9 +4,9 @@ Single source of truth for current legal document versions.
 Bump these constants whenever you materially update your docs.
 """
 
-TOS_VERSION = "2025-09-13"
-PRIVACY_VERSION = "2025-09-13"
-AUP_VERSION = "2025-09-13"
+TOS_VERSION = "2025-09-16"
+PRIVACY_VERSION = "2025-09-16"
+AUP_VERSION = "2025-09-16"
 
 
 def current_versions() -> dict[str, str]:

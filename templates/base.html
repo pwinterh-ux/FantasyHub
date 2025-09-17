@@ -188,7 +188,10 @@
       </nav>
 
       <div class="donate">
-        <a href="https://paypal.me/pwinterh" target="_blank" rel="noopener noreferrer">Donate</a>
+        <a href="https://discord.gg/PKdA8dmTbS"
+           target="_blank"
+           rel="noopener noreferrer"
+           aria-label="Join our Discord server">Join Discord</a>
       </div>
     </div>
   </header>
@@ -210,35 +213,35 @@
   </footer>
   {% endif %}
 
-    <script>
-      // Toasts: success/info auto-hide, warning/danger persist until user closes.
-      (function () {
-        const toasts = document.querySelectorAll('#toast-stack .toast');
-        toasts.forEach((t, i) => {
-          const btn = t.querySelector('.toast-close');
-          if (btn) {
-            btn.addEventListener('click', () => {
-              t.classList.add('hide');
-              setTimeout(() => t.remove(), 400);
-            });
-          }
+  <script>
+    // Toasts: success/info auto-hide, warning/danger persist until user closes.
+    (function () {
+      const toasts = document.querySelectorAll('#toast-stack .toast');
+      toasts.forEach((t, i) => {
+        const btn = t.querySelector('.toast-close');
+        if (btn) {
+          btn.addEventListener('click', () => {
+            t.classList.add('hide');
+            setTimeout(() => t.remove(), 400);
+          });
+        }
 
-          // Persist warnings & errors (and anything with data-sticky="true")
-          const isSticky =
-            t.classList.contains('toast-warning') ||
-            t.classList.contains('toast-danger') ||
-            t.dataset.sticky === 'true';
+        // Persist warnings & errors (and anything with data-sticky="true")
+        const isSticky =
+          t.classList.contains('toast-warning') ||
+          t.classList.contains('toast-danger') ||
+          t.dataset.sticky === 'true';
 
-          if (!isSticky) {
-            const delay = 1500 + (i * 150);
-            setTimeout(() => {
-              t.classList.add('hide');
-              setTimeout(() => t.remove(), 400);
-            }, delay);
-          }
-        });
-      })();
-    </script>
+        if (!isSticky) {
+          const delay = 1500 + (i * 150);
+          setTimeout(() => {
+            t.classList.add('hide');
+            setTimeout(() => t.remove(), 400);
+          }, delay);
+        }
+      });
+    })();
+  </script>
 
 </body>
 </html>

@@ -18,6 +18,17 @@
 
 <h2 class="section-title">Account</h2>
 
+{# ---- Plan chip text override for Power 50 ("unlimited" -> "PWR50") ---- #}
+{% set _chip = plan_label | default('FREE · Up to 3 leagues · Mass offers/day: 0') %}
+{% if plan_key == 'unlimited' %}
+  {% set _chip = _chip
+      | replace('UNLIMITED', 'PWR50')
+      | replace('Unlimited leagues', 'Up to 50 leagues') %}
+{% endif %}
+
+{# ---- League cap display: show 50 for Power 50; keep Founder as "Unlimited" ---- #}
+{% set display_cap = 50 if plan_key == 'unlimited' else league_cap %}
+
 <div class="account-grid">
   <!-- Left: Plan & usage -->
   <div class="tile pad">
@@ -31,30 +42,25 @@
 
       <div class="muted">Plan</div>
       <div>
-        <span class="chip">
-          {{ plan_label | default('FREE · Up to 3 leagues · Mass offers/day: 0') }}
-        </span>
+        <span class="chip">{{ _chip }}</span>
       </div>
 
       <div class="muted">Leagues connected</div>
       <div>
-        {{ leagues_count | default(0) }} / {{ league_cap | default(3) }}
-        {# Show "at cap" only when league_cap is numeric #}
-        {% if league_cap is number and leagues_count is number and leagues_count|int >= league_cap|int %}
+        {{ leagues_count | default(0) }} / {{ display_cap | default(3) }}
+        {# "at cap" only when display_cap is numeric #}
+        {% if display_cap is number and leagues_count is number and leagues_count|int >= display_cap|int %}
           <span class="small muted"> &mdash; at cap</span>
         {% endif %}
       </div>
 
       <div class="muted">Mass offers</div>
       <div>
-        {# Paid daily cap view #}
         {% if mass_offer_daily_cap|default(0)|int > 0 %}
           {{ mass_offers_today|default(0) }} / {{ mass_offer_daily_cap|default(0) }}
           {% if bonus_mass_offers|default(0)|int > 0 %}
             <span class="small">(+{{ bonus_mass_offers }} bonus)</span>
           {% endif %}
-
-        {# Free weekly view (e.g., 1 free/week, recipients cap applies) #}
         {% elif weekly_free_quota|default(0)|int > 0 %}
           {{ 1 if weekly_free_used else 0 }} / {{ weekly_free_quota }} this week
           {% if free_recipients_cap %}
@@ -63,8 +69,6 @@
           {% if bonus_mass_offers|default(0)|int > 0 %}
             <span class="small">(+{{ bonus_mass_offers }} bonus)</span>
           {% endif %}
-
-        {# Fallback #}
         {% else %}
           0 / 0
         {% endif %}

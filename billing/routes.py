@@ -1,242 +1,352 @@
-"""
-Stripe Checkout & Billing Portal routes (NON-IMPACTING until blueprint registered)
-
-Usage later:
-  - Register blueprint in app.py:
-        from billing import bp as billing_bp
-        app.register_blueprint(billing_bp)
-
-  - Set env vars on PythonAnywhere (test mode first):
-        STRIPE_SECRET_KEY=sk_test_...
-        PRICE_MGR5_WEEKLY=price_...
-        PRICE_MGR5_SEASON=price_...
-        PRICE_MGR12_WEEKLY=price_...
-        PRICE_MGR12_SEASON=price_...
-        PRICE_UNLIMITED_WEEKLY=price_...
-        PRICE_UNLIMITED_SEASON=price_...
-        PRICE_FOUNDER_ONETIME=price_...
-
-Endpoints:
-  POST /billing/checkout/<price_id>?mode=subscription|payment
-      -> Creates a Stripe Checkout Session and returns {"url": "..."} for redirect.
-
-  GET  /billing/portal
-      -> Creates a Stripe Billing Portal Session for the current user.
-
-  GET  /billing/success, /billing/cancel
-      -> Simple landing routes you can customize.
-"""
-
+# billing/routes.py
 from __future__ import annotations
 
 import os
-from typing import Optional
+import datetime as _dt
+from urllib.parse import urljoin
+from typing import Any, Dict, Optional
 
-from flask import current_app, request, jsonify, url_for, redirect
-from flask_login import current_user
+import stripe
+from flask import (
+    Blueprint,
+    current_app,
+    jsonify,
+    redirect,
+    request,
+    url_for,
+    abort,
+)
+from flask_login import login_required, current_user
+from flask import has_app_context
 
-from . import bp  # blueprint from billing/__init__.py
+from app import db
+from models import User
 
+billing_bp = Blueprint("billing", __name__, url_prefix="/billing")
 
-# —————————————————————————————————————————————————————————
-# Helpers
-# —————————————————————————————————————————————————————————
+# ───────────────────────────── helpers: config/env ─────────────────────────────
 
-def _stripe():
-    """Lazy import & configure Stripe with the secret key from env."""
-    import stripe  # local import to avoid import-time errors if not installed yet
-    api_key = os.getenv("STRIPE_SECRET_KEY")
-    if not api_key:
-        raise RuntimeError("STRIPE_SECRET_KEY not set in environment.")
-    stripe.api_key = api_key
-    return stripe
+def _get_cfg(key: str) -> Optional[str]:
+    """Read from env first (safe at import), then Flask config if an app ctx exists."""
+    v = os.environ.get(key)
+    if v:
+        return v.strip()
+    if has_app_context():
+        w = current_app.config.get(key)
+        if w:
+            return str(w).strip()
+    return None
 
+def _require(key: str) -> str:
+    v = _get_cfg(key)
+    if not v:
+        raise RuntimeError(f"{key} not configured")
+    return v
 
-def _infer_mode_for_price(price_id: str) -> str:
+def _stripe_key() -> str:
+    return _require("STRIPE_SECRET_KEY")
+
+def _ensure_stripe() -> None:
+    stripe.api_key = _stripe_key()
+
+def _base_url() -> str:
+    """Absolute site base, e.g. https://www.rosterdash.com/ (trailing slash)."""
+    explicit = _get_cfg("APP_BASE_URL")
+    if explicit:
+        return explicit if explicit.endswith("/") else explicit + "/"
+    root = (request.url_root or "").strip()
+    return root if root.endswith("/") else (root + "/")
+
+# ───────────────────────────── price ids & mapping ─────────────────────────────
+
+def _price_ids() -> Dict[str, str]:
+    """Resolve your price IDs lazily (works inside/outside app ctx)."""
+    return {
+        "FOUNDER_ONETIME": _get_cfg("PRICE_FOUNDER_ONETIME") or "price_1S6XEJ3UIVtwjIKCMD3gBcff",
+
+        "MGR5_SEASON":     _get_cfg("PRICE_MGR5_SEASON")     or "price_1S6X1t3UIVtwjIKCdMJtmzX9",
+        "MGR5_WEEKLY":     _get_cfg("PRICE_MGR5_WEEKLY")     or "price_1S6X1t3UIVtwjIKC043fYyUe",
+
+        "MGR12_SEASON":    _get_cfg("PRICE_MGR12_SEASON")    or "price_1S6X5f3UIVtwjIKCTVAT1FxX",
+        "MGR12_WEEKLY":    _get_cfg("PRICE_MGR12_WEEKLY")    or "price_1S6X5f3UIVtwjIKCd2skWXxT",
+
+        "PWR50_SEASON":    _get_cfg("PRICE_UNLIMITED_SEASON") or "price_1S6XAi3UIVtwjIKCnNeltCrG",
+        "PWR50_WEEKLY":    _get_cfg("PRICE_UNLIMITED_WEEKLY") or "price_1S6XBH3UIVtwjIKCmfk3PJhA",
+    }
+
+def _plan_by_price() -> Dict[str, Dict[str, Any]]:
     """
-    Infer Checkout mode for a given price_id. If the caller provides ?mode=...,
-    that wins. Otherwise, default to 'subscription' except when matching
-    PRICE_FOUNDER_ONETIME (one-time payment).
+    Map Stripe price_id -> normalized tier (what templates expect) + cadence + caps.
+    We always store user.plan as the TIER ONLY, not including cadence.
     """
-    qmode = (request.args.get("mode") or "").strip().lower()
-    if qmode in {"subscription", "payment"}:
-        return qmode
-    founder = os.getenv("PRICE_FOUNDER_ONETIME")
-    if founder and price_id == founder:
-        return "payment"
-    return "subscription"
+    P = _price_ids()
+    return {
+        # Manage 5
+        P["MGR5_SEASON"]:  {"tier": "MGR5",  "cadence": "season", "league_cap": 5,  "mass_offer_daily_cap": 3},
+        P["MGR5_WEEKLY"]:  {"tier": "MGR5",  "cadence": "weekly", "league_cap": 5,  "mass_offer_daily_cap": 3},
+        # Dominate 12
+        P["MGR12_SEASON"]: {"tier": "MGR12", "cadence": "season", "league_cap": 12, "mass_offer_daily_cap": 99999},
+        P["MGR12_WEEKLY"]: {"tier": "MGR12", "cadence": "weekly", "league_cap": 12, "mass_offer_daily_cap": 99999},
+        # Power 50
+        P["PWR50_SEASON"]: {"tier": "UNLIMITED", "cadence": "season", "league_cap": 50, "mass_offer_daily_cap": 99999},
+        P["PWR50_WEEKLY"]: {"tier": "UNLIMITED", "cadence": "weekly", "league_cap": 50, "mass_offer_daily_cap": 99999},
+    }
 
+# free/founder constants
+FREE_LEAGUE_CAP = 3
+FOUNDER_TERM_DAYS = 730
+FOUNDER_LEAGUE_CAP = 50
+FOUNDER_MASS_OFFERS = 99999
 
-def _absolute(url_path: str) -> str:
-    """Build an absolute URL from an endpoint path (e.g., '/account')."""
-    if url_path.startswith("http://") or url_path.startswith("https://"):
-        return url_path
-    # default to url_for when possible, else join with external root
-    try:
-        return url_for(url_path, _external=True)  # if an endpoint name was passed
-    except Exception:
-        # Fallback: build from host + path
-        try:
-            # Prefer SERVER_NAME if configured
-            base = current_app.config.get("EXTERNAL_BASE_URL")
-            if base:
-                return base.rstrip("/") + "/" + url_path.lstrip("/")
-        except Exception:
-            pass
-        # Last resort: relative path (Stripe requires absolute, so set EXTERNAL_BASE_URL in prod)
-        return url_path
-
+# ───────────────────────────── URL helpers ─────────────────────────────
 
 def _success_url() -> str:
-    # You can customize these endpoints later; they’re safe placeholders.
-    try:
-        return url_for("billing.success", _external=True)
-    except Exception:
-        return "/billing/success"
-
+    return urljoin(_base_url(), "account?checkout=success")
 
 def _cancel_url() -> str:
-    try:
-        return url_for("billing.cancel", _external=True)
-    except Exception:
-        return "/billing/cancel"
+    return urljoin(_base_url(), "pricing")
 
+# ───────────────────────────── Checkout ─────────────────────────────
 
-def _return_to_account_url() -> str:
-    # Where to send users after they finish in the Billing Portal.
-    try:
-        return url_for("account", _external=True)
-    except Exception:
-        return "/account"
-
-
-# —————————————————————————————————————————————————————————
-# Routes (inert until blueprint is registered)
-# —————————————————————————————————————————————————————————
-
-@bp.route("/checkout/<price_id>", methods=["POST"])
-def checkout(price_id: str):
+@billing_bp.route("/checkout/<price_id>", methods=["POST"])
+@login_required
+def start_checkout(price_id: str):
     """
-    Create a Stripe Checkout Session for the given price_id.
-    Mode defaults to 'subscription' unless founder one-time price or ?mode=payment.
-    Returns JSON: {"url": "https://checkout.stripe.com/..."} for the client to redirect.
+    Create a Checkout Session for:
+      - mode=subscription (recurring plans)
+      - mode=payment      (one-time Founder pass)
+    Returns JSON: {url: session.url}
     """
-    if not getattr(current_user, "is_authenticated", False):
-        return jsonify({"error": "Authentication required"}), 401
+    _ensure_stripe()
 
-    try:
-        stripe = _stripe()
-        mode = _infer_mode_for_price(price_id)
-        success_url = _success_url()
-        cancel_url = _cancel_url()
+    mode = (request.args.get("mode") or "subscription").strip().lower()
+    if mode not in {"subscription", "payment"}:
+        return jsonify({"error": "Invalid mode. Use 'subscription' or 'payment'."}), 400
 
-        # Basic line item — quantity fixed at 1. If you later support multiple seats, adjust here.
-        line_items = [{"price": price_id, "quantity": 1}]
+    existing_customer = getattr(current_user, "stripe_customer_id", None)
 
-        # Create a Checkout Session
-        params = dict(
-            success_url=success_url,
-            cancel_url=cancel_url,
-            client_reference_id=str(getattr(current_user, "id", "")),
-            allow_promotion_codes=True,
-            automatic_tax={"enabled": False},  # flip to True if you enable Stripe Tax
-        )
+    params: Dict[str, Any] = {
+        "mode": mode,
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "success_url": _success_url(),
+        "cancel_url": _cancel_url(),
+        "allow_promotion_codes": True,
+        "client_reference_id": str(current_user.id),
+        "metadata": {
+            "user_id": str(current_user.id),
+            "username": getattr(current_user, "username", "") or "",
+            "email": getattr(current_user, "email", "") or "",
+            "price_id": price_id,  # for webhook without extra fetch
+        },
+    }
 
-        if mode == "subscription":
-            params.update(
-                mode="subscription",
-                line_items=line_items,
-            )
+    if mode == "payment":
+        # Payment mode allows customer_creation
+        if existing_customer:
+            params["customer"] = existing_customer
         else:
-            params.update(
-                mode="payment",
-                line_items=line_items,
-            )
+            params["customer_creation"] = "always"
+    else:
+        # Subscription mode: do NOT set customer_creation
+        if existing_customer:
+            params["customer"] = existing_customer
 
-        # If the user already has a customer ID, attach it so Portal works seamlessly later
-        customer_id = getattr(current_user, "stripe_customer_id", None)
-        if customer_id:
-            params["customer"] = customer_id
-
+    try:
         session = stripe.checkout.Session.create(**params)
 
-        # Optional: store session.id on your side if you want to reconcile later
-        # Not doing it here to keep this route side-effect free beyond Stripe
+        # If Stripe already attached/created a customer, store it
+        try:
+            if not existing_customer and getattr(session, "customer", None):
+                current_user.stripe_customer_id = session.customer
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
 
         return jsonify({"url": session.url})
+    except stripe.error.StripeError as e:
+        msg = getattr(e, "user_message", None) or str(e)
+        return jsonify({"error": msg}), 400
     except Exception as e:
-        current_app.logger.exception("Stripe checkout creation failed")
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": f"Unable to start checkout: {e}"}), 400
 
+# ───────────────────────────── Billing Portal ─────────────────────────────
 
-@bp.route("/portal", methods=["GET"])
-def portal():
-    """
-    Create a Billing Portal Session for the current user and redirect to it.
-    Requires current_user.stripe_customer_id to be set (after first successful Checkout).
-    """
-    if not getattr(current_user, "is_authenticated", False):
-        return jsonify({"error": "Authentication required"}), 401
-
+@billing_bp.route("/portal", methods=["GET"])
+@login_required
+def billing_portal():
+    _ensure_stripe()
     customer_id = getattr(current_user, "stripe_customer_id", None)
     if not customer_id:
-        return jsonify({"error": "No Stripe customer on file. Start with a checkout purchase."}), 400
-
+        return redirect(url_for("pricing"))
     try:
-        stripe = _stripe()
         session = stripe.billing_portal.Session.create(
             customer=customer_id,
-            return_url=_return_to_account_url(),
+            return_url=urljoin(_base_url(), "account"),
         )
-        return redirect(session.url, code=302)
+        return redirect(session.url)
+    except stripe.error.StripeError as e:
+        msg = getattr(e, "user_message", None) or str(e)
+        return redirect(url_for("account", portal_error=msg))
+
+# ───────────────────────────── Webhook (single endpoint) ─────────────────────────────
+
+def _webhook_secret() -> str:
+    sec = _get_cfg("STRIPE_WEBHOOK_SECRET")
+    if not sec:
+        # 500 so misconfiguration is obvious
+        raise RuntimeError("STRIPE_WEBHOOK_SECRET not set")
+    return sec
+
+def _set_if_has(user: User, field: str, value: Any) -> None:
+    if hasattr(user, field):
+        setattr(user, field, value)
+
+def _apply_founder(user: User, now_utc: Optional[_dt.datetime] = None) -> None:
+    now_utc = now_utc or _dt.datetime.now(_dt.timezone.utc)
+    _set_if_has(user, "founder_expires_at", now_utc + _dt.timedelta(days=FOUNDER_TERM_DAYS))
+    _set_if_has(user, "plan", "FOUNDER")
+    _set_if_has(user, "league_cap", FOUNDER_LEAGUE_CAP)
+    _set_if_has(user, "mass_offer_daily_cap", FOUNDER_MASS_OFFERS)
+
+def _apply_subscription_plan(user: User, price_id: str) -> None:
+    plan = _plan_by_price().get(price_id)
+    if not plan:
+        current_app.logger.info("[Stripe] Unknown price_id=%s; skipping plan update", price_id)
+        return
+    # Normalize to tier only — templates expect MGR5/MGR12/PWR50
+    _set_if_has(user, "plan", plan["tier"])
+    _set_if_has(user, "league_cap", int(plan["league_cap"]))
+    _set_if_has(user, "mass_offer_daily_cap", int(plan["mass_offer_daily_cap"]))
+    _set_if_has(user, "stripe_price_id", price_id)  # infer cadence later if you need it
+
+def _downgrade_to_free_or_founder(user: User) -> None:
+    now = _dt.datetime.now(_dt.timezone.utc)
+    founder_ok = False
+    if hasattr(user, "founder_expires_at") and user.founder_expires_at:
+        try:
+            founder_ok = user.founder_expires_at > now
+        except Exception:
+            founder_ok = False
+    if founder_ok:
+        _apply_founder(user, now)
+    else:
+        _set_if_has(user, "plan", "FREE")
+        _set_if_has(user, "league_cap", FREE_LEAGUE_CAP)
+        _set_if_has(user, "mass_offer_daily_cap", 0)
+        _set_if_has(user, "stripe_price_id", None)
+
+def _find_user(client_reference_id: Optional[str], customer_id: Optional[str]) -> Optional[User]:
+    if client_reference_id:
+        try:
+            u = db.session.get(User, int(client_reference_id))
+            if u:
+                return u
+        except Exception:
+            pass
+    if customer_id:
+        return db.session.query(User).filter_by(stripe_customer_id=customer_id).first()
+    return None
+
+@billing_bp.route("/webhook", methods=["POST"])
+def stripe_webhook():
+    # Load secret and verify signature
+    try:
+        secret = _webhook_secret()
     except Exception as e:
-        current_app.logger.exception("Stripe portal creation failed")
-        return jsonify({"error": str(e)}), 400
+        current_app.logger.error("[Stripe] webhook misconfigured: %s", e)
+        return jsonify({"error": "misconfigured"}), 500
 
+    payload = request.get_data(as_text=True)
+    sig = request.headers.get("Stripe-Signature", "")
 
-@bp.route("/success", methods=["GET"])
-def success():
-    """
-    Lightweight success landing. You can customize to show 'Plan active' and a button to /account.
-    """
-    return (
-        "<h3>Payment successful</h3>"
-        '<p>You can close this tab and return to your account page.</p>'
-        '<p><a href="/account">Go to Account</a></p>'
-    ), 200
+    try:
+        _ensure_stripe()
+        event = stripe.Webhook.construct_event(payload, sig, secret)
+    except ValueError:
+        return abort(400)  # invalid JSON
+    except stripe.error.SignatureVerificationError:
+        return abort(400)  # bad signature
 
+    etype = event.get("type", "")
+    obj = event.get("data", {}).get("object", {}) or {}
+    current_app.logger.info("[Stripe] event=%s id=%s", etype, event.get("id"))
 
-@bp.route("/cancel", methods=["GET"])
-def cancel():
-    """
-    Lightweight cancel landing.
-    """
-    return (
-        "<h3>Checkout canceled</h3>"
-        '<p>No changes were made. <a href="/pricing">Go back to Pricing</a></p>'
-    ), 200
+    try:
+        # 1) Checkout completed (one-time Founder OR subscription)
+        if etype == "checkout.session.completed":
+            sess = obj  # stripe.checkout.Session
+            client_ref = sess.get("client_reference_id") or (sess.get("metadata") or {}).get("user_id")
+            customer_id = sess.get("customer")
+            user = _find_user(client_ref, customer_id)
+            if not user:
+                return jsonify({"ok": True, "note": "user not found"}), 200
 
+            # Save/attach customer id
+            if customer_id and getattr(user, "stripe_customer_id", None) != customer_id:
+                _set_if_has(user, "stripe_customer_id", customer_id)
 
-# —————————————————————————————————————————————————————————
-# Optional debug endpoint (hide in production)
-# —————————————————————————————————————————————————————————
+            mode = (sess.get("mode") or "").lower()
+            meta_price = (sess.get("metadata") or {}).get("price_id")
 
-@bp.route("/prices", methods=["GET"])
-def debug_prices():
-    """
-    Lists known price IDs from environment for quick smoke checks (TEST MODE).
-    DO NOT expose in production without auth.
-    """
-    if not current_app.debug:
-        return jsonify({"error": "Not available"}), 404
+            if mode == "payment":
+                # Founder one-time (no subscription object)
+                if meta_price and meta_price == _price_ids()["FOUNDER_ONETIME"]:
+                    _apply_founder(user)
+                    _set_if_has(user, "stripe_price_id", meta_price)
+                db.session.commit()
+                return jsonify({"ok": True}), 200
 
-    keys = [
-        "PRICE_MGR5_WEEKLY",
-        "PRICE_MGR5_SEASON",
-        "PRICE_MGR12_WEEKLY",
-        "PRICE_MGR12_SEASON",
-        "PRICE_UNLIMITED_WEEKLY",
-        "PRICE_UNLIMITED_SEASON",
-        "PRICE_FOUNDER_ONETIME",
-    ]
-    return jsonify({k: os.getenv(k, "") for k in keys})
+            if mode == "subscription":
+                # Fetch subscription to read the definitive price id
+                sub_id = sess.get("subscription")
+                price_id = None
+                if sub_id:
+                    sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price"])
+                    items = list(sub.get("items", {}).get("data", []))
+                    price_id = items[0]["price"]["id"] if items else None
+                if price_id:
+                    _apply_subscription_plan(user, price_id)
+                db.session.commit()
+                return jsonify({"ok": True}), 200
+
+        # 2) Subscription created/updated → (re)apply plan from price
+        if etype in {"customer.subscription.created", "customer.subscription.updated"}:
+            sub = obj
+            customer_id = sub.get("customer")
+            user = db.session.query(User).filter_by(stripe_customer_id=customer_id).first()
+            if user:
+                items = list(sub.get("items", {}).get("data", []))
+                price_id = items[0]["price"]["id"] if items else None
+                if price_id:
+                    _apply_subscription_plan(user, price_id)
+                db.session.commit()
+            return jsonify({"ok": True}), 200
+
+        # 3) Subscription canceled → downgrade (respect Founder if still valid)
+        if etype == "customer.subscription.deleted":
+            sub = obj
+            customer_id = sub.get("customer")
+            user = db.session.query(User).filter_by(stripe_customer_id=customer_id).first()
+            if user:
+                _downgrade_to_free_or_founder(user)
+                db.session.commit()
+            return jsonify({"ok": True}), 200
+
+        # 4) (Optional) payment failure → mark status if you track it
+        if etype == "invoice.payment_failed":
+            inv = obj
+            customer_id = inv.get("customer")
+            user = db.session.query(User).filter_by(stripe_customer_id=customer_id).first()
+            if user and hasattr(user, "stripe_status"):
+                _set_if_has(user, "stripe_status", "past_due")
+                db.session.commit()
+            return jsonify({"ok": True}), 200
+
+        # Unhandled → ack
+        return jsonify({"ok": True, "ignored": etype}), 200
+
+    except Exception as e:
+        current_app.logger.exception("[Stripe] webhook error: %s", e)
+        db.session.rollback()
+        # ACK so Stripe doesn’t retry forever; error is logged for you to fix/replay
+        return jsonify({"ok": True, "warning": str(e)}), 200

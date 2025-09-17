@@ -96,6 +96,7 @@ def create_app():
     from live.routes import live_bp
     from lineups.routes import lineups_bp
     from admin import bp as admin_bp
+    from billing.routes import billing_bp
 
     app.register_blueprint(offers_bp)
     app.register_blueprint(mfl_bp)
@@ -104,6 +105,7 @@ def create_app():
     app.register_blueprint(live_bp)
     app.register_blueprint(lineups_bp)
     app.register_blueprint(admin_bp)  # hidden: /_admin/*
+    app.register_blueprint(billing_bp)
 
     # ----- Routes -----
     @app.route("/")
