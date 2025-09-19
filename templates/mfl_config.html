@@ -5,16 +5,35 @@
   /* full-screen overlay */
   #syncOverlay {
     position: fixed; inset: 0;
-    background: rgba(0,0,0,0.55);
+    background: rgba(15, 23, 42, 0.82);
     display: none; align-items: center; justify-content: center;
-    z-index: 9999;
+    z-index: 9999; padding: 20px;
+  }
+  .sync-card {
+    background: rgba(15, 23, 42, 0.96);
+    border: 1px solid rgba(96, 165, 250, 0.25);
+    border-radius: 14px;
+    box-shadow: 0 18px 38px rgba(15, 23, 42, 0.55);
+    padding: 28px 26px;
+    width: min(420px, 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    text-align: center;
   }
   .spinner {
-    width: 64px; height: 64px; border: 6px solid rgba(255,255,255,.25);
-    border-top-color: #fff; border-radius: 50%; animation: spin 1s linear infinite;
+    width: 56px; height: 56px; border: 6px solid rgba(255,255,255,.25);
+    border-top-color: #38bdf8; border-radius: 50%; animation: spin 1s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .sync-text { color:#fff; margin-top: 12px; text-align:center; font-weight:600; }
+  .sync-headline { color:#fff; font-weight:600; font-size:1.15rem; }
+  .sync-league { color:rgba(255,255,255,0.82); font-size:1rem; }
+  .sync-phase { color:rgba(96,165,250,0.9); font-size:0.95rem; font-weight:500; }
+  .sync-detail { color:rgba(226,232,240,0.95); font-size:0.95rem; min-height:1.6em; }
+  .sync-actions { display:flex; gap:12px; }
+  #syncRetry, #syncCancel { display:none; }
+  #syncProgressBar { transition: width 0.25s ease; }
 
   .league-row:hover { background: rgba(255,255,255,0.04); }
   .small { font-size:.9em; }
@@ -27,10 +46,20 @@
   .progress > div { height:100%; width:0%; background:#60a5fa; } /* no specific color requested; uses a single accent */
 </style>
 
-<div id="syncOverlay">
-  <div style="display:flex; flex-direction:column; align-items:center;">
-    <div class="spinner"></div>
-    <div class="sync-text">Syncing your leagues… this can take a minute</div>
+<div id="syncOverlay" aria-live="polite" aria-busy="true">
+  <div class="sync-card">
+    <div class="spinner" id="syncSpinner"></div>
+    <div class="sync-headline" id="syncHeadline">Preparing sync…</div>
+    <div class="sync-league" id="syncLeagueLabel"></div>
+    <div class="sync-phase" id="syncPhaseLabel"></div>
+    <div class="progress" id="syncProgress" aria-hidden="true">
+      <div id="syncProgressBar"></div>
+    </div>
+    <div class="sync-detail" id="syncDetail">Gathering selections…</div>
+    <div class="sync-actions">
+      <button type="button" class="button" id="syncRetry">Retry</button>
+      <button type="button" class="button" id="syncCancel" style="background:#444;">Cancel</button>
+    </div>
   </div>
 </div>
 
@@ -111,6 +140,10 @@
 <script>
   const IS_UNLIMITED = {{ (is_unlimited|default(False))|tojson }};
   const MAX_THIS_YEAR = {{ (max_this_year if max_this_year is not none else 0)|tojson }};
+  const DEFAULT_PHASES = [
+    { key: 'FAST', label: 'Settings' },
+    { key: 'ASSETS', label: 'Assets' },
+  ];
 
   function toggleAll(checked) {
     const cbs = [...document.querySelectorAll('#leagueList input[type="checkbox"]')];
@@ -124,7 +157,6 @@
       updateCapUI();
       return;
     }
-    // Select up to remaining slots only
     let selected = cbs.filter(cb => cb.checked).length;
     let remaining = Math.max(0, MAX_THIS_YEAR - selected);
     for (const cb of cbs) {
@@ -149,25 +181,21 @@
     if (IS_UNLIMITED) return;
 
     const cbs = [...document.querySelectorAll('#leagueList input[type="checkbox"]')];
-    let checked = cbs.filter(cb => cb.checked).length;
+    const checked = cbs.filter(cb => cb.checked).length;
 
-    // Counts
     const selCountEl = document.getElementById('selCount');
     if (selCountEl) selCountEl.textContent = checked;
 
-    // Progress
     const pct = MAX_THIS_YEAR > 0 ? Math.min(100, Math.round((checked / MAX_THIS_YEAR) * 100)) : 0;
     const prog = document.getElementById('capProg');
     if (prog) prog.style.width = pct + '%';
 
-    // At-cap warning / no-slots message
     const atCap = checked >= MAX_THIS_YEAR;
     const capWarn = document.getElementById('capWarn');
     const capNone = document.getElementById('capNone');
     if (capNone) capNone.style.display = (MAX_THIS_YEAR === 0) ? 'block' : 'none';
     if (capWarn) capWarn.style.display = (atCap && MAX_THIS_YEAR > 0) ? 'block' : 'none';
 
-    // Disable all *unchecked* boxes if at cap (keep already-checked enabled)
     cbs.forEach(cb => {
       if (cb.checked) {
         cb.disabled = false;
@@ -176,27 +204,171 @@
       }
     });
 
-    // Also disable submit if no slots and nothing is selected
-    const canSubmit = (checked > 0) || (MAX_THIS_YEAR > 0);
     const btn = document.getElementById('syncBtn');
-    if (btn) btn.disabled = !canSubmit && !IS_UNLIMITED;
+    if (btn) btn.disabled = !IS_UNLIMITED && !checked && MAX_THIS_YEAR === 0;
   }
 
-  // Reliable spinner: prevent default, show overlay, then submit after a tick
+  function describeMetrics(phaseKey, metrics) {
+    if (!metrics) return '';
+    const m = metrics || {};
+    if (phaseKey === 'FAST') {
+      const created = m.teams_created || 0;
+      const updated = (m.teams_updated || 0) + created;
+      const pieces = [];
+      if (updated) {
+        pieces.push(`${updated} team${updated === 1 ? '' : 's'} updated${created ? ` (${created} new)` : ''}`);
+      }
+      if (m.standings_updated) {
+        pieces.push(`${m.standings_updated} standing${m.standings_updated === 1 ? '' : 's'}`);
+      }
+      if (m.roster_text_updated) {
+        pieces.push('Roster slots refreshed');
+      }
+      return pieces.join(' • ');
+    }
+    if (phaseKey === 'ASSETS') {
+      const pieces = [];
+      if (m.rosters_inserted) {
+        pieces.push(`${m.rosters_inserted} roster spot${m.rosters_inserted === 1 ? '' : 's'}`);
+      }
+      if (m.picks_inserted) {
+        pieces.push(`${m.picks_inserted} draft pick${m.picks_inserted === 1 ? '' : 's'}`);
+      }
+      if (m.teams_touched) {
+        pieces.push(`${m.teams_touched} team${m.teams_touched === 1 ? '' : 's'} touched`);
+      }
+      return pieces.join(' • ');
+    }
+    return '';
+  }
+
+  async function postConfigForSync(url, formData) {
+    const resp = await fetch(url, {
+      method: 'POST',
+      body: formData,
+      headers: { 'Accept': 'application/json' },
+    });
+    const text = await resp.text();
+    let payload = {};
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch (err) {
+        const error = new Error('Unexpected response from server.');
+        error.retryable = false;
+        throw error;
+      }
+    }
+    if (!resp.ok || (payload && payload.ok === false)) {
+      const message = (payload && payload.error) ? payload.error : `Sync failed (${resp.status})`;
+      const error = new Error(message);
+      error.retryable = resp.status >= 500;
+      throw error;
+    }
+    return payload || {};
+  }
+
+  async function runPhaseRequest(league, phase) {
+    const body = new URLSearchParams();
+    body.append('league_id', league.id);
+    body.append('phase', phase.key);
+    if (league.year !== undefined && league.year !== null) {
+      body.append('year', league.year);
+    }
+    const resp = await fetch('{{ url_for("mfl.mfl_config_sync_one") }}', {
+      method: 'POST',
+      body,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Accept': 'application/json',
+      },
+    });
+    const text = await resp.text();
+    let payload = {};
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch (err) {
+        const error = new Error('Sync phase returned an invalid response.');
+        error.retryable = true;
+        throw error;
+      }
+    }
+    if (!resp.ok || (payload && payload.ok === false)) {
+      const message = (payload && payload.error) ? payload.error : `Phase ${phase.key} failed (${resp.status})`;
+      const error = new Error(message);
+      error.retryable = payload && Object.prototype.hasOwnProperty.call(payload, 'retryable') ? !!payload.retryable : resp.status >= 500;
+      throw error;
+    }
+    return payload || {};
+  }
+
   document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('mflConfigForm');
     const btn  = document.getElementById('syncBtn');
+    const overlay = document.getElementById('syncOverlay');
+    const spinner = document.getElementById('syncSpinner');
+    const headline = document.getElementById('syncHeadline');
+    const leagueLabel = document.getElementById('syncLeagueLabel');
+    const phaseLabel = document.getElementById('syncPhaseLabel');
+    const detail = document.getElementById('syncDetail');
+    const progressBar = document.getElementById('syncProgressBar');
+    const retryBtn = document.getElementById('syncRetry');
+    const cancelBtn = document.getElementById('syncCancel');
+
+    const resetActions = () => {
+      retryBtn.style.display = 'none';
+      cancelBtn.style.display = 'none';
+      retryBtn.onclick = null;
+      cancelBtn.onclick = null;
+      cancelBtn.textContent = 'Cancel';
+    };
+
+    const updateProgress = (completed, total) => {
+      if (!progressBar) return;
+      const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+      progressBar.style.width = pct + '%';
+    };
+
+    const promptRetry = (message, allowRetry) => {
+      return new Promise(resolve => {
+        spinner.style.display = 'none';
+        headline.textContent = 'Sync paused';
+        detail.textContent = message;
+        resetActions();
+        if (allowRetry) {
+          retryBtn.style.display = 'inline-flex';
+        }
+        cancelBtn.style.display = 'inline-flex';
+        if (!allowRetry) {
+          cancelBtn.textContent = 'Close';
+        }
+        if (allowRetry) {
+          retryBtn.onclick = () => {
+            resetActions();
+            spinner.style.display = 'block';
+            detail.textContent = 'Retrying…';
+            resolve(true);
+          };
+        }
+        cancelBtn.onclick = () => {
+          resetActions();
+          resolve(false);
+        };
+      });
+    };
 
     // Hook checkbox changes for live limit enforcement
     document.querySelectorAll('#leagueList input[type="checkbox"]').forEach(cb => {
       cb.addEventListener('change', updateCapUI);
     });
 
-    // Initial paint
     updateCapUI();
 
-    form.addEventListener('submit', function(e) {
-      // Just in case: final client-side check (server still enforces)
+    form.addEventListener('submit', async function(e) {
+      if (!window.fetch || !window.FormData || !window.URLSearchParams) {
+        return; // allow normal submission
+      }
       if (!IS_UNLIMITED) {
         const checked = document.querySelectorAll('#leagueList input[type="checkbox"]:checked').length;
         if (checked > MAX_THIS_YEAR) {
@@ -205,11 +377,98 @@
           return;
         }
       }
+
       e.preventDefault();
+      if (!overlay) {
+        form.submit();
+        return;
+      }
+
       if (btn) btn.disabled = true;
-      const overlay = document.getElementById('syncOverlay');
-      if (overlay) overlay.style.display = 'flex';
-      setTimeout(() => form.submit(), 75);
+      overlay.style.display = 'flex';
+      overlay.setAttribute('aria-busy', 'true');
+      spinner.style.display = 'block';
+      headline.textContent = 'Preparing sync…';
+      leagueLabel.textContent = '';
+      phaseLabel.textContent = '';
+      detail.textContent = 'Gathering selections…';
+      updateProgress(0, 1);
+      resetActions();
+
+      try {
+        const configData = await postConfigForSync(form.action, new FormData(form));
+        const leagues = Array.isArray(configData.leagues) ? configData.leagues : [];
+        const phases = (Array.isArray(configData.phases) && configData.phases.length) ? configData.phases : DEFAULT_PHASES;
+
+        if (!leagues.length) {
+          await promptRetry('No leagues were selected.', false);
+          overlay.style.display = 'none';
+          if (btn) btn.disabled = false;
+          return;
+        }
+
+        const totalSteps = leagues.length * phases.length;
+        let completedSteps = 0;
+        updateProgress(0, totalSteps);
+        headline.textContent = 'Syncing leagues…';
+
+        for (let li = 0; li < leagues.length; li++) {
+          const lg = leagues[li];
+          leagueLabel.textContent = lg.name ? `${lg.name} (${lg.id})` : `League ${lg.id}`;
+
+          for (let pi = 0; pi < phases.length; ) {
+            const phase = phases[pi];
+            phaseLabel.textContent = phase.label || phase.key;
+            detail.textContent = 'Working…';
+            spinner.style.display = 'block';
+            resetActions();
+
+            try {
+              const result = await runPhaseRequest(lg, phase);
+              completedSteps += 1;
+              updateProgress(completedSteps, totalSteps);
+
+              let summary = describeMetrics(phase.key, result.metrics || {});
+              if (result.fallback_used) {
+                summary = summary ? `${summary} • Used fallback` : 'Used fallback data';
+              }
+              if (result.warnings && result.warnings.length) {
+                const warn = result.warnings.join('; ');
+                summary = summary ? `${summary} • Warnings: ${warn}` : `Warnings: ${warn}`;
+              }
+              detail.textContent = summary || 'Phase complete.';
+              spinner.style.display = 'none';
+              phaseLabel.textContent = `${phase.label || phase.key} ✓`;
+              await new Promise(res => setTimeout(res, 150));
+              spinner.style.display = 'block';
+              pi += 1;
+            } catch (err) {
+              const retryable = err && Object.prototype.hasOwnProperty.call(err, 'retryable') ? !!err.retryable : true;
+              const shouldRetry = await promptRetry(err.message || 'Sync failed.', retryable);
+              if (!shouldRetry) {
+                overlay.style.display = 'none';
+                if (btn) btn.disabled = false;
+                return;
+              }
+            }
+          }
+        }
+
+        spinner.style.display = 'block';
+        progressBar.style.width = '100%';
+        phaseLabel.textContent = '';
+        detail.textContent = 'Redirecting to My Leagues…';
+        headline.textContent = 'Sync complete!';
+        overlay.setAttribute('aria-busy', 'false');
+
+        const redirectTarget = configData.redirect_url || '{{ url_for("leagues.my_leagues") }}';
+        setTimeout(() => { window.location.href = redirectTarget; }, 800);
+      } catch (err) {
+        const retryable = err && Object.prototype.hasOwnProperty.call(err, 'retryable') ? !!err.retryable : false;
+        await promptRetry(err.message || 'Sync failed.', retryable);
+        overlay.style.display = 'none';
+        if (btn) btn.disabled = false;
+      }
     });
   });
 </script>

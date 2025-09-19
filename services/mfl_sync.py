@@ -149,6 +149,8 @@ def sync_league_info(
     league: League,
     franchise_meta: Dict[str, Dict[str, Any]] | Dict[str, Any],
     roster_slots: Optional[str] = None,
+    *,
+    commit: bool = True,
 ) -> Dict[str, int]:
     """
     Upsert franchise rows (names/owners/abbrev) and optionally update league.roster_slots.
@@ -196,13 +198,21 @@ def sync_league_info(
             league.roster_slots = roster_slots
             roster_updated = 1
 
-    db.session.commit()
+    if commit:
+        db.session.commit()
+    else:
+        db.session.flush()
     return {"teams_created": created, "teams_updated": updated, "roster_text_updated": roster_updated}
 
 
 # ------------------------- Assets (rosters + picks) --------------------------
 
-def sync_league_assets(league: League, franchises: List[FranchiseAssets] | List[Dict[str, Any]]) -> Dict[str, int]:
+def sync_league_assets(
+    league: League,
+    franchises: List[FranchiseAssets] | List[Dict[str, Any]],
+    *,
+    commit: bool = True,
+) -> Dict[str, int]:
     """
     Idempotent write of league-wide assets:
       - For each franchise (team), delete existing Roster & DraftPick rows
@@ -215,7 +225,9 @@ def sync_league_assets(league: League, franchises: List[FranchiseAssets] | List[
     """
     inserted_rosters = 0
     inserted_picks = 0
-    teams_touched = 0
+    touched_team_ids: list[int] = []
+    roster_rows: list[Roster] = []
+    pick_rows: list[DraftPick] = []
 
     for fr in franchises:
         # Accept 'franchise_id' (preferred) or 'id'
@@ -228,6 +240,8 @@ def sync_league_assets(league: League, franchises: List[FranchiseAssets] | List[
         name_hint = _get(fr, "name") or _get(fr, "team_name")
         team = _ensure_team(league.id, franchise_id, name_hint=name_hint)
 
+        touched_team_ids.append(team.id)
+
         # Preview counts (diagnostics)
         player_ids = list(_iter_player_ids(fr))
         pick_items = list(_iter_picks(fr))
@@ -236,20 +250,15 @@ def sync_league_assets(league: League, franchises: List[FranchiseAssets] | List[
             league.id, league.mfl_id, franchise_id, len(player_ids), len(pick_items)
         )
 
-        # Clear existing data (both children of Team)
-        Roster.query.filter_by(team_id=team.id).delete(synchronize_session=False)
-        DraftPick.query.filter_by(team_id=team.id).delete(synchronize_session=False)
-        db.session.commit()   # keep per-team ops safe and incremental
-
         # Rebuild roster
         for pid in player_ids:
             _ensure_player(pid)
-            db.session.add(Roster(team_id=team.id, player_id=pid, is_starter=False))
+            roster_rows.append(Roster(team_id=team.id, player_id=pid, is_starter=False))
             inserted_rosters += 1
 
         # Rebuild future picks
         for season, rnd, original in pick_items:
-            db.session.add(
+            pick_rows.append(
                 DraftPick(
                     team_id=team.id,
                     season=int(season),
@@ -260,11 +269,23 @@ def sync_league_assets(league: League, franchises: List[FranchiseAssets] | List[
             )
             inserted_picks += 1
 
+    unique_team_ids = list({tid for tid in touched_team_ids if tid is not None})
+    if unique_team_ids:
+        Roster.query.filter(Roster.team_id.in_(unique_team_ids)).delete(synchronize_session=False)
+        DraftPick.query.filter(DraftPick.team_id.in_(unique_team_ids)).delete(synchronize_session=False)
+
+    if roster_rows:
+        db.session.bulk_save_objects(roster_rows)
+    if pick_rows:
+        db.session.bulk_save_objects(pick_rows)
+
+    if commit:
         db.session.commit()
-        teams_touched += 1
+    else:
+        db.session.flush()
 
     return {
-        "teams_touched": teams_touched,
+        "teams_touched": len(unique_team_ids),
         "rosters_inserted": inserted_rosters,
         "picks_inserted": inserted_picks,
     }
@@ -272,7 +293,12 @@ def sync_league_assets(league: League, franchises: List[FranchiseAssets] | List[
 
 # ------------------------- Standings (record, PF/PA, rank) -------------------
 
-def sync_league_standings(league: League, rows: List[StandingRow] | List[Dict[str, Any]]) -> int:
+def sync_league_standings(
+    league: League,
+    rows: List[StandingRow] | List[Dict[str, Any]],
+    *,
+    commit: bool = True,
+) -> int:
     """
     Apply standings for a league:
       - Ensures each franchise Team exists (normalized fid)
@@ -323,5 +349,8 @@ def sync_league_standings(league: League, rows: List[StandingRow] | List[Dict[st
 
         updated += 1
 
-    db.session.commit()
+    if commit:
+        db.session.commit()
+    else:
+        db.session.flush()
     return updated

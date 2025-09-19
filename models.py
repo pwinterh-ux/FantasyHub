@@ -54,7 +54,6 @@ class User(UserMixin, db.Model):
             and self.aup_version == versions.get("aup")
         )
 
-
     # relationships
     leagues = db.relationship(
         "League",
@@ -186,7 +185,6 @@ class League(db.Model):
         return f"<League {self.id} {self.name} {self.year} u{self.user_id} mfl:{self.mfl_id}>"
 
 
-
 # ----- Team -----------------------------------------------------------------
 
 class Team(db.Model):
@@ -306,3 +304,23 @@ class DraftPick(db.Model):
 
     def __repr__(self) -> str:
         return f"<DraftPick {self.id} team:{self.team_id} {self.season} R{self.round} P{self.pick_number or '-'} orig:{self.original_team or '-'}>"
+
+
+# ----- NFL Weekly Opponent Schedule (minimal) -------------------------------
+
+class NflSchedule(db.Model):
+    __tablename__ = "nflschedule"
+
+    # Composite PK (no auto-increment id)
+    year = db.Column(db.SmallInteger, primary_key=True, nullable=False)  # e.g., 2025
+    week = db.Column(db.SmallInteger, primary_key=True, nullable=False)  # 1..18 (may include 19..22 for playoffs XML)
+    team = db.Column(db.String(10), primary_key=True, nullable=False)    # e.g., DAL, KCC
+
+    # Data
+    opponent = db.Column(db.String(10), nullable=False)
+    is_home = db.Column(db.Boolean, nullable=False)                      # True = home, False = away
+    kickoff_unix = db.Column(db.BigInteger, nullable=True)               # epoch seconds (UTC)
+
+    def __repr__(self) -> str:
+        h = "H" if self.is_home else "A"
+        return f"<NflSchedule {self.year} W{self.week} {self.team} vs {self.opponent} {h}>"

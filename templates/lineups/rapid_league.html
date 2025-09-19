@@ -43,8 +43,10 @@
                          {% if r.player_id in auto_selected %}checked{% endif %}
                          data-pos="{{ r.position }}"
                          data-proj="{{ r.projected if r.projected is not none else '' }}">
-                  <span class="nm">{{ r.name }}</span>
-                  {% if r.team %}<span class="tm">— {{ r.team }}</span>{% endif %}
+                  <span class="info">
+                    <span class="nm">{{ r.name }}</span>
+                    {% if r.team %}<span class="tm">— {{ r.team }}</span>{% endif %}
+                  </span>
                   <span class="pj">{{ r.projected if r.projected is not none else '—' }}</span>
                 </label>
               {% endfor %}
@@ -91,7 +93,7 @@
   .body { padding:10px !important; }
   .pos-grid {
     display:grid;
-    grid-template-columns: repeat(3, minmax(0,1fr));
+    grid-template-columns: repeat(4, minmax(0,1fr));
     gap:8px;
   }
   @media (max-width: 1100px) { .pos-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
@@ -195,6 +197,12 @@
   const ranges = {{ ranges|tojson }};
   const totalRequired = {{ total_required or 0 }};
   const form = document.getElementById('lineupForm');
+  const submitBtn = document.getElementById('submitBtn');
+  const skipBtn = document.getElementById('skipBtn');
+  const abStatus = document.getElementById('abStatus');
+  const defaultStatusText = 'Review & submit your starters. Requirements turn green when valid.';
+  let lineupValid = false;
+  let lastValidationMessage = 'Lineup requirements not met yet.';
 
   function parseRange(s){
     if (!s) return null;
@@ -215,6 +223,8 @@
       }
     });
 
+    const issues = [];
+
     document.querySelectorAll('[data-pos-req]').forEach(el => {
       const card = el.closest('.pos-card');
       const pos = (card?.getAttribute('data-pos') || 'Other').toUpperCase();
@@ -228,6 +238,12 @@
       if (rng) {
         if (count < rng.lo || count > rng.hi) {
           el.classList.add('bad');
+          if (count < rng.lo) {
+            const diff = rng.lo - count;
+            issues.push(`Need ${diff} more ${pos}`);
+          } else if (count > rng.hi) {
+            issues.push(`Too many ${pos} (max ${rng.hi})`);
+          }
         } else {
           el.classList.add('good');
         }
@@ -241,6 +257,34 @@
       if (badge){
         badge.style.color = (totalSelected === totalRequired) ? '#8be28b' : '#ff6b6b';
       }
+      if (totalSelected !== totalRequired){
+        if (totalSelected < totalRequired){
+          const diff = totalRequired - totalSelected;
+          issues.push(`Select ${diff} more total player${diff === 1 ? '' : 's'}`);
+        } else {
+          const diff = totalSelected - totalRequired;
+          issues.push(`Remove ${diff} player${diff === 1 ? '' : 's'} from your lineup`);
+        }
+      }
+    }
+
+    lineupValid = issues.length === 0;
+    if (lineupValid){
+      lastValidationMessage = 'Lineup ready. Submit when you are ready.';
+      if (abStatus){
+        abStatus.textContent = 'All requirements met. Submit when you are ready.';
+        abStatus.style.color = '#8be28b';
+      }
+    } else {
+      lastValidationMessage = issues.join(' • ') || defaultStatusText;
+      if (abStatus){
+        abStatus.textContent = `Requirements incomplete: ${lastValidationMessage}`;
+        abStatus.style.color = 'var(--mut)';
+      }
+    }
+
+    if (submitBtn){
+      submitBtn.disabled = !lineupValid;
     }
   }
 
@@ -252,10 +296,12 @@
   updateCounts(); // after auto-selects
 
   // ---------- Submit / Skip (AJAX) ----------
-  const submitBtn = document.getElementById('submitBtn');
-  const skipBtn = document.getElementById('skipBtn');
 
   async function doSubmit(){
+    if (!lineupValid){
+      showToast('error', lastValidationMessage || defaultStatusText, {persist:false, autohideMs:2400});
+      return;
+    }
     submitBtn.disabled = true; skipBtn.disabled = true;
     try {
       const fd = new FormData(form);

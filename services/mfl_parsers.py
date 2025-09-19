@@ -321,7 +321,15 @@ def parse_standings(xml_bytes: bytes) -> List[StandingRow]:
         fid = fr.get("id")
         if not fid:
             continue
-        record = fr.get("h2hwlt") or "0-0-0"
+        record = fr.get("h2hwlt")
+        if not record:
+            wins = fr.get("h2hw")
+            losses = fr.get("h2hl")
+            ties = fr.get("h2ht")
+            if any(v not in (None, "") for v in (wins, losses, ties)):
+                record = f"{_safe_int(wins)}-{_safe_int(losses)}-{_safe_int(ties)}"
+        if not record:
+            record = "0-0-0"
         try:
             pf = float(fr.get("pf", 0))
         except ValueError:

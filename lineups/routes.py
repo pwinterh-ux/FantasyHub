@@ -145,17 +145,52 @@ def _get_current_mfl_week(year: int) -> int:
     return int(current_app.config.get("MFL_WEEK_FALLBACK", 1))
 
 def _effective_current_week(year: int) -> int:
-    wk = _get_current_mfl_week(year)
+    cfg_week = current_app.config.get("MFL_CURRENT_WEEK")
+    try:
+        forced_week = int(cfg_week)
+    except (TypeError, ValueError):
+        forced_week = None
+    if forced_week and 1 <= forced_week <= 22:
+        return forced_week
+
+    try:
+        wk = int(current_app.config.get("MFL_WEEK_FALLBACK", 2))
+    except (TypeError, ValueError):
+        wk = 2
+    if wk < 1:
+        wk = 1
+
+    try:
+        now = datetime.now()
+    except Exception:
+        now = None
+
+    if now:
+        if wk < 2 and now.month == 9 and now.day >= 8:
+            wk = 2
+
+        week3_start = None
+        try:
+            week3_start = datetime(year, 9, 16)
+        except Exception:
+            pass
+        if week3_start and now >= week3_start:
+            delta_weeks = (now - week3_start).days // 7
+            wk = max(wk, 3 + delta_weeks)
+
     minwk = current_app.config.get("MFL_MIN_CURRENT_WEEK")
     if isinstance(minwk, int) and 1 <= minwk <= 22:
         wk = max(wk, minwk)
+
     try:
-        now = datetime.now()
-        if wk < 2 and now.month == 9 and now.day >= 8:
-            wk = 2
-    except Exception:
-        pass
-    return wk
+        max_week = int(current_app.config.get("MFL_MAX_WEEKS", MFL_MAX_WEEKS_FALLBACK))
+    except (TypeError, ValueError):
+        max_week = MFL_MAX_WEEKS_FALLBACK
+    if max_week < 1:
+        max_week = MFL_MAX_WEEKS_FALLBACK
+
+    return max(1, min(wk, max_week))
+
 
 def _allowed_weeks_from(current_week: int, max_week: int) -> List[int]:
     if current_week < 1:
