@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="glass-container" style="max-width:980px;margin:24px auto;">
-  <h2 style="margin:0 0 8px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.35);">Trade Builder</h2>
+  <h2 style="margin:0 0 8px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.35);">RosterDash</h2>
   <div class="glass-card" style="padding:18px;background:rgba(255,255,255,.12);border-radius:12px;color:#fff;border:1px solid rgba(255,255,255,.2);">
-    <p>To use the builder, please sync your leagues within the last {{ max_age_hours }} hours.</p>
+    <p>To use the Trade Builder or Rapid Lineups, please sync your leagues within the last {{ max_age_hours }} hours.</p>
     <p><a href="{{ url_for('mfl.mfl_config') }}" class="btn" style="background:#000;color:#fff;padding:8px 12px;border-radius:8px;text-decoration:none;">Go to Sync</a></p>
   </div>
 </div>

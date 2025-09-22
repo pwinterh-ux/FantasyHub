@@ -1,8 +1,12 @@
 # services/mfl_client.py
 from __future__ import annotations
 
+import math
+import threading
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, Any
 from urllib.parse import unquote_plus
 
@@ -26,15 +30,32 @@ class RateLimiter:
         self.max_calls = max_calls
         self.window = window
         self._calls: list[float] = []
+        self._lock = threading.Lock()
 
     def wait(self) -> None:
-        now = time.time()
-        self._calls = [t for t in self._calls if now - t < self.window]
-        if len(self._calls) >= self.max_calls:
-            sleep_for = self.window - (now - self._calls[0])
-            if sleep_for > 0:
-                time.sleep(sleep_for)
-        self._calls.append(time.time())
+        min_spacing = (self.window / self.max_calls) if self.max_calls else 0.0
+
+        while True:
+            sleep_for = 0.0
+            with self._lock:
+                now = time.time()
+                self._calls = [t for t in self._calls if now - t < self.window]
+
+                if self._calls and min_spacing > 0:
+                    next_allowed = self._calls[-1] + min_spacing
+                    if next_allowed > now:
+                        sleep_for = max(sleep_for, next_allowed - now)
+
+                if self.max_calls and len(self._calls) >= self.max_calls:
+                    window_wait = self.window - (now - self._calls[0])
+                    if window_wait > sleep_for:
+                        sleep_for = window_wait
+
+                if sleep_for <= 0:
+                    self._calls.append(now)
+                    return
+
+            time.sleep(sleep_for)
 
 
 _rl = RateLimiter()
@@ -106,9 +127,7 @@ class MFLClient:
         _rl.wait()
         candidates = [
             ("POST", "login"),
-            ("POST", "account/login"),
             ("GET", "login"),
-            ("GET", "account/login"),
         ]
 
         last_error = None
@@ -218,6 +237,11 @@ class MFLClient:
             # Retry on transient statuses
             if resp.status_code in RETRY_STATUSES and attempt <= retries:
                 _log_http_safe(f"GET export:{type_}", resp, elapsed_ms, include_body=True)
+                if resp.status_code == 429:
+                    retry_after = self._retry_after_seconds(resp.headers.get("Retry-After"))
+                    if retry_after is not None:
+                        time.sleep(retry_after)
+                        continue
                 time.sleep(backoff_base * (2 ** (attempt - 1)))
                 continue
 
@@ -304,3 +328,30 @@ class MFLClient:
             if text:
                 raise RuntimeError(f"MFL request failed ({code}): {text[:300]}") from e
             raise
+
+    @staticmethod
+    def _retry_after_seconds(header_value: Optional[str]) -> Optional[float]:
+        if not header_value:
+            return None
+        value = header_value.strip()
+        if not value:
+            return None
+        try:
+            seconds = float(value)
+        except ValueError:
+            seconds = None
+        if seconds is not None and seconds >= 0 and math.isfinite(seconds):
+            return seconds
+        try:
+            retry_at = parsedate_to_datetime(value)
+        except (TypeError, ValueError, IndexError):
+            retry_at = None
+        if retry_at is None:
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        now = datetime.now(retry_at.tzinfo)
+        delay = (retry_at - now).total_seconds()
+        if delay < 0:
+            return 0.0
+        return delay
