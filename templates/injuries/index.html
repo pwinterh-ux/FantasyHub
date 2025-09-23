@@ -20,18 +20,22 @@
   {% if payload.leagues %}
     <div class="league-grid">
       {% for league in payload.leagues %}
+        {% set starters = league.players | selectattr('is_starter') | list %}
+        {% set bench = league.players | rejectattr('is_starter') | list %}
+
         <section class="tile pad league-card">
           <header class="league-card__header">
             <div class="league-card__top">
               <div class="league-card__title">
-                <h2>{{ league.league_name }}</h2>
+                <h2 class="league-card__name">{{ league.league_name }}</h2>
                 <div class="muted small">Season {{ league.league_year }} • League ID {{ league.league_mfl_id }}</div>
               </div>
               {% if league.submit_url %}
-                <a class="btn btn-primary" href="{{ league.submit_url }}">Submit lineup</a>
+                <a class="btn btn-primary league-card__cta" href="{{ league.submit_url }}">Submit lineup</a>
               {% endif %}
             </div>
-            <div class="league-card__metrics">
+
+            <div class="league-card__metrics league-card__metrics--muted">
               {% if league.red_count %}
                 <span class="chip chip--red">{{ league.red_count }} critical starter{{ 's' if league.red_count != 1 }}</span>
               {% endif %}
@@ -39,204 +43,183 @@
                 <span class="chip chip--yellow">{{ league.yellow_count }} questionable starter{{ 's' if league.yellow_count != 1 }}</span>
               {% endif %}
               {% if league.starter_count %}
-                <span class="chip chip--primary">{{ league.starter_count }} starter{{ 's' if league.starter_count != 1 }} on report</span>
+                <span class="chip chip--primary chip--subtle">{{ league.starter_count }} starter{{ 's' if league.starter_count != 1 }} on report</span>
               {% endif %}
-              <span class="chip chip--muted">{{ league.player_count }} injured player{{ 's' if league.player_count != 1 }}</span>
+              <span class="chip chip--muted chip--subtle">{{ league.player_count }} total on report</span>
             </div>
           </header>
 
-          <div class="player-grid">
-            {% for player in league.players %}
-              <article class="player-panel player-panel--{{ player.highlight or 'normal' }}">
-                <div class="player-panel__header">
-                  <div>
-                    <div class="player-panel__name">{{ player.name }}</div>
-                    <div class="player-panel__meta muted small">{{ player.position }} • {{ player.team }}</div>
-                  </div>
-                  <div class="player-panel__badge {{ 'player-panel__badge--starter' if player.is_starter else '' }}">
-                    {{ player.roster_status_label }}
-                  </div>
-                </div>
-                <div class="player-panel__body">
-                  <div class="player-panel__injury">{{ player.injury_status or '—' }}</div>
-                  <div class="player-panel__details muted small">{{ player.injury_details or '—' }}</div>
-                  {% if player.expected_return %}
-                    <div class="player-panel__return muted small">Expected return: {{ player.expected_return }}</div>
-                  {% endif %}
-                </div>
-                {% if league.submit_url %}
-                  <div class="player-panel__actions">
-                    <a class="btn btn-secondary" href="{{ league.submit_url }}">Submit lineup</a>
-                  </div>
+          <div class="league-card__body">
+            {# Starters (default view) #}
+            <table class="injury-table">
+              <thead>
+                <tr>
+                  <th>Player</th>
+                  <th>Pos / Team</th>
+                  <th>Status</th>
+                  <th>Injury</th>
+                  <th>Expected</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% if starters|length == 0 %}
+                  <tr><td colspan="5" class="muted">No starters on the injury report.</td></tr>
+                {% else %}
+                  {% for player in starters %}
+                    {% set status = (player.injury_status or '') %}
+                    {% set up = status|upper %}
+                    {# Treat IR, PUP variants, and OUT as "red"; Questionable as "yellow" #}
+                    {% set is_red = ('OUT' in up) or ('IR' in up) or ('PUP' in up) %}
+                    {% set is_yellow = ('QUESTIONABLE' in up) %}
+                    <tr class="injury-table__row
+                               {% if is_red %}injury-table__row--red{% elif is_yellow %}injury-table__row--yellow{% else %}injury-table__row--normal{% endif %}">
+                      <td data-title="Player"><span class="injury-table__player-name">{{ player.name }}</span></td>
+                      <td data-title="Pos / Team">{{ player.position }} • {{ player.team }}</td>
+                      <td data-title="Status"><span class="injury-table__status">{{ player.injury_status or '—' }}</span></td>
+                      <td data-title="Injury">{{ player.injury_details or '—' }}</td>
+                      <td data-title="Expected">{{ player.expected_return or '—' }}</td>
+                    </tr>
+                  {% endfor %}
                 {% endif %}
-              </article>
-            {% endfor %}
+              </tbody>
+            </table>
+
+            {# Non-starters (expand) #}
+            {% if bench|length %}
+              <details class="more-players">
+                <summary>Show all injured non-starters ({{ bench|length }} more)</summary>
+                <div class="more-players__inner">
+                  <table class="injury-table injury-table--compact">
+                    <thead>
+                      <tr>
+                        <th>Player</th>
+                        <th>Pos / Team</th>
+                        <th>Status</th>
+                        <th>Injury</th>
+                        <th>Expected</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for player in bench %}
+                        <tr class="injury-table__row injury-table__row--normal">
+                          <td data-title="Player"><span class="injury-table__player-name">{{ player.name }}</span></td>
+                          <td data-title="Pos / Team">{{ player.position }} • {{ player.team }}</td>
+                          <td data-title="Status">{{ player.injury_status or '—' }}</td>
+                          <td data-title="Injury">{{ player.injury_details or '—' }}</td>
+                          <td data-title="Expected">{{ player.expected_return or '—' }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            {% endif %}
           </div>
         </section>
       {% endfor %}
     </div>
   {% else %}
-    <section class="tile pad">
-      <p class="muted">No leagues found. Sync your leagues to view injury information.</p>
-    </section>
+    <section class="tile pad"><p class="muted">No leagues found. Sync your leagues to view injury information.</p></section>
   {% endif %}
 </div>
 {% endblock %}
 
 {% block extra_css %}
 <style>
-  .injury-assist {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
-  .injury-assist .intro {
-    display: flex;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-  .injury-assist .intro__heading {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
+  .injury-assist { display:flex; flex-direction:column; gap:20px; }
+
   .league-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 20px;
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap:18px;
   }
-  .league-card {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    min-height: 100%;
-  }
-  .league-card__header {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
+
+  .league-card { display:flex; flex-direction:column; gap:12px; }
+
+  .league-card__header { display:flex; flex-direction:column; gap:8px; position:relative; }
   .league-card__top {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 12px;
-    flex-wrap: wrap;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    flex-wrap:nowrap; /* keep CTA on same row on desktop */
   }
-  .league-card__title h2 {
-    margin: 0;
-  }
-  .league-card__metrics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
+  .league-card__title { flex:1; min-width:0; }
+  .league-card__name { margin:0; }
+  .league-card__cta { margin-left:auto; white-space:nowrap; }
+
+  .league-card__metrics { display:flex; flex-wrap:wrap; gap:6px; }
+  .league-card__metrics--muted .chip { opacity:.85; filter:saturate(.85); }
+
   .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    display:inline-flex; align-items:center; gap:6px;
+    padding:2px 8px; border-radius:999px; font-size:.72rem; font-weight:600;
+    text-transform:uppercase; letter-spacing:.05em;
   }
-  .chip--red {
-    background: rgba(239, 68, 68, 0.1);
-    color: #dc2626;
-    border: 1px solid rgba(239, 68, 68, 0.35);
+  .chip--subtle { opacity:.75; }
+  .chip--red    { background:rgba(239,68,68,.10); color:#fca5a5; border:1px solid rgba(239,68,68,.35); }
+  .chip--yellow { background:rgba(234,179,8,.10); color:#facc15; border:1px solid rgba(234,179,8,.35); }
+  .chip--muted  { background:rgba(148,163,184,.12); color:rgba(226,232,240,.9); border:1px solid rgba(148,163,184,.3); }
+  .chip--primary{ background:rgba(37,99,235,.12); color:#93c5fd; border:1px solid rgba(37,99,235,.35); }
+
+  .league-card__body { overflow-x:auto; }
+
+  /* Compact, high-scan table */
+  .injury-table { width:100%; border-collapse:collapse; min-width:520px; }
+  .injury-table th, .injury-table td {
+    padding:6px 10px;
+    text-align:left;
+    border-bottom:1px solid rgba(148,163,184,.18);
+    font-size:.92rem;
   }
-  .chip--yellow {
-    background: rgba(234, 179, 8, 0.1);
-    color: #b45309;
-    border: 1px solid rgba(234, 179, 8, 0.35);
+  .injury-table thead th {
+    font-size:.70rem;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+    color:rgba(226,232,240,.65);
+    background:rgba(148,163,184,.10);
   }
-  .chip--muted {
-    background: rgba(148, 163, 184, 0.16);
-    color: rgba(15, 23, 42, 0.7);
-    border: 1px solid rgba(148, 163, 184, 0.3);
+  .injury-table__player-name { font-weight:600; }
+  .injury-table__status { font-weight:700; }
+
+  /* Stronger highlights on dark backgrounds (higher specificity + accent bar) */
+  .injury-assist .injury-table__row--red {
+    background: rgba(127, 29, 29, .35) !important;  /* deep red glaze */
+    border-left: 4px solid #ef4444;
   }
-  .chip--primary {
-    background: rgba(37, 99, 235, 0.12);
-    color: #1d4ed8;
-    border: 1px solid rgba(37, 99, 235, 0.35);
+  .injury-assist .injury-table__row--yellow {
+    background: rgba(120, 53, 15, .35) !important;  /* amber glaze */
+    border-left: 4px solid #f59e0b;
   }
-  .player-grid {
-    display: grid;
-    gap: 12px;
+  .injury-assist .injury-table__row--normal { background: transparent; }
+
+  /* Compact non-starters table */
+  .injury-table--compact th, .injury-table--compact td { padding:5px 8px; font-size:.9rem; }
+
+  /* Expander */
+  .more-players { margin-top:8px; border-top:1px dashed rgba(148,163,184,.35); padding-top:8px; }
+  .more-players > summary {
+    cursor:pointer; user-select:none; list-style:none; font-size:.9rem;
+    color:rgba(226,232,240,.9); display:inline-flex; align-items:center; gap:8px;
   }
-  .player-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 12px;
-    border-radius: 12px;
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    background: rgba(15, 23, 42, 0.02);
-  }
-  .player-panel--red {
-    border-color: rgba(239, 68, 68, 0.4);
-    background: rgba(239, 68, 68, 0.12);
-  }
-  .player-panel--yellow {
-    border-color: rgba(234, 179, 8, 0.4);
-    background: rgba(234, 179, 8, 0.12);
-  }
-  .player-panel__header {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    align-items: flex-start;
-  }
-  .player-panel__name {
-    font-weight: 600;
-  }
-  .player-panel__badge {
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    background: rgba(148, 163, 184, 0.16);
-    color: rgba(15, 23, 42, 0.7);
-  }
-  .player-panel__badge--starter {
-    background: rgba(37, 99, 235, 0.15);
-    color: #1d4ed8;
-    border: 1px solid rgba(37, 99, 235, 0.35);
-  }
-  .player-panel__body {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .player-panel__injury {
-    font-weight: 600;
-  }
-  .player-panel__actions {
-    display: flex;
-    justify-content: flex-end;
-  }
-  .injury-assist .btn-primary,
-  .injury-assist .btn-secondary {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 6px 12px;
-    border-radius: 8px;
-    font-size: 0.85rem;
-    text-decoration: none;
-  }
-  .injury-assist .btn-primary {
-    background: var(--primary, #2563eb);
-    color: #fff;
-  }
-  .injury-assist .btn-secondary {
-    background: transparent;
-    color: inherit;
-    border: 1px solid rgba(148, 163, 184, 0.35);
+  .more-players > summary::-webkit-details-marker { display:none; }
+  .more-players__inner { margin-top:8px; }
+
+  @media (max-width: 720px) {
+    .league-card__top { flex-wrap:wrap; }
+    .league-card__cta { width:100%; margin-left:0; }
+    .injury-table { min-width:unset; }
+    .injury-table thead { display:none; }
+    .injury-table tbody, .injury-table tr, .injury-table td { display:block; width:100%; }
+    .injury-table__row { margin-bottom:10px; border:1px solid rgba(148,163,184,.2); border-radius:12px; overflow:hidden; }
+    .injury-table__row td { border-bottom:1px solid rgba(148,163,184,.15); }
+    .injury-table__row td:last-child { border-bottom:none; }
+    .injury-table td { position:relative; padding-left:120px; }
+    .injury-table td::before {
+      content: attr(data-title);
+      position:absolute; left:12px; top:50%; transform:translateY(-50%);
+      font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; color:rgba(226,232,240,.6);
+    }
   }
 </style>
 {% endblock %}

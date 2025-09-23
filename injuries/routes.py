@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -28,6 +29,8 @@ from models import League, Player, Roster, Team
 
 CACHE_KEY = "injuries_cache_v1"
 CACHE_TTL_SECONDS = 15 * 60
+_SERVER_CACHE: dict[tuple[str, int, int], tuple[float, dict[str, Any]]] = {}
+_SERVER_CACHE_LOCK = threading.Lock()
 HEADERS_XML = {
     "User-Agent": "FantasyHub/1.0 (+injury-assist)",
     "Accept": "application/xml,text/xml,*/*;q=0.8",
@@ -116,6 +119,55 @@ def _league_priority(entry: dict[str, Any]) -> tuple[int, int, int, str]:
     red_count = int(entry.get("red_count", 0))
     yellow_count = int(entry.get("yellow_count", 0))
     return (severity, -red_count, -yellow_count, entry.get("league_name", ""))
+
+
+def _cache_key_for_current_user(year: int | str, week: int | str) -> Optional[tuple[str, int, int]]:
+    """Return a stable cache key for the authenticated user."""
+
+    try:
+        user_id = current_user.get_id()
+    except Exception:
+        user_id = None
+    if not user_id:
+        return None
+
+    try:
+        return (str(user_id), int(year), int(week))
+    except Exception:
+        return None
+
+
+def _get_server_cached_payload(
+    cache_key: Optional[tuple[str, int, int]], now_ts: float
+) -> Optional[dict[str, Any]]:
+    if not cache_key:
+        return None
+
+    with _SERVER_CACHE_LOCK:
+        entry = _SERVER_CACHE.get(cache_key)
+        if not entry:
+            return None
+        cached_ts, payload = entry
+        if now_ts - cached_ts >= CACHE_TTL_SECONDS:
+            _SERVER_CACHE.pop(cache_key, None)
+            return None
+        return payload
+
+
+def _store_server_cached_payload(
+    cache_key: Optional[tuple[str, int, int]], payload: dict[str, Any], ts: float
+) -> None:
+    if not cache_key:
+        return
+    with _SERVER_CACHE_LOCK:
+        _SERVER_CACHE[cache_key] = (ts, payload)
+
+
+def _clear_server_cached_payload(cache_key: Optional[tuple[str, int, int]]) -> None:
+    if not cache_key:
+        return
+    with _SERVER_CACHE_LOCK:
+        _SERVER_CACHE.pop(cache_key, None)
 
 
 def _fetch_injuries(year: int, week: int) -> tuple[dict[str, dict[str, str]], dict[str, Any]]:
@@ -371,6 +423,7 @@ def injuries_index():
     used_cache = False
     error_message: Optional[str] = None
 
+    cache_key = _cache_key_for_current_user(year, week)
     now_ts = time.time()
     if cache:
         try:
@@ -385,24 +438,31 @@ def injuries_index():
             and cached_year == int(year)
             and now_ts - cached_ts < CACHE_TTL_SECONDS
         ):
-            payload = cache.get("data")
-            used_cache = True
+            payload = _get_server_cached_payload(cache_key, now_ts)
+            if payload is not None:
+                used_cache = True
+        else:
+            stale_key = _cache_key_for_current_user(cached_year, cached_week)
+            _clear_server_cached_payload(stale_key)
+            session.pop(CACHE_KEY, None)
 
     if payload is None:
         try:
             payload = _build_payload(year, week)
+            fresh_ts = time.time()
             session[CACHE_KEY] = {
-                "ts": now_ts,
+                "ts": fresh_ts,
                 "week": int(week),
                 "year": int(year),
-                "data": payload,
             }
             session.modified = True
+            _store_server_cached_payload(cache_key, payload, fresh_ts)
         except requests.RequestException:
             current_app.logger.exception("Failed to refresh injuries feed")
             error_message = "Could not refresh injury data from MFL right now. Showing the last cached results if available."
-            if cache and cache.get("data"):
-                payload = cache.get("data")
+            cached_payload = _get_server_cached_payload(cache_key, now_ts)
+            if cached_payload is not None:
+                payload = cached_payload
                 used_cache = True
             else:
                 payload = {
