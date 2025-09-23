@@ -6,6 +6,7 @@ from typing import Iterable, Optional, Tuple, Dict, Any, Union
 from urllib.parse import quote_plus
 
 import requests
+from xml.etree import ElementTree as ET
 
 # ---- Public helpers ---------------------------------------------------------
 
@@ -105,3 +106,46 @@ def send_trade_proposal(
         "url": url,
         "text": resp.text or "",
     }
+
+
+def parse_mfl_import_response(body: str) -> Tuple[bool, str]:
+    """
+    Parse an MFL import response body (XML or plain text) and return a tuple of
+    (ok, message).
+
+    The success criterion matches the lineup submit flow: only responses where
+    the <status> element equals ``OK`` (case-insensitive) are treated as
+    successful.  The returned message favors any parsed status/error text and
+    falls back to the raw body (trimmed).
+    """
+
+    text = body or ""
+    stripped = text.strip()
+
+    ok = False
+    msg = ""
+
+    if stripped:
+        try:
+            root = ET.fromstring(stripped)
+            tag = (root.tag or "").lower()
+            if tag == "status":
+                msg = (root.text or "").strip()
+                ok = (msg or "").upper() == "OK"
+            else:
+                st_el = root.find(".//status")
+                if st_el is not None:
+                    msg = (st_el.text or "").strip()
+                    ok = (msg or "").upper() == "OK"
+                else:
+                    err_el = root.find(".//error")
+                    if err_el is not None:
+                        msg = (err_el.text or "").strip() or msg
+        except Exception:
+            # Non-XML or malformed responses fall back to the plain-text branch
+            pass
+
+    if not msg and stripped:
+        msg = stripped
+
+    return ok, msg

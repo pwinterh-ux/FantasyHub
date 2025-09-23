@@ -43,7 +43,47 @@
       </table>
     </div>
 
+    {% if has_prev or has_next %}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;">
+        <div>
+          {% if has_prev %}
+            <a class="btn-ghost" href="{{ url_for('admin.users_list', page=page-1, q=q or None) }}">&larr; Previous</a>
+          {% endif %}
+        </div>
+        <div class="muted" style="font-size:13px;">Page {{ page }}</div>
+        <div style="text-align:right;">
+          {% if has_next %}
+            <a class="btn-ghost" href="{{ url_for('admin.users_list', page=page+1, q=q or None) }}">Next &rarr;</a>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+
   {% elif view == "edit" %}
+    <h2 style="margin-top:0;">Admin · Edit User #{{ u.id }}</h2>
+    <div class="tile dark pad">
+      <form method="post" action="{{ url_for('admin.users_edit', user_id=u.id) }}">
+        <div style="display:grid;grid-template-columns:1fr 2fr;gap:10px;align-items:center;">
+          <label>Email</label>
+          <div>{{ u.email }}</div>
+
+          <label>Username</label>
+          <div>{{ u.username }}</div>
+
+          <label>Plan</label>
+          <div>
+            <select name="plan" style="padding:8px;border-radius:8px;background:#0b1220;color:#e5e7eb;border:1px solid rgba(255,255,255,.15);">
+              {% for p in plans %}
+                <option value="{{ p }}" {% if (u.plan or 'free') == p %}selected{% endif %}>{{ p.upper() }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <label>Bonus Mass Offers</label>
+          <div>
+            <input type="number" name="bonus_mass_offers" min="0" value="{{ u.bonus_mass_offers or 0 }}"
+                   style="width:120px;padding:8px;border-radius:8px;background:#0b1220;color:#e5e7eb;border:1px solid rgba(255,255,255,.15);" />
+          </div>
     <h2 style="margin-top:0;">Admin · Edit User #{{ u.id }}</h2>
     <div class="tile dark pad">
       <form method="post" action="{{ url_for('admin.users_edit', user_id=u.id) }}">

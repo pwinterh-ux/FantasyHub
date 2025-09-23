@@ -11,7 +11,7 @@ from flask_login import login_required, current_user
 
 from app import db
 from models import League, Team, DraftPick, Player, Roster
-from services.mfl_trade import send_trade_proposal
+from services.mfl_trade import send_trade_proposal, parse_mfl_import_response
 
 # NEW: terms + mass-offer gating
 from services.guards import require_terms, consume_mass_offer
@@ -476,6 +476,7 @@ def perform_offers():
             continue
 
         host, cookie = _resolve_host_and_cookie(lg)
+        status_msg = ""
         try:
             res = send_trade_proposal(
                 host=host,
@@ -489,18 +490,37 @@ def perform_offers():
                 apikey=apikey,
                 cookie=cookie,
             )
+            body_text = res.get("text") or ""
+            http_ok = bool(res.get("ok"))
+            parsed_ok, parsed_msg = parse_mfl_import_response(body_text)
+            status_ok = http_ok and parsed_ok
+            status_msg = parsed_msg.strip() if isinstance(parsed_msg, str) else ""
+            if not status_msg:
+                status_msg = body_text.strip()
+            if not status_msg and not status_ok:
+                status_msg = f"HTTP {res.get('status_code')}"
             detail = {
                 "host": host,
                 "http": res.get("status_code"),
                 "url": res.get("url"),
                 "body": (res.get("text") or "")[:400],
             }
-            status = "ok" if res.get("ok") else "error"
+            if status_msg:
+                detail["status_message"] = status_msg
+            status = "ok" if status_ok else "error"
         except Exception as e:
             status = "error"
             detail = str(e)
+            status_msg = str(e)
 
-        offers_log.append({"league": lg, "status": status, "detail": detail})
+        offers_log.append(
+            {
+                "league": lg,
+                "status": status,
+                "detail": detail,
+                "status_message": status_msg if status != "ok" else "",
+            }
+        )
 
     return render_template(
         "offers/send_result.html",

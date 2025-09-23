@@ -7,6 +7,7 @@ from flask import current_app
 from app import db
 from models import League, Team, Player, Roster, DraftPick
 from services.mfl_parsers import FranchiseAssets, StandingRow
+from sqlalchemy import select
 
 
 # ------------------------- Small helpers ------------------------------------
@@ -47,23 +48,6 @@ def _ensure_team(league_id: int, franchise_id: str, name_hint: Optional[str] = N
     db.session.add(team)
     db.session.flush()
     return team
-
-def _ensure_player(pid: int) -> Player:
-    """Create a placeholder Player if the catalog doesn't have it yet."""
-    p = Player.query.get(pid)
-    if not p:
-        p = Player(
-            id=pid,
-            mfl_id=str(pid),
-            name=f"Player #{pid}",
-            position=None,
-            team=None,
-            status=None,
-        )
-        db.session.add(p)
-        db.session.flush()
-    return p
-
 
 # ------------------------- Extractors (robust) -------------------------------
 
@@ -229,6 +213,9 @@ def sync_league_assets(
     roster_rows: list[Roster] = []
     pick_rows: list[DraftPick] = []
 
+    all_player_ids: set[int] = set()
+    normalized_franchises: list[dict[str, Any]] = []
+
     for fr in franchises:
         # Accept 'franchise_id' (preferred) or 'id'
         franchise_id_raw = _get(fr, "franchise_id") or _get(fr, "id")
@@ -236,15 +223,53 @@ def sync_league_assets(
             continue
         franchise_id = _fid(franchise_id_raw)
 
-        # Opportunistically use a name if the object carries one (dict variant).
+        player_ids = list(_iter_player_ids(fr))
+        pick_items = list(_iter_picks(fr))
         name_hint = _get(fr, "name") or _get(fr, "team_name")
+        
+        normalized_franchises.append(
+            {
+                "franchise_id": franchise_id,
+                "name_hint": name_hint,
+                "player_ids": player_ids,
+                "pick_items": pick_items,
+            }
+        )
+
+        all_player_ids.update(player_ids)
+
+    existing_player_ids: set[int] = set()
+    if all_player_ids:
+        stmt = select(Player.id).where(Player.id.in_(all_player_ids))
+        existing_player_ids = set(db.session.execute(stmt).scalars())
+
+    missing_player_ids = all_player_ids - existing_player_ids
+    if missing_player_ids:
+        placeholder_players = [
+            Player(
+                id=pid,
+                mfl_id=str(pid),
+                name=f"Player #{pid}",
+                position=None,
+                team=None,
+                status=None,
+            )
+            for pid in sorted(missing_player_ids)
+        ]
+        db.session.bulk_save_objects(placeholder_players)
+
+    known_player_ids = existing_player_ids | missing_player_ids
+
+    for payload in normalized_franchises:
+        franchise_id = payload["franchise_id"]
+        player_ids = payload["player_ids"]
+        pick_items = payload["pick_items"]
+        name_hint = payload["name_hint"]
+
         team = _ensure_team(league.id, franchise_id, name_hint=name_hint)
 
         touched_team_ids.append(team.id)
 
-        # Preview counts (diagnostics)
-        player_ids = list(_iter_player_ids(fr))
-        pick_items = list(_iter_picks(fr))
         current_app.logger.info(
             "assets: league %s (%s) fid=%s -> players=%d, picks=%d",
             league.id, league.mfl_id, franchise_id, len(player_ids), len(pick_items)
@@ -252,7 +277,8 @@ def sync_league_assets(
 
         # Rebuild roster
         for pid in player_ids:
-            _ensure_player(pid)
+            if pid not in known_player_ids:
+                continue
             roster_rows.append(Roster(team_id=team.id, player_id=pid, is_starter=False))
             inserted_rosters += 1
 

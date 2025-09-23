@@ -34,6 +34,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 mfl_bp = Blueprint("mfl", __name__, url_prefix="/mfl")
 
+_PLACEHOLDER_HOSTS = {"", "api.myfantasyleague.com", "www.myfantasyleague.com"}
+
 # --------------------------- lightweight in-proc cache -----------------------
 # key: (user_id:int, year:int) -> {"ts": float, "data": dict}
 _TRADES_CACHE: dict[tuple[int, int], dict] = {}
@@ -89,6 +91,18 @@ def _host_only(url: str | None) -> str | None:
         return url.replace("https://", "").replace("http://", "").split("/", 1)[0]
     except Exception:
         return None
+
+
+def _normalize_host_candidate(value: str | None) -> str | None:
+    host = _host_only(value)
+    if not host:
+        return None
+    host = host.strip()
+    if not host:
+        return None
+    if host.lower() in _PLACEHOLDER_HOSTS:
+        return None
+    return host
 
 
 def _append_user_id_cookie(base_cookie: str | None, api_cookie_val: str | None) -> str | None:
@@ -728,8 +742,27 @@ def mfl_config_sync_one():
 
     api_client = MFLClient(year=year)
 
+    host_by_lid: dict[str, str] = {}
+    try:
+        xml = api_client.get_user_leagues(api_cookie)
+        for rec in parse_user_leagues(xml):
+            if isinstance(rec, dict):
+                lid = str(rec.get("league_id") or rec.get("id") or "").strip()
+                host = rec.get("host")
+                if lid and host:
+                    normalized = _normalize_host_candidate(host)
+                    if normalized:
+                        host_by_lid[lid] = normalized
+    except Exception as e:
+        current_app.logger.info("could not build myleagues host map for config sync one: %s", e)
+
     def _resolve_client(host: str | None) -> tuple[MFLClient, str | None, str | None]:
-        host_key = host or getattr(league, "league_host", None) or "api.myfantasyleague.com"
+        normalized_host = (
+            _normalize_host_candidate(host)
+            or _normalize_host_candidate(getattr(league, "league_host", None))
+            or _normalize_host_candidate(host_by_lid.get(league.mfl_id))
+        )
+        host_key = normalized_host or "api.myfantasyleague.com"
         if host_key == "api.myfantasyleague.com":
             cookie = _append_user_id_cookie(api_cookie, api_cookie)
             return api_client, cookie, host_key
@@ -752,7 +785,11 @@ def mfl_config_sync_one():
                 franchise_meta, roster_text, league_base_url = {}, None, None
                 warnings.append(f"parse_league_info:{parse_err}")
 
-            resolved_host = _host_only(league_base_url) or getattr(league, "league_host", None)
+            resolved_host = (
+                _normalize_host_candidate(league_base_url)
+                or _normalize_host_candidate(getattr(league, "league_host", None))
+                or _normalize_host_candidate(host_by_lid.get(league.mfl_id))
+            )
             data_client, data_cookie, host_used = _resolve_client(resolved_host)
 
             standings_xml = data_client.get_standings(league_id, data_cookie)

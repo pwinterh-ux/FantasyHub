@@ -193,9 +193,38 @@ def users_list():
     if q:
         like = f"%{q}%"
         qry = qry.filter(or_(User.email.ilike(like), User.username.ilike(like)))
-    users = qry.order_by(User.id.asc()).limit(50).all()
+    page = 1
+    try:
+        page = max(int(request.args.get("page", "1")), 1)
+    except Exception:
+        page = 1
 
-    return render_template("admin/users.html", view="list", q=q, users=users, plans=ALLOWED_PLANS)
+    per_page = 50
+    offset = (page - 1) * per_page
+
+    results = (
+        qry.order_by(User.id.asc())
+        .offset(offset)
+        .limit(per_page + 1)
+        .all()
+    )
+
+    has_next = len(results) > per_page
+    if has_next:
+        results = results[:per_page]
+
+    has_prev = page > 1
+
+    return render_template(
+        "admin/users.html",
+        view="list",
+        q=q,
+        users=results,
+        plans=ALLOWED_PLANS,
+        page=page,
+        has_next=has_next,
+        has_prev=has_prev,
+    )
 
 
 # --------------------------------------------------------------------

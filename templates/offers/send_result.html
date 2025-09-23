@@ -23,7 +23,7 @@
 
         {% set status = row.status or 'unknown' %}
         {% set detail = row.detail %}
-
+        {% set status_message = row.status_message %}
         <div style="padding:10px 0;border-bottom:1px dashed rgba(255,255,255,.2);">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             <div style="font-weight:700;">{{ league_name }}{% if league_id %} ({{ league_id }}){% endif %}</div>
@@ -36,23 +36,31 @@
             {% endif %}
           </div>
 
-          {% if detail and detail.host is defined %}
-            <div style="margin-top:6px;font-size:12px;opacity:.9;">
-              Host: <code>{{ detail.host }}</code>
-              {% if detail.http is defined %} • HTTP: <code>{{ detail.http }}</code>{% endif %}
-            </div>
+          {% if status == 'ok' %}
+            <div style="margin-top:6px;padding:8px 10px;border-radius:8px;background:rgba(16,185,129,.15);color:#d1fae5;font-weight:600;">Offer sent</div>
+          {% elif status_message %}
+            <div style="margin-top:6px;padding:8px 10px;border-radius:8px;background:rgba(185,28,28,.2);color:#fee2e2;font-weight:600;">{{ status_message }}</div>
           {% endif %}
 
-          {# Cautious: don't show the full URL to avoid leaking APIKEY/cookies. #}
-          {% if detail and detail.body is defined %}
-            <details style="margin-top:6px;">
-              <summary style="cursor:pointer;opacity:.9;">Response body (first 400 chars)</summary>
-              <pre style="white-space:pre-wrap;background:rgba(0,0,0,.25);padding:8px;border-radius:8px;color:#efefef;margin-top:6px;">{{ detail.body }}</pre>
-            </details>
-          {% elif detail is string %}
-            <pre style="white-space:pre-wrap;background:rgba(0,0,0,.25);padding:8px;border-radius:8px;color:#efefef;margin-top:6px;">{{ detail }}</pre>
-          {% else %}
-            <pre style="white-space:pre-wrap;background:rgba(0,0,0,.25);padding:8px;border-radius:8px;color:#efefef;margin-top:6px;">{{ detail | tojson(indent=2) }}</pre>
+          {% if status != 'ok' %}
+            {% if detail and detail.host is defined %}
+              <div style="margin-top:6px;font-size:12px;opacity:.9;">
+                Host: <code>{{ detail.host }}</code>
+                {% if detail.http is defined %} • HTTP: <code>{{ detail.http }}</code>{% endif %}
+              </div>
+            {% endif %}
+
+            {# Cautious: don't show the full URL to avoid leaking APIKEY/cookies. #}
+            {% if detail and detail.body is defined %}
+              <details style="margin-top:6px;">
+                <summary style="cursor:pointer;opacity:.9;">Response body (first 400 chars)</summary>
+                <pre style="white-space:pre-wrap;background:rgba(0,0,0,.25);padding:8px;border-radius:8px;color:#efefef;margin-top:6px;">{{ detail.body }}</pre>
+              </details>
+            {% elif detail is string %}
+              <pre style="white-space:pre-wrap;background:rgba(0,0,0,.25);padding:8px;border-radius:8px;color:#efefef;margin-top:6px;">{{ detail }}</pre>
+            {% else %}
+              <pre style="white-space:pre-wrap;background:rgba(0,0,0,.25);padding:8px;border-radius:8px;color:#efefef;margin-top:6px;">{{ detail | tojson(indent=2) }}</pre>
+            {% endif %}
           {% endif %}
         </div>
       {% endfor %}
