@@ -63,7 +63,31 @@ _rl = RateLimiter()
 
 # ----------------------------- Logging Helpers -------------------------------
 
-def _log_http_safe(label: str, resp: requests.Response, elapsed_ms: int, include_body: bool = True) -> None:
+def _iso_utc(ts: datetime | None) -> str | None:
+    if ts is None:
+        return None
+    try:
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        else:
+            ts = ts.astimezone(timezone.utc)
+        return ts.isoformat(timespec="milliseconds")
+    except Exception:
+        try:
+            return ts.isoformat()
+        except Exception:
+            return None
+
+
+def _log_http_safe(
+    label: str,
+    resp: requests.Response,
+    elapsed_ms: int,
+    *,
+    include_body: bool = True,
+    context: Optional[Dict[str, Any]] = None,
+    started_at: Optional[datetime] = None,
+) -> None:
     """Log URL (with query), status, elapsed, and truncated body. Never logs credentials/cookies."""
     try:
         body_snippet = ""
@@ -77,16 +101,22 @@ def _log_http_safe(label: str, resp: requests.Response, elapsed_ms: int, include
             txt = resp.text or ""
             body_snippet = txt[:limit] + (f"... [truncated {len(txt) - limit} chars]" if len(txt) > limit else "")
 
-        current_app.logger.info(
-            "[MFL] | %s",
-            {
-                "label": label,
-                "status": getattr(resp, "status_code", "?"),
-                "elapsed_ms": elapsed_ms,
-                "url": getattr(resp.request, "url", "<unknown>"),
-                "body_snippet": body_snippet if include_body else "",
-            },
-        )
+        payload: Dict[str, Any] = {
+            "label": label,
+            "status": getattr(resp, "status_code", "?"),
+            "elapsed_ms": elapsed_ms,
+            "method": getattr(resp.request, "method", "?"),
+            "url": getattr(resp.request, "url", "<unknown>"),
+            "response_bytes": len(getattr(resp, "content", b"")) if getattr(resp, "content", None) is not None else 0,
+            "content_type": resp.headers.get("Content-Type"),
+            "started_at": _iso_utc(started_at),
+            "finished_at": _iso_utc(datetime.now(timezone.utc)),
+            "body_snippet": body_snippet if include_body else "",
+        }
+        if context:
+            payload["context"] = context
+
+        current_app.logger.info("[MFL] | %s", payload)
     except Exception:
         # logging must never crash request path
         pass
@@ -165,33 +195,90 @@ class MFLClient:
             f"MFL login failed: no session cookie returned (tried multiple endpoints: {last_error or 'unknown error'})."
         )
 
-    def get_user_leagues(self, cookie: str) -> bytes:
-        return self._export("myleagues", cookie=cookie)
+    def get_user_leagues(self, cookie: str, *, context: Optional[Dict[str, Any]] = None) -> bytes:
+        ctx = {"resource": "myleagues"}
+        if context:
+            ctx.update(context)
+        return self._export("myleagues", cookie=cookie, context=ctx)
 
-    def get_assets(self, league_id: str, cookie: str) -> bytes:
-        return self._export("assets", params={"L": league_id}, cookie=cookie)
+    def get_assets(
+        self,
+        league_id: str,
+        cookie: str,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bytes:
+        ctx = {"resource": "assets", "league_id": str(league_id)}
+        if context:
+            ctx.update(context)
+        return self._export("assets", params={"L": league_id}, cookie=cookie, context=ctx)
 
-    def get_standings(self, league_id: str, cookie: str) -> bytes:
-        return self._export("leagueStandings", params={"L": league_id}, cookie=cookie)
+    def get_standings(
+        self,
+        league_id: str,
+        cookie: str,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bytes:
+        ctx = {"resource": "standings", "league_id": str(league_id)}
+        if context:
+            ctx.update(context)
+        return self._export("leagueStandings", params={"L": league_id}, cookie=cookie, context=ctx)
 
-    def get_league_info(self, league_id: str, cookie: str) -> bytes:
+    def get_league_info(
+        self,
+        league_id: str,
+        cookie: str,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bytes:
         """League metadata, including <franchise ...> and baseURL."""
-        return self._export("league", params={"L": league_id}, cookie=cookie)
+        ctx = {"resource": "league", "league_id": str(league_id)}
+        if context:
+            ctx.update(context)
+        return self._export("league", params={"L": league_id}, cookie=cookie, context=ctx)
 
-    def get_rosters(self, league_id: str, cookie: str) -> bytes:
+    def get_rosters(
+        self,
+        league_id: str,
+        cookie: str,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bytes:
         """Roster listing per franchise; useful fallback if assets is empty."""
-        return self._export("rosters", params={"L": league_id}, cookie=cookie)
+        ctx = {"resource": "rosters", "league_id": str(league_id)}
+        if context:
+            ctx.update(context)
+        return self._export("rosters", params={"L": league_id}, cookie=cookie, context=ctx)
 
-    def get_future_picks(self, league_id: str, cookie: str) -> bytes:
+    def get_future_picks(
+        self,
+        league_id: str,
+        cookie: str,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bytes:
         """Future draft picks per franchise (fallback when assets is blocked)."""
-        return self._export("futureDraftPicks", params={"L": league_id}, cookie=cookie)
+        ctx = {"resource": "futureDraftPicks", "league_id": str(league_id)}
+        if context:
+            ctx.update(context)
+        return self._export("futureDraftPicks", params={"L": league_id}, cookie=cookie, context=ctx)
 
-    def get_pending_trades(self, league_id: str, cookie: str) -> bytes:
+    def get_pending_trades(
+        self,
+        league_id: str,
+        cookie: str,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bytes:
         """
         Open/pending trades only (no completed history).
         Maps to export TYPE=pendingTrades.
         """
-        return self._export("pendingTrades", params={"L": league_id}, cookie=cookie)
+        ctx = {"resource": "pendingTrades", "league_id": str(league_id)}
+        if context:
+            ctx.update(context)
+        return self._export("pendingTrades", params={"L": league_id}, cookie=cookie, context=ctx)
 
     # ---------------------------- Internals ----------------------------------
 
@@ -202,6 +289,8 @@ class MFLClient:
         cookie: Optional[str] = None,
         retries: int = 3,
         backoff_base: float = 0.75,
+        *,
+        context: Optional[Dict[str, Any]] = None,
     ) -> bytes:
         """
         Core GET wrapper with retry, logging, and cross-subdomain auth helpers.
@@ -231,12 +320,23 @@ class MFLClient:
         while True:
             attempt += 1
             start = time.time()
+            started_at = datetime.now(timezone.utc)
             resp = requests.get(url, params=merged_params, headers=headers, timeout=self.timeout)
             elapsed_ms = int((time.time() - start) * 1000)
 
             # Retry on transient statuses
             if resp.status_code in RETRY_STATUSES and attempt <= retries:
-                _log_http_safe(f"GET export:{type_}", resp, elapsed_ms, include_body=True)
+                log_context = {"attempt": attempt, "type": type_}
+                if context:
+                    log_context.update(context)
+                _log_http_safe(
+                    f"GET export:{type_}",
+                    resp,
+                    elapsed_ms,
+                    include_body=True,
+                    context=log_context,
+                    started_at=started_at,
+                )
                 if resp.status_code == 429:
                     retry_after = self._retry_after_seconds(resp.headers.get("Retry-After"))
                     if retry_after is not None:
@@ -246,10 +346,18 @@ class MFLClient:
                 continue
 
             # Raise if not OK
+            log_context = {"attempt": attempt, "type": type_}
+            if context:
+                log_context.update(context)
+            _log_http_safe(
+                f"GET export:{type_}",
+                resp,
+                elapsed_ms,
+                include_body=True,
+                context=log_context,
+                started_at=started_at,
+            )
             self._raise_for_status(resp)
-
-            # Log success
-            _log_http_safe(f"GET export:{type_}", resp, elapsed_ms, include_body=True)
 
             return resp.content
 
