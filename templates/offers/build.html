@@ -224,7 +224,7 @@
               {% for bd in row.buyers %}
                 <div class="buyer-card" data-buyer-id="{{ bd.team.id }}">
                   <label class="buyer-name" style="display:flex;align-items:center;gap:8px;">
-                    <input type="checkbox" name="buyer_{{ lid }}" value="{{ bd.team.id }}" checked>
+                    <input type="checkbox" name="buyer_{{ lid }}" value="{{ bd.team.id }}">
                     <span>{{ bd.team.name }}</span>
                     <span class="muter">FID {{ bd.team.mfl_id }} • Record {{ bd.team.record or '–' }}</span>
                   </label>
@@ -369,7 +369,15 @@
     leagueBoxes.forEach(cb => {
       cb.addEventListener('change', () => {
         if (cb.checked) {
-          leagueBoxes.forEach(other => { if (other !== cb) other.checked = false; });
+          leagueBoxes.forEach(other => {
+            if (other !== cb) {
+              other.checked = false;
+              const otherCard = other.closest('.league-card');
+              if (otherCard) {
+                otherCard.querySelectorAll('input[name^="buyer_"]').forEach(b => { b.checked = false; });
+              }
+            }
+          });
 
           const card = cb.closest('.league-card');
           if (card) {

@@ -128,6 +128,45 @@ def _wants_json_response() -> bool:
         return True
     return False
 
+
+def _fetch_league_assets(
+    league_id: str,
+    *,
+    api_client: MFLClient,
+    api_cookie: str | None,
+    data_client: MFLClient,
+    data_cookie: str | None,
+    data_host: str | None,
+):
+    """Download and parse league assets using standard fallbacks."""
+
+    fallback_used = False
+    host_used = data_host or "api.myfantasyleague.com"
+
+    assets_xml = data_client.get_assets(league_id, data_cookie)
+    want_api_fallback = bool(
+        assets_xml and b"<error" in assets_xml and b"API requires logged in user" in assets_xml
+    )
+    if want_api_fallback:
+        assets_xml = api_client.get_assets(league_id, api_cookie)
+        host_used = "api.myfantasyleague.com"
+
+    use_fallbacks = bool(
+        assets_xml and b"<error" in assets_xml and b"API requires logged in user" in assets_xml
+    )
+    if use_fallbacks:
+        fallback_used = True
+        rosters_xml = data_client.get_rosters(league_id, data_cookie)
+        try:
+            picks_xml = data_client.get_future_picks(league_id, data_cookie)
+        except Exception:
+            picks_xml = None
+        assets_payload = parse_rosters_fallback(rosters_xml, picks_xml)
+    else:
+        assets_payload = parse_assets(assets_xml or b"")
+
+    return assets_payload, fallback_used, host_used
+
 # --- entry point to the Offers flow from the Trades home ---
 @mfl_bp.route("/offers", methods=["GET"])
 @login_required
@@ -221,7 +260,14 @@ def mfl_config():
     api_cookie = getattr(current_user, "mfl_cookie_api", None) or getattr(current_user, "session_key", None)
 
     try:
-        xml = api_client.get_user_leagues(api_cookie)
+        xml = api_client.get_user_leagues(
+            api_cookie,
+            context={
+                "operation": "league_sync",
+                "host": "api.myfantasyleague.com",
+                "stage": "discover_leagues",
+            },
+        )
         raw_found = parse_user_leagues(xml)
     except Exception as e:
         flash(f"Could not fetch leagues from MFL: {e}", "danger")
@@ -571,7 +617,16 @@ def mfl_config_submit():
             out: dict = {"lid": lid, "host_used": host_key, "errors": [], "fallback_used": False}
             try:
                 # 1) league info from API host (consistent source)
-                info_xml = api_client.get_league_info(lid, api_cookie)
+                info_xml = api_client.get_league_info(
+                    lid,
+                    api_cookie,
+                    context={
+                        "league_id": lid,
+                        "host": "api.myfantasyleague.com",
+                        "operation": "league_sync",
+                        "stage": "league_info",
+                    },
+                )
                 try:
                     franchise_meta, roster_text, league_base_url = parse_league_info(info_xml) if info_xml else ({}, None, None)
                 except Exception as e:
@@ -582,16 +637,52 @@ def mfl_config_submit():
                 out["resolved_host"] = spec["prefer_host"] or _host_only(league_base_url) or host_by_lid.get(lid) or host_key
 
                 # 2) assets (host first, fallback to API if blocked)
-                assets_xml = data_client.get_assets(lid, data_cookie)
+                assets_xml = data_client.get_assets(
+                    lid,
+                    data_cookie,
+                    context={
+                        "league_id": lid,
+                        "host": host_key,
+                        "operation": "league_sync",
+                        "stage": "assets",
+                    },
+                )
                 want_api_fallback = bool(assets_xml and b"<error" in assets_xml and b"API requires logged in user" in assets_xml)
                 if want_api_fallback:
-                    assets_xml = api_client.get_assets(lid, api_cookie)
+                    assets_xml = api_client.get_assets(
+                        lid,
+                        api_cookie,
+                        context={
+                            "league_id": lid,
+                            "host": "api.myfantasyleague.com",
+                            "operation": "league_sync",
+                            "stage": "assets_fallback",
+                        },
+                    )
                 use_fallbacks = bool(assets_xml and b"<error" in assets_xml and b"API requires logged in user" in assets_xml)
                 if use_fallbacks:
                     out["fallback_used"] = True
-                    rosters_xml = data_client.get_rosters(lid, data_cookie)
+                    rosters_xml = data_client.get_rosters(
+                        lid,
+                        data_cookie,
+                        context={
+                            "league_id": lid,
+                            "host": host_key,
+                            "operation": "league_sync",
+                            "stage": "rosters_fallback",
+                        },
+                    )
                     try:
-                        picks_xml = data_client.get_future_picks(lid, data_cookie)
+                        picks_xml = data_client.get_future_picks(
+                            lid,
+                            data_cookie,
+                            context={
+                                "league_id": lid,
+                                "host": host_key,
+                                "operation": "league_sync",
+                                "stage": "future_picks_fallback",
+                            },
+                        )
                     except Exception:
                         picks_xml = None
                     assets = parse_rosters_fallback(rosters_xml, picks_xml)
@@ -600,9 +691,27 @@ def mfl_config_submit():
                 out["assets"] = assets
 
                 # 3) standings (host first, fallback to API if blocked)
-                standings_xml = data_client.get_standings(lid, data_cookie)
+                standings_xml = data_client.get_standings(
+                    lid,
+                    data_cookie,
+                    context={
+                        "league_id": lid,
+                        "host": host_key,
+                        "operation": "league_sync",
+                        "stage": "standings",
+                    },
+                )
                 if standings_xml and b"<error" in standings_xml and b"API requires logged in user" in standings_xml:
-                    standings_xml = api_client.get_standings(lid, api_cookie)
+                    standings_xml = api_client.get_standings(
+                        lid,
+                        api_cookie,
+                        context={
+                            "league_id": lid,
+                            "host": "api.myfantasyleague.com",
+                            "operation": "league_sync",
+                            "stage": "standings_fallback",
+                        },
+                    )
                 out["standings"] = parse_standings(standings_xml)
             except Exception as e:
                 out["errors"].append(str(e))
@@ -743,18 +852,22 @@ def mfl_config_sync_one():
     api_client = MFLClient(year=year)
 
     host_by_lid: dict[str, str] = {}
-    try:
-        xml = api_client.get_user_leagues(api_cookie)
-        for rec in parse_user_leagues(xml):
-            if isinstance(rec, dict):
-                lid = str(rec.get("league_id") or rec.get("id") or "").strip()
-                host = rec.get("host")
-                if lid and host:
-                    normalized = _normalize_host_candidate(host)
-                    if normalized:
-                        host_by_lid[lid] = normalized
-    except Exception as e:
-        current_app.logger.info("could not build myleagues host map for config sync one: %s", e)
+    stored_host = _normalize_host_candidate(getattr(league, "league_host", None))
+    if stored_host:
+        host_by_lid[league.mfl_id] = stored_host
+    else:
+        try:
+            xml = api_client.get_user_leagues(api_cookie)
+            for rec in parse_user_leagues(xml):
+                if isinstance(rec, dict):
+                    lid = str(rec.get("league_id") or rec.get("id") or "").strip()
+                    host = rec.get("host")
+                    if lid and host:
+                        normalized = _normalize_host_candidate(host)
+                        if normalized:
+                            host_by_lid[lid] = normalized
+        except Exception as e:
+            current_app.logger.info("could not build myleagues host map for config sync one: %s", e)
 
     def _resolve_client(host: str | None) -> tuple[MFLClient, str | None, str | None]:
         normalized_host = (
@@ -833,35 +946,18 @@ def mfl_config_sync_one():
                 "roster_text_updated": metrics_info.get("roster_text_updated", 0),
                 "standings_updated": standings_count,
             }
-        else:  # ASSETS
+        else:  # ASSETS        else:  # ASSETS
             resolved_host = getattr(league, "league_host", None)
-            data_client, data_cookie, host_used = _resolve_client(resolved_host)
+            data_client, data_cookie, host_used_initial = _resolve_client(resolved_host)
 
-            assets_xml = data_client.get_assets(league_id, data_cookie)
-            want_api_fallback = bool(
-                assets_xml
-                and b"<error" in assets_xml
-                and b"API requires logged in user" in assets_xml
+            assets_payload, fallback_used, host_used = _fetch_league_assets(
+                league_id,
+                api_client=api_client,
+                api_cookie=api_cookie,
+                data_client=data_client,
+                data_cookie=data_cookie,
+                data_host=host_used_initial,
             )
-            if want_api_fallback:
-                assets_xml = api_client.get_assets(league_id, api_cookie)
-                host_used = "api.myfantasyleague.com"
-
-            use_fallbacks = bool(
-                assets_xml
-                and b"<error" in assets_xml
-                and b"API requires logged in user" in assets_xml
-            )
-            if use_fallbacks:
-                fallback_used = True
-                rosters_xml = data_client.get_rosters(league_id, data_cookie)
-                try:
-                    picks_xml = data_client.get_future_picks(league_id, data_cookie)
-                except Exception:
-                    picks_xml = None
-                assets_payload = parse_rosters_fallback(rosters_xml, picks_xml)
-            else:
-                assets_payload = parse_assets(assets_xml or b"")
 
             metrics_assets: dict = {}
 
@@ -910,6 +1006,126 @@ def mfl_config_sync_one():
         )
         status = 502
         return jsonify({"ok": False, "error": str(exc), "retryable": True}), status
+
+
+# --------------------------- League assets refresh --------------------------
+
+
+@mfl_bp.route("/refresh-assets", methods=["GET"])
+@login_required
+def refresh_assets_all():
+    """Refresh assets (rosters + picks) for all of the user's configured leagues."""
+    miss = _require_mfl_cookie()
+    if miss:
+        return miss
+
+    leagues = League.query.filter_by(user_id=current_user.id).all()
+    if not leagues:
+        flash("No leagues configured yet.", "warning")
+        return redirect(url_for("leagues.my_leagues"))
+
+    api_cookie = getattr(current_user, "mfl_cookie_api", None) or getattr(current_user, "session_key", None)
+    host_cookies = (
+        current_user.get_mfl_host_cookies() if hasattr(current_user, "get_mfl_host_cookies") else {}
+    )
+
+    success_count = 0
+    fallback_count = 0
+    failure_details: list[str] = []
+
+    leagues_by_year: dict[int, list[League]] = {}
+    for league in leagues:
+        leagues_by_year.setdefault(league.year, []).append(league)
+
+    for year, year_leagues in leagues_by_year.items():
+        api_client = MFLClient(year=year)
+
+        host_by_lid: dict[str, str] = {}
+        try:
+            xml = api_client.get_user_leagues(api_cookie)
+            for rec in parse_user_leagues(xml):
+                if isinstance(rec, dict):
+                    lid = str(rec.get("league_id") or rec.get("id") or "").strip()
+                    host = _normalize_host_candidate(rec.get("host"))
+                    if lid and host:
+                        host_by_lid[lid] = host
+        except Exception as e:
+            current_app.logger.info("could not build host map for refresh assets year=%s: %s", year, e)
+
+        clients_by_host: dict[str, MFLClient] = {"api.myfantasyleague.com": api_client}
+        cookies_by_host: dict[str, str | None] = {
+            "api.myfantasyleague.com": _append_user_id_cookie(api_cookie, api_cookie)
+        }
+
+        def _resolve_client(lg: League, host: str | None) -> tuple[MFLClient, str | None, str]:
+            normalized = (
+                _normalize_host_candidate(host)
+                or _normalize_host_candidate(host_by_lid.get(str(lg.mfl_id)))
+            )
+            host_key = normalized or "api.myfantasyleague.com"
+            if host_key not in clients_by_host:
+                clients_by_host[host_key] = MFLClient(year=year, base_url=f"https://{host_key}/{year}/")
+                cookies_by_host[host_key] = _append_user_id_cookie(host_cookies.get(host_key), api_cookie)
+            return clients_by_host[host_key], cookies_by_host.get(host_key), host_key
+
+        for league in year_leagues:
+            lid = league.mfl_id
+            try:
+                data_client, data_cookie, host_used_initial = _resolve_client(
+                    league, getattr(league, "league_host", None)
+                )
+
+                assets_payload, fallback_used, host_used = _fetch_league_assets(
+                    lid,
+                    api_client=api_client,
+                    api_cookie=api_cookie,
+                    data_client=data_client,
+                    data_cookie=data_cookie,
+                    data_host=host_used_initial,
+                )
+
+                metrics_assets = sync_league_assets(league, assets_payload or [], commit=False)
+                league.synced_at = datetime.utcnow()
+                db.session.commit()
+
+                success_count += 1
+                if fallback_used:
+                    fallback_count += 1
+
+                current_app.logger.info(
+                    "refresh_assets_all user=%s league=%s host=%s metrics=%s fallback=%s",
+                    current_user.id,
+                    lid,
+                    host_used,
+                    metrics_assets,
+                    fallback_used,
+                )
+            except Exception as exc:
+                db.session.rollback()
+                failure_details.append(f"{league.name or lid}: {exc}")
+                current_app.logger.exception(
+                    "refresh_assets_all failed for league=%s year=%s: %s", lid, year, exc
+                )
+
+    if success_count:
+        message = f"Refreshed assets for {success_count} league{'s' if success_count != 1 else ''}."
+        if fallback_count:
+            message += f" Used fallback data for {fallback_count}."
+        flash(message, "success")
+
+    if failure_details:
+        flash(
+            "Failed to refresh some leagues: " + "; ".join(failure_details[:3]) + (
+                "…" if len(failure_details) > 3 else ""
+            ),
+            "danger",
+        )
+
+    if not success_count and not failure_details:
+        flash("No leagues were refreshed.", "warning")
+
+    return redirect(url_for("leagues.my_leagues"))
+
 
 # --------------------------- Trades: shared fetcher --------------------------
 

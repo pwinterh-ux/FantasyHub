@@ -98,7 +98,7 @@
 
     /* --------- Toasts --------- */
     #toast-stack{
-      position: fixed; top: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 9999;
+      position: fixed; top: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10040;
     }
     .toast{
       backdrop-filter: blur(8px);
@@ -129,6 +129,36 @@
     }
 
     .muted{ opacity:.85; }
+
+    /* ======= GLOBAL OVERLAY (spinner/progress) ======= */
+    #globalSyncOverlay {
+      position: fixed; inset: 0;
+      background: rgba(15, 23, 42, 0.82);
+      display: none; align-items: center; justify-content: center;
+      z-index: 10050; padding: 20px;
+    }
+    .gso-card {
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid rgba(96, 165, 250, 0.25);
+      border-radius: 14px;
+      box-shadow: 0 18px 38px rgba(15, 23, 42, 0.55);
+      padding: 28px 26px;
+      width: min(420px, 100%);
+      display: flex; flex-direction: column; align-items: center;
+      gap: 14px; text-align: center;
+    }
+    .gso-spinner {
+      width: 56px; height: 56px; border: 6px solid rgba(255,255,255,.25);
+      border-top-color: #38bdf8; border-radius: 50%; animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .gso-headline { color:#fff; font-weight:600; font-size:1.15rem; }
+    .gso-league   { color:rgba(255,255,255,0.82); font-size:1rem; }
+    .gso-phase    { color:rgba(96,165,250,0.9); font-size:0.95rem; font-weight:500; }
+    .gso-detail   { color:rgba(226,232,240,0.95); font-size:0.95rem; min-height:1.6em; }
+    .gso-actions  { display:flex; gap:12px; }
+    .gso-progress { width:240px; max-width:100%; height:6px; background:rgba(255,255,255,.12); border-radius:4px; overflow:hidden; }
+    .gso-progress > div { height:100%; width:0%; background:#60a5fa; transition: width .25s ease; }
   </style>
 </head>
 <body>
@@ -166,10 +196,11 @@
       <nav>
         <ul class="nav-links">
           <li><a href="{{ url_for('start') }}">Leagues</a></li>
+          <!-- NOTE: no overlay binding on Trades here anymore -->
           <li><a href="{{ url_for('mfl.trades_home') }}">Trades</a></li>
-          <li><a href="{{ url_for('live.live_index') }}">Matchups</a></li>
+          <li><a href="{{ url_for('live.live_index') }}" data-overlay-intent="live">Matchups</a></li>
           <li><a href="{{ url_for('lineups.lineups_rapid_start') }}">Lineups</a></li>
-          <li><a href="{{ url_for('injuries.injuries_index') }}">Injuries</a></li>
+          <li><a href="{{ url_for('injuries.injuries_index') }}" data-overlay-intent="injuries">Injuries</a></li>
           <li><a href="#" class="disabled" aria-disabled="true" title="Coming soon">Waivers</a></li>
 
           {% if current_user.is_authenticated %}
@@ -209,40 +240,163 @@
   <!-- Footer -->
   <footer class="site-footer">
     <div class="page-wrap">
-      <p>&copy; {{ current_year }} RosterDash &mdash; Contact @pwindynasty on X with feedback</p>
+      <p>&copy; {{ current_year }} RosterDash &mdash; Contact @RosterDash on X with feedback</p>
     </div>
   </footer>
   {% endif %}
 
+  <!-- GLOBAL OVERLAY DOM -->
+  <div id="globalSyncOverlay" aria-live="polite" aria-busy="true" hidden>
+    <div class="gso-card">
+      <div class="gso-spinner" id="gsoSpinner"></div>
+      <div class="gso-headline" id="gsoHeadline">Working…</div>
+      <div class="gso-league" id="gsoLeague"></div>
+      <div class="gso-phase" id="gsoPhase"></div>
+      <div class="gso-progress" id="gsoProgress" aria-hidden="true">
+        <div id="gsoProgressBar"></div>
+      </div>
+      <div class="gso-detail" id="gsoDetail">Please wait…</div>
+      <div class="gso-actions">
+        <button type="button" class="button" id="gsoRetry" style="display:none;">Retry</button>
+        <button type="button" class="button" id="gsoCancel" style="display:none;background:#444;">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Minimal config for auto-bindings -->
+  <script id="baseOverlayConfig" type="application/json">
+    {{ {
+        "live": url_for('live.live_index'),
+        "injuries": url_for('injuries.injuries_index')
+      } | tojson }}
+  </script>
+
   <script>
-    // Toasts: success/info auto-hide, warning/danger persist until user closes.
+    // Toasts autohide/persist
     (function () {
       const toasts = document.querySelectorAll('#toast-stack .toast');
       toasts.forEach((t, i) => {
         const btn = t.querySelector('.toast-close');
-        if (btn) {
-          btn.addEventListener('click', () => {
-            t.classList.add('hide');
-            setTimeout(() => t.remove(), 400);
-          });
-        }
+        if (btn) btn.addEventListener('click', () => { t.classList.add('hide'); setTimeout(() => t.remove(), 400); });
 
-        // Persist warnings & errors (and anything with data-sticky="true")
-        const isSticky =
-          t.classList.contains('toast-warning') ||
-          t.classList.contains('toast-danger') ||
-          t.dataset.sticky === 'true';
-
+        const isSticky = t.classList.contains('toast-warning') || t.classList.contains('toast-danger') || t.dataset.sticky === 'true';
         if (!isSticky) {
           const delay = 1500 + (i * 150);
-          setTimeout(() => {
-            t.classList.add('hide');
-            setTimeout(() => t.remove(), 400);
-          }, delay);
+          setTimeout(() => { t.classList.add('hide'); setTimeout(() => t.remove(), 400); }, delay);
         }
       });
     })();
-  </script>
 
+    // ===== Global Overlay Helper (window.SyncOverlay) =====
+    (function () {
+      const overlay     = document.getElementById('globalSyncOverlay');
+      if (!overlay) return;
+      const spinner     = document.getElementById('gsoSpinner');
+      const headline    = document.getElementById('gsoHeadline');
+      const leagueEl    = document.getElementById('gsoLeague');
+      const phaseEl     = document.getElementById('gsoPhase');
+      const detailEl    = document.getElementById('gsoDetail');
+      const progress    = document.getElementById('gsoProgress');
+      const progressBar = document.getElementById('gsoProgressBar');
+      const retryBtn    = document.getElementById('gsoRetry');
+      const cancelBtn   = document.getElementById('gsoCancel');
+
+      function show(opts) {
+        opts = opts || {};
+        overlay.style.display = 'flex';
+        overlay.hidden = false;
+        overlay.setAttribute('aria-busy', 'true');
+        spinner.style.display = (opts.spinner === false) ? 'none' : 'block';
+        headline.textContent = opts.headline || 'Working…';
+        leagueEl.textContent = opts.league || '';
+        phaseEl.textContent  = opts.phase || '';
+        detailEl.textContent = opts.detail || '';
+        setProgress(opts.done || 0, opts.total || 0);
+        hideActions();
+      }
+      function update(opts) {
+        opts = opts || {};
+        if ('headline' in opts) headline.textContent = opts.headline || '';
+        if ('league'   in opts) leagueEl.textContent = opts.league || '';
+        if ('phase'    in opts) phaseEl.textContent  = opts.phase || '';
+        if ('detail'   in opts) detailEl.textContent = opts.detail || '';
+        if ('spinner'  in opts) spinner.style.display = opts.spinner ? 'block' : 'none';
+        if ('done' in opts || 'total' in opts) setProgress(opts.done || 0, opts.total || 0);
+      }
+      function hide() {
+        overlay.style.display = 'none';
+        overlay.hidden = true;
+        overlay.setAttribute('aria-busy', 'false');
+        hideActions();
+      }
+      function setProgress(done, total) {
+        if (!total) {
+          progress.setAttribute('aria-hidden', 'true');
+          progress.style.display = 'none';
+          progressBar.style.width = '0%';
+          return;
+        }
+        const pct = Math.min(100, Math.round((done / total) * 100));
+        progress.setAttribute('aria-hidden', 'false');
+        progress.style.display = 'block';
+        progressBar.style.width = pct + '%';
+      }
+      function hideActions() {
+        retryBtn.style.display = 'none';
+        cancelBtn.style.display = 'none';
+        retryBtn.onclick = null;
+        cancelBtn.onclick = null;
+        cancelBtn.textContent = 'Cancel';
+      }
+      function pause(message, allowRetry) {
+        return new Promise(res => {
+          spinner.style.display = 'none';
+          headline.textContent = 'Paused';
+          detailEl.textContent = message || 'Paused.';
+          hideActions();
+          if (allowRetry) {
+            retryBtn.style.display = 'inline-flex';
+            retryBtn.onclick = () => { hideActions(); spinner.style.display = 'block'; detailEl.textContent = 'Retrying…'; res(true); };
+          }
+          cancelBtn.style.display = 'inline-flex';
+          if (!allowRetry) cancelBtn.textContent = 'Close';
+          cancelBtn.onclick = () => { hideActions(); res(false); };
+        });
+      }
+
+      window.SyncOverlay = { show, update, hide, pause };
+
+      // ----- Auto-bind to top-nav (Matchups + Injuries only) -----
+      try {
+        const cfg = JSON.parse((document.getElementById('baseOverlayConfig')?.textContent || '{}'));
+        const rules = [
+          // Matchups: show headline + keep room for per-league progress (subtitle set by pages if needed)
+          { sel: `a.nav-links a[data-overlay-intent="live"], a[href="${cfg.live||''}"]`, headline: 'Checking scoring…', phase: 'Matchups', withLeague: true },
+          // Injuries: headline only; do NOT show league subtitle
+          { sel: `a.nav-links a[data-overlay-intent="injuries"], a[href="${cfg.injuries||''}"]`, headline: 'Checking injuries…', phase: 'Injuries', withLeague: false },
+        ];
+
+        rules.forEach(rule => {
+          document.querySelectorAll(rule.sel).forEach(a => {
+            a.addEventListener('click', (ev) => {
+              let subtitle = '';
+              if (rule.withLeague) {
+                // If the click originated inside a league row we can show it,
+                // but it’s okay if we don’t find one (page can update it later).
+                const src = ev.target.closest('[data-league-name],[data-mfl-id]') || document.querySelector('[data-league-name]');
+                const league = src?.getAttribute?.('data-league-name') || '';
+                const mflId  = src?.getAttribute?.('data-mfl-id') || '';
+                subtitle = league ? (mflId ? `${league} (${mflId})` : league) : '';
+              }
+              show({ headline: rule.headline, phase: rule.phase, league: rule.withLeague ? subtitle : '', detail: 'Please wait…', spinner: true });
+              // allow normal navigation
+            }, { capture: true });
+          });
+        });
+      } catch (e) {
+        // non-fatal
+      }
+    })();
+  </script>
 </body>
 </html>
