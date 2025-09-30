@@ -1,0 +1,407 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-wrap">
+  <div class="tile pad" style="max-width:1200px;margin:18px auto 10px;">
+    <div class="hdr-row">
+      <div>
+        <h2 class="hdr" style="margin:0;">Exposure</h2>
+        <div class="sub">
+          Across {{ summary.leagues_total }} leagues (MFL {{ summary.leagues_mfl }}, Sleeper {{ summary.leagues_sleeper }})
+          <span id="overlapBanner" style="display:none;">
+            • Overlapping with <strong id="overlapName"></strong>
+            (<span id="overlapCount"></span> leagues)
+            <button id="clearOverlap" class="chip clear" type="button">Clear</button>
+          </span>
+        </div>
+      </div>
+
+      <div class="filters">
+        <div class="seg">
+          {% set pos = (filters.pos or '').upper() %}
+          <a href="{{ url_for('exposure.exposure_index', pos='') }}" class="seg-btn {{ 'is-active' if not pos }}">ALL</a>
+          <a href="{{ url_for('exposure.exposure_index', pos='QB', q=filters.q) }}" class="seg-btn {{ 'is-active' if pos=='QB' }}">QB</a>
+          <a href="{{ url_for('exposure.exposure_index', pos='RB', q=filters.q) }}" class="seg-btn {{ 'is-active' if pos=='RB' }}">RB</a>
+          <a href="{{ url_for('exposure.exposure_index', pos='WR', q=filters.q) }}" class="seg-btn {{ 'is-active' if pos=='WR' }}">WR</a>
+          <a href="{{ url_for('exposure.exposure_index', pos='TE', q=filters.q) }}" class="seg-btn {{ 'is-active' if pos=='TE' }}">TE</a>
+        </div>
+        <form method="get" action="{{ url_for('exposure.exposure_index') }}" class="search">
+          <input type="hidden" name="pos" value="{{ filters.pos or '' }}">
+          <input id="q" name="q" value="{{ filters.q or '' }}" placeholder="Search name or team…" />
+          <button class="apply">Apply</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="tile pad dark" style="max-width:1200px;margin:0 auto 18px;">
+    <div class="grid" id="cardsGrid">
+      {% for r in rows %}
+      {% set overall_pct = ( (r.total * 100.0) / (summary.leagues_total or 1) ) | round(0, 'floor') %}
+      {% set mfl_pct = ( (r.mfl_count * 100.0) / (summary.leagues_mfl or 1) ) | round(0, 'floor') %}
+      {% set slp_pct = ( (r.sleeper_count * 100.0) / (summary.leagues_sleeper or 1) ) | round(0, 'floor') %}
+      <div class="card"
+           data-player-key="{{ r.key }}"
+           data-base-total="{{ r.total }}"
+           data-base-mfl="{{ r.mfl_count }}"
+           data-base-slp="{{ r.sleeper_count }}"
+           data-base-denom="{{ summary.leagues_total }}"
+           data-base-denom-mfl="{{ summary.leagues_mfl }}"
+           data-base-denom-slp="{{ summary.leagues_sleeper }}"
+           data-seq="{{ loop.index0 }}">
+        <div class="row-top">
+          <div class="pct" style="--pct: {{ overall_pct }};">
+            <span class="pct-label">{{ overall_pct }}%</span>
+          </div>
+          <div class="info">
+            <div class="name">{{ r.name }}</div>
+            <div class="meta">{{ (r.position or '—') }} • {{ (r.team or '—') }}</div>
+          </div>
+          <div class="actions">
+            <a class="btn sell" href="{{ url_for('offers.search') }}?q={{ r.name|urlencode }}&mode=sell">Sell</a>
+            <a class="btn buy"  href="{{ url_for('offers.search') }}?q={{ r.name|urlencode }}&mode=buy">Buy</a>
+          </div>
+        </div>
+
+        <div class="row-meta">
+          <span class="chip chip-total">Total {{ r.total }}/{{ summary.leagues_total }}</span>
+          <span class="chip chip-mfl">🏈 MFL {{ r.mfl_count }}/{{ summary.leagues_mfl }} ({{ mfl_pct }}%)</span>
+          <span class="chip chip-slp">⚡ Sleeper {{ r.sleeper_count }}/{{ summary.leagues_sleeper }} ({{ slp_pct }}%)</span>
+        </div>
+
+        <div class="row-second">
+          <label class="overlap">
+            <input type="checkbox" class="overlap-toggle"
+                   data-player-key="{{ r.key }}"
+                   data-player-name="{{ r.name }}">
+            <span>Overlap with</span>
+          </label>
+
+          <button class="details-btn" data-player="{{ r.key }}" type="button">Details ▸</button>
+        </div>
+
+        <script type="application/json" class="league-keys">
+          {{ r.holdings | tojson }}
+        </script>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- Drawer -->
+<div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+<aside id="drawer" class="drawer" hidden aria-hidden="true">
+  <div class="drawer-head">
+    <div>
+      <div class="drawer-title" id="drawerTitle">Player</div>
+      <div class="drawer-sub" id="drawerSub"></div>
+    </div>
+    <button id="drawerClose" class="drawer-close" aria-label="Close" type="button">×</button>
+  </div>
+  <div class="drawer-body">
+    <div id="drawerOwnedList"></div>
+  </div>
+</aside>
+
+<style>
+  .page-wrap { --fg:#eaf1f7; --mut:#aeb7c3; --bd:rgba(255,255,255,.12); --bg2:#0b1220; }
+  .hdr-row { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; }
+  .hdr { font-size:22px; }
+  .sub { font-size:12px; color:var(--mut); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .filters{ display:flex; gap:10px; align-items:center; }
+  .seg{ background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1); padding:4px; border-radius:999px; display:flex; gap:4px; }
+  .seg-btn{ font-size:12px; padding:6px 10px; border-radius:999px; text-decoration:none; color:var(--fg); opacity:.85; }
+  .seg-btn.is-active{ background:#1f2937; opacity:1; }
+  .search{ display:flex; gap:6px; }
+  .search input{ border:1px solid rgba(255,255,255,.12); background:#0b1220; color:#eaf1f7; border-radius:10px; padding:8px 10px; width:240px; }
+  .apply{ background:#22c55e; color:#0b1220; font-weight:700; border:0; padding:8px 12px; border-radius:10px; }
+
+  .grid{ display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:12px; }
+  @media (max-width:1100px){ .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width:720px){ .grid { grid-template-columns: 1fr; } }
+
+  .card{ border:1px solid var(--bd); border-radius:14px; background:rgba(10,12,14,.9); padding:10px; }
+  .row-top{ display:flex; align-items:center; gap:10px; }
+
+  .pct{
+    --size: 46px;
+    width:var(--size); height:var(--size); border-radius:50%;
+    background:
+      conic-gradient(#22c55e calc(var(--pct,0)*1%), rgba(255,255,255,.12) 0);
+    position:relative; flex:0 0 var(--size);
+  }
+  .pct::after{ content:""; position:absolute; inset:6px; border-radius:50%; background:#0b1220; z-index:1; }
+  .pct-label{
+    position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    font-size:11px; font-weight:800; color:#eaf1f7; z-index:2; pointer-events:none;
+  }
+
+  .info{ flex:1; min-width:0; }
+  .name{ font-weight:800; color:#eaf1f7; }
+  .meta{ font-size:12px; color:var(--mut); }
+
+  .actions{ display:flex; gap:8px; }
+  .btn{ padding:8px 12px; border-radius:10px; font-weight:800; text-decoration:none; }
+  .btn.buy{ background:rgba(34,197,94,.16); border:1px solid rgba(34,197,94,.35); color:#d1fae5; }
+  .btn.sell{ background:rgba(239,68,68,.12); border:1px solid rgba(239,68,68,.35); color:#fee2e2; }
+
+  .row-meta{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .chip{ border:1px solid var(--bd); padding:2px 8px; border-radius:999px; font-size:11px; background:rgba(255,255,255,.04); white-space:nowrap; color:#eaf1f7; }
+  .chip.clear{ cursor:pointer; }
+
+  .row-second{ margin-top:8px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .overlap{ display:inline-flex; align-items:center; gap:8px; font-size:13px; color:#eaf1f7; }
+  .overlap input{ width:16px; height:16px; }
+
+  .details-btn{ padding:6px 10px; font-size:12px; border-radius:10px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); color:#eaf1f7; }
+
+  .drawer-backdrop[hidden]{ display:none; }
+  .drawer[hidden]{ display:none; }
+  .drawer-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,.5); backdrop-filter: blur(1px); z-index: 80; }
+  .drawer{ position:fixed; top:0; right:0; bottom:0; width:min(420px, 100%); background:#0b1220; border-left:1px solid rgba(255,255,255,.15); box-shadow: -20px 0 60px rgba(0,0,0,.45); z-index: 90; display:flex; flex-direction:column; }
+  .drawer-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px; border-bottom:1px solid rgba(255,255,255,.1); }
+  .drawer-title{ font-weight:800; color:#eaf1f7; }
+  .drawer-sub{ font-size:12px; color:var(--mut); }
+  .drawer-close{ background:transparent; border:0; color:#eaf1f7; font-size:24px; line-height:1; cursor:pointer; }
+  .drawer-body{ padding:14px; overflow:auto; }
+  .owned-list{ display:grid; gap:8px; }
+  .owned-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px; border:1px solid rgba(255,255,255,.12); border-radius:10px; background:rgba(255,255,255,.03); color:#eaf1f7; }
+  .owned-row .mini{ font-size:12px; opacity:.85; }
+</style>
+
+<script>
+(function(){
+  const rowsData = {{ rows | tojson }};
+  const totals = {
+    all: {{ summary.leagues_total or 1 }},
+    mfl: {{ summary.leagues_mfl or 0 }},
+    slp: {{ summary.leagues_sleeper or 0 }},
+  };
+
+  const grid = document.getElementById('cardsGrid');
+
+  // Build index: player -> leagues set + platform map
+  const playerIndex = {};
+  document.querySelectorAll('.card').forEach(card => {
+    const key = card.getAttribute('data-player-key');
+    const dataScript = card.querySelector('script.league-keys');
+    const holdings = dataScript ? JSON.parse(dataScript.textContent || '[]') : [];
+    const set = new Set();
+    const plat = new Map();
+    holdings.forEach(h => { if (h && h.key){ set.add(h.key); plat.set(h.key, h.platform || ''); }});
+    const row = rowsData.find(r => r.key === key) || { name: 'Player' };
+    playerIndex[key] = { name: row.name, set, plat };
+  });
+
+  const cards = Array.from(document.querySelectorAll('.card'));
+  const banner = document.getElementById('overlapBanner');
+  const bannerName = document.getElementById('overlapName');
+  const bannerCount = document.getElementById('overlapCount');
+  const clearOverlap = document.getElementById('clearOverlap');
+
+  // ----- helpers -----
+  function setDonut(card, pct){
+    const donut = card.querySelector('.pct');
+    donut.style.setProperty('--pct', String(pct));
+    const label = donut.querySelector('.pct-label');
+    if (label) label.textContent = `${pct}%`;
+  }
+
+  // denomAll drives the donut; denomMfl and denomSlp used per-platform chips
+  function setChips(card, total, denomAll, mfl, denomMfl, slp, denomSlp, labelPrefix){
+    const chipTotal = card.querySelector('.chip-total');
+    const chipMfl = card.querySelector('.chip-mfl');
+    const chipSlp = card.querySelector('.chip-slp');
+
+    const pctAll = denomAll ? Math.round((total * 100) / denomAll) : 0;
+    const pctMfl = denomMfl ? Math.round((mfl * 100) / denomMfl) : 0;
+    const pctSlp = denomSlp ? Math.round((slp * 100) / denomSlp) : 0;
+
+    chipTotal.textContent = `${labelPrefix} ${total}/${denomAll}`;
+    chipMfl.textContent = `🏈 MFL ${mfl}/${denomMfl} (${pctMfl}%)`;
+    chipSlp.textContent = `⚡ Sleeper ${slp}/${denomSlp} (${pctSlp}%)`;
+    setDonut(card, pctAll);
+  }
+
+  function resetCard(card){
+    const baseTotal = Number(card.getAttribute('data-base-total') || 0);
+    const baseMfl   = Number(card.getAttribute('data-base-mfl') || 0);
+    const baseSlp   = Number(card.getAttribute('data-base-slp') || 0);
+    const denomAll  = Number(card.getAttribute('data-base-denom') || totals.all);
+    const denomMfl  = Number(card.getAttribute('data-base-denom-mfl') || totals.mfl);
+    const denomSlp  = Number(card.getAttribute('data-base-denom-slp') || totals.slp);
+    setChips(card, baseTotal, denomAll, baseMfl, denomMfl, baseSlp, denomSlp, 'Total');
+  }
+
+  function recomputeCardForOverlap(card, anchor){
+    const key = card.getAttribute('data-player-key');
+    const info = playerIndex[key];
+    if (!info){ resetCard(card); return 0; }
+
+    // counts within the anchor leagues
+    let total=0, mfl=0, slp=0;
+    for (const lg of info.set){
+      if (anchor.set.has(lg)){
+        total++;
+        const p = info.plat.get(lg);
+        if (p === 'mfl') mfl++;
+        else if (p === 'sleeper') slp++;
+      }
+    }
+    setChips(
+      card,
+      total,           /* denomAll: */ anchor.set.size,
+      mfl,             /* denomMfl: */ anchor.mflCount,
+      slp,             /* denomSlp: */ anchor.slpCount,
+      'Overlap'
+    );
+    return total;
+  }
+
+  function computeAnchor(key){
+    const info = playerIndex[key];
+    if (!info) return null;
+    let mfl=0, slp=0;
+    for (const lg of info.set){
+      const p = info.plat.get(lg);
+      if (p === 'mfl') mfl++; else if (p === 'sleeper') slp++;
+    }
+    return { set: info.set, mflCount: mfl, slpCount: slp, name: playerIndex[key].name };
+  }
+
+  function showAll(){
+    const ordered = cards.slice().sort((a,b)=> Number(a.dataset.seq)-Number(b.dataset.seq));
+    ordered.forEach(el => { el.style.display=''; grid.appendChild(el); resetCard(el); el.removeAttribute('data-overlap'); });
+    banner.style.display = 'none';
+    document.querySelectorAll('.overlap-toggle').forEach(i => i.checked = false);
+    const url = new URL(location.href);
+    url.searchParams.delete('anchor');
+    history.replaceState(null, '', url.toString());
+  }
+
+  function applyOverlap(anchorKey){
+    const anchor = computeAnchor(anchorKey);
+    if (!anchor || anchor.set.size === 0){ showAll(); return; }
+
+    bannerName.textContent = anchor.name || 'Player';
+    bannerCount.textContent = String(anchor.set.size);
+    banner.style.display = 'inline';
+
+    cards.forEach(card => {
+      const k = card.getAttribute('data-player-key');
+      if (k === anchorKey){
+        const t = recomputeCardForOverlap(card, anchor);
+        card.style.display = '';
+        card.dataset.overlap = String(t);
+        return;
+      }
+      const their = playerIndex[k]?.set || new Set();
+      let intersects = false;
+      for (const lg of their){ if (anchor.set.has(lg)){ intersects = true; break; } }
+      if (!intersects){
+        card.style.display = 'none';
+        card.dataset.overlap = '0';
+      } else {
+        card.style.display = '';
+        const t = recomputeCardForOverlap(card, anchor);
+        card.dataset.overlap = String(t);
+      }
+    });
+
+    // sort visible by overlap count desc, then name
+    const visible = cards.filter(c => c.style.display !== 'none');
+    visible.sort((a,b)=>{
+      const da = Number(b.dataset.overlap||0) - Number(a.dataset.overlap||0);
+      if (da !== 0) return da;
+      const na = (playerIndex[a.dataset.playerKey]?.name || a.querySelector('.name')?.textContent || '').toLowerCase();
+      const nb = (playerIndex[b.dataset.playerKey]?.name || b.querySelector('.name')?.textContent || '').toLowerCase();
+      return na.localeCompare(nb);
+    });
+    visible.forEach(el => grid.appendChild(el));
+
+    const url = new URL(location.href);
+    url.searchParams.set('anchor', anchorKey);
+    history.replaceState(null, '', url.toString());
+  }
+
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t.classList.contains('overlap-toggle')) return;
+    const key = t.getAttribute('data-player-key');
+    if (t.checked){
+      document.querySelectorAll('.overlap-toggle').forEach(x => { if (x !== t) x.checked = false; });
+      applyOverlap(key);
+    } else {
+      showAll();
+    }
+  });
+
+  if (clearOverlap) clearOverlap.addEventListener('click', showAll);
+
+  // Preselect via ?anchor=
+  (function bootstrapAnchor(){
+    const url = new URL(location.href);
+    const anchor = url.searchParams.get('anchor');
+    if (anchor && playerIndex[anchor]){
+      const box = document.querySelector(`.overlap-toggle[data-player-key="${CSS.escape(anchor)}"]`);
+      if (box){ box.checked = true; applyOverlap(anchor); }
+    } else {
+      cards.forEach(resetCard);
+    }
+  })();
+
+  // Drawer
+  const drawer = document.getElementById('drawer');
+  const drawerBackdrop = document.getElementById('drawerBackdrop');
+  const drawerClose = document.getElementById('drawerClose');
+  const drawerTitle = document.getElementById('drawerTitle');
+  const drawerSub = document.getElementById('drawerSub');
+  const drawerOwnedList = document.getElementById('drawerOwnedList');
+
+  function openDrawerFor(card){
+    const key = card.getAttribute('data-player-key');
+    const name = playerIndex[key]?.name || 'Player';
+    const holdingsScript = card.querySelector('script.league-keys');
+    const holdings = holdingsScript ? JSON.parse(holdingsScript.textContent || '[]') : [];
+    const mfl = holdings.filter(h => h.platform === 'mfl').length;
+    const slp = holdings.filter(h => h.platform === 'sleeper').length;
+
+    drawerTitle.textContent = name;
+    drawerSub.textContent = `Owned in ${holdings.length} leagues — MFL ${mfl}, Sleeper ${slp}`;
+    drawerOwnedList.innerHTML = renderOwnedList(holdings);
+
+    drawer.removeAttribute('hidden');
+    drawerBackdrop.removeAttribute('hidden');
+    drawer.setAttribute('aria-hidden', 'false');
+  }
+  function closeDrawer(){ drawer.setAttribute('hidden',''); drawerBackdrop.setAttribute('hidden',''); drawer.setAttribute('aria-hidden','true'); }
+  function renderOwnedList(holdings){
+    if (!holdings || !holdings.length) return '<div class="mini">No leagues found.</div>';
+    const rows = holdings
+      .slice()
+      .sort((a,b)=> (a.platform||'').localeCompare(b.platform||'') || String(a.year||'').localeCompare(String(b.year||'')) || (a.league||'').localeCompare(b.league||''))
+      .map(h => {
+        const plat = h.platform === 'mfl' ? '🏈 MFL' : (h.platform === 'sleeper' ? '⚡ Sleeper' : (h.platform || '—'));
+        return `
+          <div class="owned-row">
+            <div>
+              <div><strong>${h.league || '—'}</strong></div>
+              <div class="mini">${plat} • ${h.year || '—'}</div>
+            </div>
+            <div class="mini">${h.is_starter ? 'Starter' : 'Bench'}</div>
+          </div>
+        `;
+      }).join('');
+    return `<div class="owned-list">${rows}</div>`;
+  }
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.details-btn');
+    if (btn) { const card = btn.closest('.card'); if (card) openDrawerFor(card); return; }
+    if (e.target === drawerBackdrop) { closeDrawer(); return; }
+  });
+  if (drawerClose) drawerClose.addEventListener('click', closeDrawer);
+})();
+</script>
+{% endblock %}

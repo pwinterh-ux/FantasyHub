@@ -1,4 +1,4 @@
-#!/home/pwindynasty/fantasyhub/venv/bin/python3.11
+#!/home/pwindynasty/rosterdash-stage/venv/bin/python
 import sys
 from flask.cli import main
 if __name__ == '__main__':

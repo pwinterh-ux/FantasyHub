@@ -1,12 +1,56 @@
 {% extends "base.html" %}
 {% block content %}
+
+<style>
+  /* Local overlay just for the Open Trades button on this page */
+  #tradesOverlay {
+    position: fixed; inset: 0;
+    background: rgba(15, 23, 42, 0.82);
+    display: none; align-items: center; justify-content: center;
+    z-index: 10060; padding: 20px;
+  }
+  .to-card {
+    background: rgba(15, 23, 42, 0.96);
+    border: 1px solid rgba(96, 165, 250, 0.25);
+    border-radius: 14px;
+    box-shadow: 0 18px 38px rgba(15, 23, 42, 0.55);
+    padding: 28px 26px;
+    width: min(420px, 100%);
+    display: flex; flex-direction: column; align-items: center;
+    gap: 14px; text-align: center;
+  }
+  .to-spinner {
+    width: 56px; height: 56px; border: 6px solid rgba(255,255,255,.25);
+    border-top-color: #38bdf8; border-radius: 50%; animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .to-headline { color:#fff; font-weight:600; font-size:1.15rem; }
+  .to-detail   { color:rgba(226,232,240,0.95); font-size:0.95rem; min-height:1.6em; }
+</style>
+
+<!-- Overlay (only used on this page for Open Trades click) -->
+<div id="tradesOverlay" aria-live="polite" aria-busy="true">
+  <div class="to-card">
+    <div class="to-spinner" id="toSpinner"></div>
+    <div class="to-headline" id="toHeadline">Checking open trades…</div>
+    <div class="to-detail" id="toDetail">
+      {% if has_cached %}
+        Loading results…
+      {% else %}
+        First fetch can take a few seconds.
+      {% endif %}
+    </div>
+  </div>
+</div>
+
 <div class="glass-container" style="max-width:1100px;margin:22px auto;">
   <h2 style="margin:0 0 14px 0;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.35);">
     Trades — {{ year }}
   </h2>
   <div class="cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;">
     <!-- Open Trades -->
-    <a href="{{ url_for('mfl.trades_open') }}"
+    <a id="openTradesLink"
+       href="{{ url_for('mfl.trades_open') }}"
        class="glass-card"
        style="display:block;padding:22px;border-radius:14px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);box-shadow:0 10px 25px rgba(0,0,0,.25);text-decoration:none;color:#fff;border:1px solid rgba(255,255,255,.2);">
       <div style="font-size:20px;font-weight:700;margin-bottom:6px;">Open Trades</div>
@@ -34,4 +78,26 @@
     </a>
   </div>
 </div>
+
+<script>
+  // Only attach spinner to the Open Trades link
+  (function () {
+    const link = document.getElementById('openTradesLink');
+    const overlay = document.getElementById('tradesOverlay');
+    if (!link || !overlay) return;
+
+    // Ensure overlay sits at <body> level in case parent has overflow/stacking
+    if (overlay.parentElement && overlay.parentElement !== document.body) {
+      overlay.parentElement.removeChild(overlay);
+      document.body.appendChild(overlay);
+    }
+
+    link.addEventListener('click', function () {
+      // Show overlay and allow normal navigation to proceed
+      overlay.style.display = 'flex';
+      overlay.setAttribute('aria-busy', 'true');
+    }, { capture: true });
+  })();
+</script>
+
 {% endblock %}

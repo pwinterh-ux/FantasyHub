@@ -69,6 +69,9 @@
     The leagues you keep checked will be synced to this site. Unchecking a league will
     <strong>delete it</strong> (and its teams/rosters/picks) from your account here.
   </p>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+    <button type="button" class="button" id="sleeperLinkBtn">Add/Delete Sleeper</button>
+  </div>
 
   <form id="mflConfigForm" method="POST" action="{{ url_for('mfl.mfl_config_submit') }}">
     <input type="hidden" name="year" value="{{ year }}">
@@ -138,6 +141,10 @@
 </div>
 
 <script>
+  const HAS_SLEEPER_LINK = {{ (current_user.sleeper_user_id is not none)|tojson }};
+  const SLEEPER_CONFIG_URL = {{ url_for('sleeper.sleeper_config', year=year)|tojson }};
+  const SLEEPER_LINK_URL = {{ url_for('sleeper.link_account')|tojson }};
+  let hasSleeperLink = HAS_SLEEPER_LINK;
   const IS_UNLIMITED = {{ (is_unlimited|default(False))|tojson }};
   const MAX_THIS_YEAR = {{ (max_this_year if max_this_year is not none else 0)|tojson }};
   const DEFAULT_PHASES = [
@@ -315,6 +322,7 @@
     const progressBar = document.getElementById('syncProgressBar');
     const retryBtn = document.getElementById('syncRetry');
     const cancelBtn = document.getElementById('syncCancel');
+    const sleeperBtn = document.getElementById('sleeperLinkBtn');
 
     const resetActions = () => {
       retryBtn.style.display = 'none';
@@ -364,6 +372,46 @@
     });
 
     updateCapUI();
+
+    if (sleeperBtn) {
+      sleeperBtn.addEventListener('click', async () => {
+        if (hasSleeperLink) {
+          window.location.href = SLEEPER_CONFIG_URL;
+          return;
+        }
+        const username = prompt('Sleeper username?');
+        if (!username) {
+          return;
+        }
+        sleeperBtn.disabled = true;
+        try {
+          const resp = await fetch(SLEEPER_LINK_URL, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: JSON.stringify({ username }),
+          });
+          const text = await resp.text();
+          let payload = {};
+          if (text) {
+            try { payload = JSON.parse(text); } catch (err) {}
+          }
+          if (!resp.ok || payload.ok === false) {
+            const msg = (payload && payload.error) ? payload.error : 'Failed to link Sleeper.';
+            alert(msg);
+            return;
+          }
+          hasSleeperLink = true;
+          window.location.href = SLEEPER_CONFIG_URL;
+        } catch (err) {
+          alert('Failed to link Sleeper.');
+        } finally {
+          sleeperBtn.disabled = false;
+        }
+      });
+    }
 
     form.addEventListener('submit', async function(e) {
       if (!window.fetch || !window.FormData || !window.URLSearchParams) {
