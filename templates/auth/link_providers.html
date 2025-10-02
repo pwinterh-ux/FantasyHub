@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="tile pad" style="max-width:680px;margin:24px auto;">
+  <h2 style="margin:0 0 6px 0;">Link a League Provider</h2>
+  <p style="opacity:.9;margin:0 0 12px 0;">
+    Connect either provider to get started. You can link both at any time.
+  </p>
+
+  <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px;">
+    <!-- Opens Sleeper username modal -->
+    <button class="btn" id="openSleeperModal" type="button">Link Sleeper</button>
+
+    <!-- Direct to existing MFL login -->
+    <a class="btn" href="{{ url_for('mfl.mfl_login') }}">Link MFL</a>
+  </div>
+</div>
+
+<!-- Modal -->
+<dialog id="sleeperModal" style="border:none;border-radius:12px;max-width:520px;width:calc(100% - 24px);padding:0;">
+  <form method="post" action="{{ url_for('sleeper.link_username') }}">
+    <div style="padding:16px 16px 12px;border-bottom:1px solid rgba(0,0,0,.08);">
+      <div style="font-weight:700;font-size:16px;">Link Sleeper</div>
+      <div style="opacity:.8;font-size:13px;margin-top:4px;">
+        Enter your Sleeper <b>username</b>. We’ll fetch your Sleeper user ID and display name, save them to your account, then take you to league selection.
+      </div>
+    </div>
+
+    <div style="padding:14px 16px;">
+      <label for="sleeper_username" style="display:block;font-weight:600;font-size:13px;margin-bottom:6px;">
+        Sleeper username
+      </label>
+      <input
+        id="sleeper_username"
+        name="username"
+        type="text"
+        required
+        minlength="2"
+        autocomplete="username"
+        placeholder="e.g. fantasy_ace"
+        style="width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;"
+      />
+    </div>
+
+    <div style="padding:10px 16px 14px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid rgba(0,0,0,.06);">
+      <button type="button" id="cancelSleeper" class="btn" style="background:#e5e7eb;color:#111827;border-color:#e5e7eb;">Cancel</button>
+      <button type="submit" class="btn">Continue</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+  const modal = document.getElementById('sleeperModal');
+  const openBtn = document.getElementById('openSleeperModal');
+  const cancelBtn = document.getElementById('cancelSleeper');
+  openBtn?.addEventListener('click', () => {
+    modal?.showModal();
+    setTimeout(() => document.getElementById('sleeper_username')?.focus(), 50);
+  });
+  cancelBtn?.addEventListener('click', () => modal?.close());
+  // Close on backdrop click
+  modal?.addEventListener('click', (e) => {
+    const rect = modal.getBoundingClientRect();
+    const inDialog = (
+      rect.top <= e.clientY && e.clientY <= rect.top + rect.height &&
+      rect.left <= e.clientX && e.clientX <= rect.left + rect.width
+    );
+    if (!inDialog) modal.close();
+  });
+</script>
+{% endblock %}

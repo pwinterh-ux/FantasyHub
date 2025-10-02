@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import requests
@@ -15,9 +15,10 @@ from flask import (
     render_template,
     session,
     url_for,
+    redirect,
 )
 from flask_login import current_user, login_required
-from sqlalchemy import MetaData, Table, select, asc
+from sqlalchemy import MetaData, Table, select, asc, func
 
 from app import db
 from lineups.routes import (
@@ -25,7 +26,8 @@ from lineups.routes import (
     _effective_current_week,
     _league_host,
     _pick_year_for_week_lookup,
-    _require_recent_sync_or_gate,
+    # NOTE: we will NOT use the MFL-only gate; we add a provider-agnostic one below.
+    # _require_recent_sync_or_gate,
 )
 from models import League, Player, Roster, Team
 
@@ -155,6 +157,91 @@ def _clear_server_cached_payload(cache_key: Optional[tuple[str, int, int]]) -> N
     with _SERVER_CACHE_LOCK:
         _SERVER_CACHE.pop(cache_key, None)
 
+# ---------- Provider-agnostic “recent sync” gate ----------
+
+def _reflect_table(name: str) -> Optional[Table]:
+    try:
+        metadata = MetaData()
+        engine = db.session.get_bind()
+        return Table(name, metadata, autoload_with=engine)
+    except Exception:
+        current_app.logger.debug("Unable to reflect table %s", name, exc_info=True)
+        db.session.rollback()
+        return None
+
+def _sleeper_recent_sync_for_user(user_id: int) -> Optional[datetime]:
+    """Return the most recent Sleeper sync timestamp for this user, or None."""
+    tbl = _reflect_table("sleeper_leagues")
+    if tbl is None:
+        return None
+
+    # Try likely timestamp columns in order.
+    for col_name in ("synced_at", "updated_at", "refreshed_at", "refreshed_on"):
+        if col_name in tbl.c:
+            stmt = select(func.max(getattr(tbl.c, col_name))).where(tbl.c.user_id == user_id)
+            val = db.session.execute(stmt).scalar()
+            # val may be datetime or string; normalize to datetime if possible.
+            if hasattr(val, "isoformat"):
+                return val  # already a datetime
+            try:
+                if isinstance(val, str) and val:
+                    # attempt to parse ISO-ish strings
+                    return datetime.fromisoformat(val.replace("Z", "+00:00")).replace(tzinfo=None)
+            except Exception:
+                pass
+            return None
+    return None
+
+def _user_has_any_leagues(user_id: int) -> bool:
+    try:
+        mfl_ct = League.query.filter_by(user_id=user_id).count()
+        if mfl_ct > 0:
+            return True
+        tbl = _reflect_table("sleeper_leagues")
+        if tbl is None:
+            return False
+        cnt = db.session.execute(select(func.count()).select_from(tbl).where(tbl.c.user_id == user_id)).scalar() or 0
+        return cnt > 0
+    except Exception:
+        return False
+
+def _require_recent_sync_or_gate_any(hours: int = 4):
+    """
+    Allow through if the user has a League.synced_at (MFL) OR a Sleeper 'synced' timestamp
+    within the last `hours`. Otherwise, redirect to a safe page to sync.
+    """
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+
+    # MFL latest
+    try:
+        latest_mfl: Optional[datetime] = db.session.query(func.max(League.synced_at))\
+            .filter(League.user_id == current_user.id).scalar()
+    except Exception:
+        latest_mfl = None
+
+    # Sleeper latest
+    try:
+        latest_sleeper = _sleeper_recent_sync_for_user(current_user.id)
+    except Exception:
+        latest_sleeper = None
+
+    def _is_recent(dt: Optional[datetime]) -> bool:
+        try:
+            return bool(dt and dt >= cutoff)
+        except Exception:
+            return False
+
+    if _is_recent(latest_mfl) or _is_recent(latest_sleeper):
+        return None  # pass the gate
+
+    # No recent data — decide where to send the user.
+    if not _user_has_any_leagues(current_user.id):
+        flash("Link a provider to get started (Sleeper or MFL).", "info")
+        return redirect(url_for("link_providers"))
+
+    flash("Please sync your leagues (Sleeper or MFL) to refresh injuries. (We check the last 4 hours.)", "warning")
+    return redirect(url_for("leagues.my_leagues"))
+
 # ---------- MFL-specific ----------
 
 def _fetch_injuries(year: int, week: int) -> tuple[dict[str, dict[str, str]], dict[str, Any]]:
@@ -257,16 +344,6 @@ def _gather_league_players(league: League) -> list[dict[str, Any]]:
     return players
 
 # ---------- Sleeper (reflection) ----------
-
-def _reflect_table(name: str) -> Optional[Table]:
-    try:
-        metadata = MetaData()
-        engine = db.session.get_bind()
-        return Table(name, metadata, autoload_with=engine)
-    except Exception:
-        current_app.logger.debug("Unable to reflect table %s", name, exc_info=True)
-        db.session.rollback()
-        return None
 
 def _sleeper_leagues_for_user(user_id: int) -> list[Mapping[str, Any]]:
     tbl = _reflect_table("sleeper_leagues")
@@ -521,7 +598,8 @@ def _build_payload(year: int, week: int) -> dict[str, Any]:
 @injuries_bp.route("/")
 @login_required
 def injuries_index():
-    gate = _require_recent_sync_or_gate()
+    # Use provider-agnostic gate (MFL or Sleeper recent sync within 4h)
+    gate = _require_recent_sync_or_gate_any(hours=4)
     if gate:
         return gate
 

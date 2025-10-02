@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Tuple
+from datetime import datetime, timezone, date, timedelta
+from typing import Dict, Any, List, Optional, Tuple, Set
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock, Semaphore
@@ -12,7 +12,7 @@ from flask import Blueprint, render_template, current_app, session, redirect, ur
 from flask_login import login_required, current_user
 
 from app import db
-from models import League, Team, Player
+from models import League, Team, Player, SleeperPlayer  # SleeperPlayer for S:<sid> fallback
 from services.mfl_client import MFLClient
 from services.mfl_live import parse_live_scoring, LiveMatchup  # type: ignore
 from services.guards import can_view_aggregate_detail
@@ -20,7 +20,6 @@ from services.guards import can_view_aggregate_detail
 # Sleeper live integration
 from services.sleeper_client import SleeperClient
 from services.sleeper_live import build_sleeper_tiles_for_user
-from models import SleeperPlayer  # <-- needed for S:<sid> name fallback
 
 live_bp = Blueprint("live", __name__, url_prefix="/live")
 
@@ -441,6 +440,7 @@ def _parse_h2h_tiles_from_xml(xml: str, my_fid: str, names_map: Dict[str, str]) 
     return tiles
 
 
+# ---- NFL team code normalizer (for "minutes hint" merge) ----
 _TEAM_NORM = {
     "ARI": "ARI",
     "SF": "SFO", "SFO": "SFO",
@@ -480,6 +480,71 @@ def _norm_team(code: Optional[str]) -> Optional[str]:
     if not code:
         return None
     return _TEAM_NORM.get(str(code).strip().upper(), str(code).strip().upper())
+
+
+# =============================================================================
+# Week selection logic (calendar-based Wednesday cutover)
+# =============================================================================
+
+# NFL Week 1 Thursday openers (source: official schedules)
+WEEK1_THURSDAY = {
+    2024: date(2024, 9, 5),
+    2025: date(2025, 9, 4),
+}
+TOTAL_WEEKS = 18
+
+def _calendar_week_guess(today_utc: Optional[date] = None, year_hint: Optional[int] = None) -> Optional[int]:
+    """
+    Returns the NFL/Fantasy week with a Wednesday 00:00 UTC cutover:
+      Week 1: Wed before NFL opener (Thu) through following Tue
+      Week k: previous + 7 days (k = 1..18)
+    Example target: 2025-10-01 (Wed) => Week 5; 2025-10-08 (Wed) => Week 6
+    """
+    d = today_utc or datetime.now(timezone.utc).date()
+    y = year_hint or d.year
+
+    opener = WEEK1_THURSDAY.get(y)
+    if not opener:
+        return None
+
+    cutover_wed = opener - timedelta(days=1)  # Wednesday before the opener
+    if d < cutover_wed:
+        return None
+
+    delta_days = (d - cutover_wed).days
+    week = 1 + (delta_days // 7)
+    if week < 1:
+        week = 1
+    if week > TOTAL_WEEKS:
+        week = TOTAL_WEEKS
+    return week
+
+
+def _fallback_sleeper_state_week() -> Optional[int]:
+    """Very defensive: ask Sleeper for state.leg/week/display_week if calendar & MFL failed."""
+    try:
+        client = SleeperClient()
+        for meth in ("get_state", "get_state_nfl", "state", "nfl_state", "get_nfl_state"):
+            fn = getattr(client, meth, None)
+            if not callable(fn):
+                continue
+            state = fn()
+            if not isinstance(state, dict):
+                state = {
+                    "leg": getattr(state, "leg", None),
+                    "week": getattr(state, "week", None),
+                    "display_week": getattr(state, "display_week", None),
+                }
+            for key in ("leg", "week", "display_week"):
+                v = state.get(key)
+                if v not in (None, "", 0):
+                    try:
+                        return int(v)
+                    except (TypeError, ValueError):
+                        pass
+        return None
+    except Exception:
+        return None
 
 
 @login_required
@@ -538,7 +603,9 @@ def refresh_live():
 
 
 def _refresh_all_live() -> Dict[str, Any]:
-    year = datetime.now(timezone.utc).year
+    today = datetime.now(timezone.utc).date()
+    year = today.year
+
     leagues: List[League] = (
         db.session.query(League)
         .filter(League.user_id == current_user.id, League.year == year)
@@ -566,28 +633,18 @@ def _refresh_all_live() -> Dict[str, Any]:
             "names_map": names_map,
         })
 
-    if not league_infos:
-        cache = {
-            "ts": _now_ts(),
-            "tiles": [],
-            "player_lookup": {},
-            "team_lookup": {},
-            "aggregate": {"my_total_score": 0, "opp_total_score": 0, "my_progress_pct": 0, "opp_progress_pct": 0,
-                          "my_starters": [], "opp_starters": []},
-        }
-        return cache
-
     logger = current_app.logger
 
+    # Host throttling
     host_locks: dict[str, Semaphore] = defaultdict(lambda: Semaphore(1))
     unique_hosts = {info["host"] for info in league_infos}
     max_workers = min(8, max(2, len(unique_hosts)))
 
     def build_empty_tile(info: Dict[str, Any], note: str = "None Available") -> Dict[str, Any]:
         return {
-            "league_id": info["league_id"],
-            "league_name": info["league_name"],
-            "host": info["host"],
+            "league_id": info.get("league_id"),
+            "league_name": info.get("league_name"),
+            "host": info.get("host"),
             "week": None,
             "note": note,
             "my_team_name": None,
@@ -599,6 +656,11 @@ def _refresh_all_live() -> Dict[str, Any]:
             "my_starters": [],
             "opp_starters": [],
         }
+
+    # --------- PASS 1: Build MFL tiles (if any MFL leagues) ---------
+    mfl_tiles: List[Dict[str, Any]] = []
+    mfl_player_ids: set[str] = set()
+    week_hint: Optional[int] = None
 
     def worker(info: Dict[str, Any]) -> Dict[str, Any]:
         host = info["host"]
@@ -613,6 +675,7 @@ def _refresh_all_live() -> Dict[str, Any]:
                 client = MFLClient(year=info["year"], base_url=info["base_url"])
                 xml = client._export("liveScoring", params={"L": info["league_id"]}, cookie=info["cookie"])
 
+                # All-Play?
                 ap = _parse_allplay_xml(xml, my_fid=my_fid, names_map=names_map)
                 if ap and ap.get("mode") == "ALL_PLAY":
                     week = ap.get("week")
@@ -744,44 +807,31 @@ def _refresh_all_live() -> Dict[str, Any]:
 
         return {"tiles": tiles, "player_ids": all_ids}
 
-    # --------- PASS 1: Build MFL tiles only ---------
-    mfl_tiles: List[Dict[str, Any]] = []
-    mfl_player_ids: set[str] = set()
-    week_hint: Optional[int] = None
+    if league_infos:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = [ex.submit(worker, info) for info in league_infos]
+            for fut in as_completed(futures):
+                try:
+                    res = fut.result()
+                except Exception as e:
+                    logger.warning("Live worker crashed: %s", e)
+                    continue
+                tiles_part = res.get("tiles") or []
+                if week_hint is None:
+                    for t in tiles_part:
+                        if t.get("week"):
+                            try:
+                                week_hint = int(t.get("week"))
+                                break
+                            except Exception:
+                                pass
+                mfl_tiles.extend(tiles_part)
+                mfl_player_ids.update(res.get("player_ids") or set())
 
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = [ex.submit(worker, info) for info in league_infos]
-        for fut in as_completed(futures):
-            try:
-                res = fut.result()
-            except Exception as e:
-                logger.warning("Live worker crashed: %s", e)
-                continue
-            tiles_part = res.get("tiles") or []
-            if week_hint is None:
-                for t in tiles_part:
-                    if t.get("week"):
-                        try:
-                            week_hint = int(t.get("week"))
-                            break
-                        except Exception:
-                            pass
-            mfl_tiles.extend(tiles_part)
-            mfl_player_ids.update(res.get("player_ids") or set())
-
-    if not mfl_tiles:
-        cache = {
-            "ts": _now_ts(),
-            "tiles": [],
-            "player_lookup": {},
-            "team_lookup": {},
-            "aggregate": {"my_total_score": 0, "opp_total_score": 0, "my_progress_pct": 0, "opp_progress_pct": 0,
-                          "my_starters": [], "opp_starters": []},
-        }
-        return cache
-
+    # ---- Build base lookup from MFL ids (optional) ----
     base_lookup = _player_lookup([int(x) for x in mfl_player_ids]) if mfl_player_ids else {}
 
+    # ---- Minutes hints from MFL tiles (optional; improves Sleeper seconds remaining) ----
     minutes_hint_by_team: Dict[str, int] = {}
     def consider(team_code: Optional[str], sec_left: int):
         cc = _norm_team(team_code)
@@ -802,46 +852,42 @@ def _refresh_all_live() -> Dict[str, Any]:
                 sec = int(s.get("seconds_remaining", 0) or 0)
                 consider(team_code, sec)
 
+    # ---- Final week resolution:
+    # 1) week_hint from MFL (if any)
+    # 2) calendar-based Wednesday cutover
+    # 3) Sleeper state (very defensive fallback)
+    if week_hint is None:
+        week_hint = _calendar_week_guess(today, year)
+    if week_hint is None:
+        week_hint = _fallback_sleeper_state_week() or 1
+
     # --------- PASS 2: Sleeper tiles (carry S:<sid> when no mapping) ---------
     sleeper_tiles: List[Dict[str, Any]] = []
-    sleeper_ids: set[str] = set()
-    if week_hint:
-        try:
-            sl_client = SleeperClient()
-            stiles, sids = build_sleeper_tiles_for_user(
-                week=week_hint,
-                minutes_hint_by_team=minutes_hint_by_team,
-                client=sl_client,
-            )
-            sleeper_tiles = stiles or []
-            sleeper_ids = sids or set()
-        except Exception as e:
-            logger.info("Sleeper live merge skipped: %s", e)
+    try:
+        sl_client = SleeperClient()
+        stiles, _ = build_sleeper_tiles_for_user(
+            week=week_hint,
+            minutes_hint_by_team=minutes_hint_by_team,
+            client=sl_client,
+        )
+        sleeper_tiles = stiles or []
+    except Exception as e:
+        logger.info("Sleeper live merge skipped: %s", e)
 
     # Union tiles
     all_tiles = mfl_tiles + sleeper_tiles
 
+    # ---- Unified player display lookup (MFL ids + Sleeper S:<sid>) ----
     def _unified_player_lookup_from_ids(ids: set[str]) -> Dict[str, Dict[str, Any]]:
-        """
-        Build a lookup that understands:
-          - MFL ids (numeric strings)
-          - Sleeper ids with prefix "S:<sid>"
-          - (defensive) bare sleeper sids
-    
-        Preference order for each Sleeper player:
-          1) If linked to an MFL Player, use Player.name / pos / team.
-          2) Else use SleeperPlayer.name / position / team.
-        """
         if not ids:
             return {}
-    
-        # Partition keys
+
         mfl_keys: List[str] = []
         mfl_int_ids: List[int] = []
         sleeper_keys_with_prefix: List[str] = []
         sleeper_sids: List[str] = []
         bare_sids: List[str] = []
-    
+
         for raw in ids:
             s = str(raw)
             if s.startswith("TEAM:"):
@@ -850,41 +896,35 @@ def _refresh_all_live() -> Dict[str, Any]:
                 sleeper_keys_with_prefix.append(s)
                 sleeper_sids.append(s[2:])
                 continue
-            # numeric? treat as MFL id
             try:
                 mfl_int_ids.append(int(s))
                 mfl_keys.append(s)
             except (TypeError, ValueError):
-                # defensive: treat as a bare sleeper id
                 bare_sids.append(s)
-    
+
         out: Dict[str, Dict[str, Any]] = {}
-    
-        # ---------- 1) MFL direct lookups ----------
-        players_by_id: Dict[int, Player] = {}
+
+        # MFL rows
         if mfl_int_ids:
             mrows = Player.query.filter(Player.id.in_(mfl_int_ids)).all()
-            players_by_id = {int(r.id): r for r in mrows}
+            by_id = {int(r.id): r for r in mrows}
             for k in mfl_keys:
                 rid = int(k)
-                prow = players_by_id.get(rid)
+                prow = by_id.get(rid)
                 if prow:
                     out[k] = {
                         "name": prow.name,
                         "pos": getattr(prow, "position", None) or getattr(prow, "pos", None),
                         "team": getattr(prow, "team", None),
                     }
-    
-        # ---------- 2) Sleeper players & linkage ----------
-        # Pull all Sleeper rows for the S:<sid> and bare-sid keys
+
+        # Sleeper rows + linkage
         all_sids = list(set(sleeper_sids + bare_sids))
         sid_rows_by_sid: Dict[str, SleeperPlayer] = {}
         if all_sids:
             srows = SleeperPlayer.query.filter(SleeperPlayer.sleeper_id.in_(all_sids)).all()
             sid_rows_by_sid = {str(sp.sleeper_id): sp for sp in srows}
-    
-        # Collect all candidate MFL ids from Sleeper rows (support multiple column names)
-        candidate_mid_ints: Set[int] = set()
+
         def _extract_mid(sp: SleeperPlayer) -> Optional[int]:
             for attr in ("mfl_id", "player_id", "mfl_player_id", "mflid"):
                 if hasattr(sp, attr):
@@ -896,33 +936,32 @@ def _refresh_all_live() -> Dict[str, Any]:
                     except (TypeError, ValueError):
                         continue
             return None
-    
+
+        candidate_mid_ints: Set[int] = set()
         for sp in sid_rows_by_sid.values():
             mid = _extract_mid(sp)
             if mid is not None:
                 candidate_mid_ints.add(mid)
-    
-        # Batch fetch all linked Player rows
+
         linked_players_by_id: Dict[int, Player] = {}
         if candidate_mid_ints:
             lrows = Player.query.filter(Player.id.in_(list(candidate_mid_ints))).all()
             linked_players_by_id = {int(r.id): r for r in lrows}
-    
+
         def _from_player(prow: Player) -> Dict[str, Any]:
             return {
                 "name": prow.name,
                 "pos": getattr(prow, "position", None) or getattr(prow, "pos", None),
                 "team": getattr(prow, "team", None),
             }
-    
+
         def _from_sleeper(sp: SleeperPlayer) -> Dict[str, Any]:
             return {
                 "name": getattr(sp, "name", None),
                 "pos": getattr(sp, "position", None),
                 "team": getattr(sp, "team", None),
             }
-    
-        # Fill "S:<sid>" keys
+
         for key in sleeper_keys_with_prefix:
             sid = key[2:]
             sp = sid_rows_by_sid.get(sid)
@@ -931,8 +970,7 @@ def _refresh_all_live() -> Dict[str, Any]:
             mid = _extract_mid(sp)
             prow = linked_players_by_id.get(mid) if mid is not None else None
             out[key] = _from_player(prow) if prow else _from_sleeper(sp)
-    
-        # Fill bare sids (defensive)
+
         for sid in bare_sids:
             sp = sid_rows_by_sid.get(sid)
             if not sp:
@@ -940,7 +978,7 @@ def _refresh_all_live() -> Dict[str, Any]:
             mid = _extract_mid(sp)
             prow = linked_players_by_id.get(mid) if mid is not None else None
             out[sid] = _from_player(prow) if prow else _from_sleeper(sp)
-    
+
         return out
 
     # Collect ALL starter ids from all tiles (includes "S:<sid>" and TEAM: rows)

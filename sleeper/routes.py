@@ -1,7 +1,7 @@
 """Sleeper configuration and sync routes."""
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, redirect, render_template, request, url_for, flash
+from flask import Blueprint, jsonify, redirect, render_template, request, url_for, flash, current_app
 from flask_login import current_user, login_required
 
 from app import db
@@ -19,11 +19,57 @@ except Exception:  # pragma: no cover - defensive import
 sleeper_bp = Blueprint("sleeper", __name__, url_prefix="/sleeper")
 
 
-# ---------------------- Account linking / unlinking ---------------------- #
+# ---------------------- Account linking (modal POST) ---------------------- #
+
+@sleeper_bp.route("/link-username", methods=["POST"])
+@login_required
+def link_username():
+    """
+    Accept a Sleeper username (from the /link modal form), resolve to user_id + display_name,
+    persist on current_user, then send the user to /sleeper/config.
+    """
+    username = (request.form.get("username") or "").strip()
+    if not username:
+        flash("Please enter your Sleeper username.", "warning")
+        return redirect(url_for("link_providers"))
+
+    client = SleeperClient()
+    try:
+        sleeper_user = client.get_user(username)
+        if not getattr(sleeper_user, "user_id", None):
+            flash("Couldn’t resolve a Sleeper user ID from that username. Please try again.", "danger")
+            return redirect(url_for("link_providers"))
+
+        # Persist on the user record
+        # Optional: store raw username if you have the column; safe to guard with hasattr.
+        if hasattr(current_user, "sleeper_user"):
+            current_user.sleeper_user = username
+
+        current_user.sleeper_user_id = str(sleeper_user.user_id)
+        current_user.sleeper_display_name = (
+            sleeper_user.display_name or sleeper_user.username or username
+        )
+        db.session.commit()
+
+        flash(f"Sleeper linked: {current_user.sleeper_display_name}", "success")
+        return redirect(url_for("sleeper.sleeper_config"))
+
+    except Exception as exc:
+        current_app.logger.exception("Sleeper username lookup failed: %s", exc)
+        db.session.rollback()
+        flash("We couldn’t reach Sleeper right now. Please try again in a minute.", "danger")
+        return redirect(url_for("link_providers"))
+
+
+# ---------------------- Account linking / unlinking (JSON) ---------------------- #
 
 @sleeper_bp.route("/link", methods=["POST"])
 @login_required
 def link_account():
+    """
+    JSON variant for linking via XHR: {username: "..."} -> stores user_id/display_name.
+    Kept for compatibility with any existing JS callers.
+    """
     payload = request.get_json(silent=True) or request.form or {}
     username = (payload.get("username") or "").strip()
     if not username:
@@ -35,6 +81,8 @@ def link_account():
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 502
 
+    if hasattr(current_user, "sleeper_user"):
+        current_user.sleeper_user = username
     current_user.sleeper_user_id = sleeper_user.user_id
     current_user.sleeper_display_name = (
         sleeper_user.display_name or sleeper_user.username or username
@@ -56,6 +104,9 @@ def unlink_account():
     leagues = SleeperLeague.query.filter_by(user_id=current_user.id).all()
     for league in leagues:
         db.session.delete(league)
+    # Clear identifiers
+    if hasattr(current_user, "sleeper_user"):
+        current_user.sleeper_user = None
     current_user.sleeper_user_id = None
     current_user.sleeper_display_name = None
     db.session.commit()
@@ -82,9 +133,10 @@ def _sleeper_cap_for_user(user) -> tuple[bool, int | None]:
 @sleeper_bp.route("/config", methods=["GET"])
 @login_required
 def sleeper_config():
+    # If not linked yet, send user back to the provider chooser (/link)
     if not current_user.sleeper_user_id:
         flash("Link a Sleeper account first.", "warning")
-        return redirect(url_for("mfl.mfl_config"))
+        return redirect(url_for("link_providers"))
 
     try:
         year = int(request.args.get("year", season_default()))
@@ -96,7 +148,7 @@ def sleeper_config():
         leagues_payload = client.get_user_leagues(current_user.sleeper_user_id, year)
     except Exception as exc:
         flash(f"Could not fetch Sleeper leagues: {exc}", "danger")
-        return redirect(url_for("mfl.mfl_config"))
+        return redirect(url_for("link_providers"))
 
     existing_rows = SleeperLeague.query.filter_by(user_id=current_user.id, year=year).all()
     existing_ids = {row.sleeper_id: row for row in existing_rows}
@@ -134,7 +186,7 @@ def sleeper_config():
         "sleeper_config.html",
         leagues=leagues,
         year=year,
-        username=current_user.sleeper_display_name or current_user.sleeper_user_id,
+        username=getattr(current_user, "sleeper_display_name", None) or getattr(current_user, "sleeper_user_id", None),
         has_link=True,
         seasons=sorted(seasons_found),
         # cap ui vars
@@ -168,8 +220,6 @@ def sleeper_config_submit():
     # ---------- CAP ENFORCEMENT (server-side) ----------
     is_unlimited, cap_val = _sleeper_cap_for_user(current_user)
     if not is_unlimited:
-        # final count = (existing not being removed but also selected) + new additions
-        # We enforce strictly on the selection for THIS year (sleeper leagues are year-scoped).
         final_total = len(selected_ids)
         if cap_val is not None and final_total > int(cap_val):
             over_by = final_total - int(cap_val)
@@ -226,6 +276,7 @@ def sleeper_sync_one():
     try:
         league_db_id = int(request.form.get("league_id"))
     except (TypeError, ValueError):
+        # FIX: bad dict literal -> correct JSON shape
         return jsonify({"ok": False, "error": "Missing league_id", "retryable": False}), 400
 
     league = SleeperLeague.query.filter_by(id=league_db_id, user_id=current_user.id).first()
@@ -240,7 +291,6 @@ def sleeper_sync_one():
         return jsonify({"ok": False, "error": str(exc), "retryable": True}), 502
 
     return jsonify({"ok": True, "metrics": metrics})
-
 
 # ----------------- List saved leagues (for refresh progress) ----------------- #
 

@@ -111,7 +111,7 @@ def create_app():
     _configure_logging(app)
 
     # Import models after db is ready to avoid circulars
-    from models import User, League  # noqa: F401
+    from models import User, League, SleeperLeague  # <-- includes SleeperLeague
 
     @login_manager.user_loader
     def load_user(user_id: str):
@@ -119,6 +119,42 @@ def create_app():
             return User.query.get(int(user_id))
         except Exception:
             return None
+
+    # ---- tiny helper: does this user have ANY leagues (MFL or Sleeper)? ----
+    def _user_has_any_leagues(user_id: int) -> bool:
+        try:
+            # Count is fine here; exists() is also OK if you prefer.
+            mfl_ct = League.query.filter_by(user_id=user_id).count()
+            if mfl_ct > 0:
+                return True
+            slp_ct = SleeperLeague.query.filter_by(user_id=user_id).count()
+            return slp_ct > 0
+        except Exception:
+            # Be permissive on errors (avoid trapping legit users)
+            return False
+
+    # ---- helper: does this user have MFL leagues? (for MFL-only gate) ----
+    def _user_has_mfl_leagues(user_id: int) -> bool:
+        try:
+            return League.query.filter_by(user_id=user_id).limit(1).count() > 0
+        except Exception:
+            return False
+
+    # ---- make MFL-only gate visible to ALL templates ----
+    @app.context_processor
+    def inject_feature_flags():
+        has_mfl = False
+        has_any = False
+        try:
+            if current_user.is_authenticated:
+                has_mfl = _user_has_mfl_leagues(current_user.id)
+                has_any = _user_has_any_leagues(current_user.id)
+        except Exception:
+            pass
+        return {
+            "has_mfl_leagues": has_mfl,  # <-- use this in buttons/links to gate MFL-only features
+            "has_any_leagues": has_any,  # optional convenience
+        }
 
     # ----- Blueprints -----
     from auth.routes import auth_bp
@@ -155,17 +191,23 @@ def create_app():
         """
         Universal entry for 'Get Started' / 'Leagues' buttons:
           - If NOT logged in -> site login page
-          - If logged in and has leagues -> leagues page
-          - If logged in and NO leagues -> MFL link/login page
+          - If logged in and has *any* leagues (MFL or Sleeper) -> leagues page
+          - If logged in and NO leagues -> provider link/chooser
         """
         if not current_user.is_authenticated:
             return redirect(url_for("auth.login"))
 
-        from models import League as _League
-        has_leagues = _League.query.filter_by(user_id=current_user.id).count() > 0
-        if has_leagues:
+        if _user_has_any_leagues(current_user.id):
             return redirect(url_for("leagues.my_leagues"))
-        return redirect(url_for("mfl.mfl_login"))
+
+        # Show a simple provider chooser (you can send straight to Sleeper config if preferred)
+        return redirect(url_for("link_providers"))
+
+    @app.route("/link")
+    @login_required
+    def link_providers():
+        # Renders templates/auth/link_providers.html (two buttons: Sleeper / MFL)
+        return render_template("auth/link_providers.html")
 
     # IMPORTANT: Do NOT connect to the DB at startup (no create_all here)
     # If you need schema migrations, use Alembic or a one-off admin command.
@@ -189,15 +231,19 @@ def create_app():
     @app.route("/account")
     @login_required
     def account():
-        from models import League as _League
+        # Count both MFL + Sleeper leagues for display
+        leagues_count = (
+            League.query.filter_by(user_id=current_user.id).count()
+            + SleeperLeague.query.filter_by(user_id=current_user.id).count()
+        )
+
         from services.entitlements import get_entitlements, describe_plan
         from services.store import get_today_count, get_bonus_balance, get_weekly_free_used
         from services.guards import week_monday_key
 
         u = current_user
 
-        # Counts + plan
-        leagues_count = _League.query.filter_by(user_id=u.id).count()
+        # Plan + entitlements
         ent = get_entitlements(u)
         plan_label = describe_plan(u)
         plan_key = ent.get("plan_key", "free")
