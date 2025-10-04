@@ -69,12 +69,12 @@
   }
   tr:hover .col-name::after{ opacity:.95; }
 
-  /* ---- League tiles grid via FLEX (avoid collisions with global CSS) ---- */
+  /* ---- League tiles grid via FLEX ---- */
   .league-grid{
     display:flex; flex-wrap:wrap; gap:14px; margin-top:16px;
   }
   .league-grid .tile{
-    flex: 1 1 360px;           /* 2–3 per row depending on width */
+    flex: 1 1 360px;
     min-width: 320px;
   }
   .tile h3{ margin:0 0 6px 0; font-size:16px; font-weight:800; display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -88,10 +88,19 @@
   #leagueDetail header{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px; }
   #leagueDetail .title{ font-size:18px; font-weight:800; }
 
-  /* ---- Upsell modal (for free users on header showdown) ---- */
+  /* ---- Upsell modal ---- */
   .upsell-mask { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; z-index:9999; }
   .upsell-modal { width: 520px; max-width: calc(100% - 24px); background:#0b1220; border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:18px; box-shadow:0 8px 40px rgba(0,0,0,.5); }
   .upsell-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:14px; }
+
+  /* ---- Small badge for All-Play ---- */
+  .badge{
+    display:inline-block; padding:3px 8px; border-radius:999px;
+    background: rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18);
+    color:#e5e7eb; font-size:11px; letter-spacing:.2px;
+  }
+  .muted-opp{ opacity:.45; }
+  .hidden{ display:none !important; }
 </style>
 
 <!-- Toolbar -->
@@ -160,10 +169,17 @@
           </thead>
           <tbody id="bodyYou">
             {% for s in aggregate.my_starters %}
-              {% set pl = player_lookup.get(s.player_id|string) or {} %}
+              {% set _pid = s.player_id if s.player_id is not none
+                              else (s.pid if s.pid is defined
+                              else (s.sid if s.sid is defined
+                              else (s.id if s.id is defined else None))) %}
+              {% set _pid_str = (_pid|string) if _pid is not none else '' %}
+              {% set pl = player_lookup.get(_pid_str) or {} %}
               <tr>
                 <td class="col-pos">{{ (pl.pos or '—')|upper }}</td>
-                <td class="col-name" data-league="{{ s.league or '' }}" title="{{ s.league or '' }}">{{ pl.name or ('#' ~ s.player_id) }}</td>
+                <td class="col-name" data-league="{{ s.league or '' }}" title="{{ s.league or '' }}">
+                  {{ pl.name or (_pid_str and ('#' ~ _pid_str)) or '—' }}
+                </td>
                 <td class="col-nfl">{{ pl.team or '—' }}</td>
                 <td class="col-pts">{{ (s.score or 0) | round(1) }}</td>
                 <td class="col-min">{{ ((s.seconds_remaining or 0) // 60 + (1 if ((s.seconds_remaining or 0) % 60) else 0)) }}</td>
@@ -187,10 +203,17 @@
           </thead>
           <tbody id="bodyOpp">
             {% for s in aggregate.opp_starters %}
-              {% set pl = player_lookup.get(s.player_id|string) or {} %}
+              {% set _pid = s.player_id if s.player_id is not none
+                              else (s.pid if s.pid is defined
+                              else (s.sid if s.sid is defined
+                              else (s.id if s.id is defined else None))) %}
+              {% set _pid_str = (_pid|string) if _pid is not none else '' %}
+              {% set pl = player_lookup.get(_pid_str) or {} %}
               <tr>
                 <td class="col-pos">{{ (pl.pos or '—')|upper }}</td>
-                <td class="col-name" data-league="{{ s.league or '' }}" title="{{ s.league or '' }}">{{ pl.name or ('#' ~ s.player_id) }}</td>
+                <td class="col-name" data-league="{{ s.league or '' }}" title="{{ s.league or '' }}">
+                  {{ pl.name or (_pid_str and ('#' ~ _pid_str)) or '—' }}
+                </td>
                 <td class="col-nfl">{{ pl.team or '—' }}</td>
                 <td class="col-pts">{{ (s.score or 0) | round(1) }}</td>
                 <td class="col-min">{{ ((s.seconds_remaining or 0) // 60 + (1 if ((s.seconds_remaining or 0) % 60) else 0)) }}</td>
@@ -236,7 +259,7 @@
           <tbody id="ldBodyYou"></tbody>
         </table>
       </div>
-      <div class="side-card">
+      <div class="side-card" id="ldOppCard">
         <h4>Opponents</h4>
         <table class="roster">
           <thead>
@@ -258,9 +281,18 @@
 <!-- League tiles (2–3 per row) -->
 <section class="league-grid" id="tiles">
   {% for t in tiles %}
+    {% set _host = (t.host or '')|string|lower %}
+    {% set _is_sleeper = 'sleeper' in _host %}
     <article class="tile pad" data-tile='{{ t|tojson }}'>
       <h3>
-        <span>{{ t.league_name }}</span>
+        <span>
+          <!-- Emoji platform icon (duplicates Exposures style) -->
+          <span aria-hidden="true">{{ '⚡' if _is_sleeper else '🏈' }}</span>
+          {{ t.league_name }}
+          {% if t.mode == 'ALL_PLAY' %}
+            <span class="badge" title="All-Play scoring — no single opponent">All-Play</span>
+          {% endif %}
+        </span>
         {% if not t.note %}
           <button type="button" class="btn-ghost btn-expand">▸ Expand</button>
         {% else %}
@@ -270,12 +302,18 @@
 
       <div class="scoreboard">
         <div class="score-you">{{ (t.my_score or 0)|round(1) }}</div>
-        <div class="score-opp">{{ (t.opp_score or 0)|round(1) }}</div>
+        {% if t.mode == 'ALL_PLAY' %}
+          <div class="score-opp muted-opp">—</div>
+        {% else %}
+          <div class="score-opp">{{ (t.opp_score or 0)|round(1) }}</div>
+        {% endif %}
       </div>
 
       <div class="bars" style="margin-top:8px;">
         <div class="bar you"><div class="fill" style="width: {{ t.my_progress_pct or 0 }}%;"></div></div>
-        <div class="bar opp"><div class="fill" style="width: {{ t.opp_progress_pct or 0 }}%;"></div></div>
+        {% if t.mode != 'ALL_PLAY' %}
+          <div class="bar opp"><div class="fill" style="width: {{ t.opp_progress_pct or 0 }}%;"></div></div>
+        {% endif %}
       </div>
     </article>
   {% endfor %}
@@ -328,10 +366,17 @@
   const PLAYERS = {{ player_lookup|tojson }};
   const POS_ORDER = {QB:0, RB:1, WR:2, TE:3};
 
+  // Robust id extractor (player_id, pid, sid, id)
+  function idOf(s){
+    const raw = (s && (s.player_id ?? s.pid ?? s.sid ?? s.id)) ?? '';
+    return String(raw);
+  }
+
   function enrich(arr){
     return (arr||[]).map(s => {
-      const pl = PLAYERS[String(s.player_id)] || {};
-      const name = pl.name || ('#' + s.player_id);
+      const pid = idOf(s);
+      const pl = PLAYERS[pid] || {};
+      const name = pl.name || (pid ? ('#' + pid) : '—');
       return {
         league: s.league || '',
         pos: (pl.pos || '').toUpperCase(),
@@ -390,7 +435,7 @@
   toggleDirEl.addEventListener('click', () => { dir=(dir==='asc')?'desc':'asc'; toggleDirEl.dataset.userSet='1'; applySort(); });
   dir = defaultDirFor('pos'); sortKeyEl.value='pos'; applySort();
 
-  // League detail
+  // League detail (tile expand)
   const PLAYER_LOOKUP = {{ player_lookup|tojson }};
   const detail = document.getElementById('leagueDetail');
   const ldTitle = document.getElementById('ldTitle');
@@ -400,23 +445,26 @@
   const ldOppBar = document.getElementById('ldOppBar');
   const ldBodyYou = document.getElementById('ldBodyYou');
   const ldBodyOpp = document.getElementById('ldBodyOpp');
+  const ldOppCard = document.getElementById('ldOppCard');
   document.getElementById('ldClose').addEventListener('click', () => { detail.style.display='none'; ldBodyYou.innerHTML=''; ldBodyOpp.innerHTML=''; });
 
   function sortByPos(list){
     return [...(list||[])].sort((a,b) => {
-      const pa = (PLAYER_LOOKUP[String(a.player_id)]?.pos || '').toUpperCase();
-      const pb = (PLAYER_LOOKUP[String(b.player_id)]?.pos || '').toUpperCase();
+      const pa = (PLAYER_LOOKUP[idOf(a)]?.pos || '').toUpperCase();
+      const pb = (PLAYER_LOOKUP[idOf(b)]?.pos || '').toUpperCase();
       const ai = (pa in POS_ORDER) ? POS_ORDER[pa] : 99;
       const bi = (pb in POS_ORDER) ? POS_ORDER[pb] : 99;
       return ai - bi;
     });
   }
-  function renderLeagueRows(container, starters){
+
+  function renderLeaguePlayerRows(container, starters){
     const arr = sortByPos(starters);
     container.innerHTML = arr.map(s => {
-      const pl = PLAYER_LOOKUP[String(s.player_id)] || {};
+      const pid = idOf(s);
+      const pl = PLAYER_LOOKUP[pid] || {};
       const pos = (pl.pos || '').toUpperCase();
-      const name = pl.name || ('#' + s.player_id);
+      const name = pl.name || (pid ? ('#' + pid) : '—');
       const nfl = pl.team || '—';
       const pts = Number(s.score || 0).toFixed(1);
       const mins = Math.ceil(Number(s.seconds_remaining || 0) / 60);
@@ -430,23 +478,74 @@
         </tr>`;
     }).join('');
   }
+
+  // Opponents renderer
+  function renderLeagueOppRows(container, list, isAllPlay){
+    let arr = [...(list || [])];
+    if (isAllPlay) {
+      arr.sort((a,b) => (Number(b.score||0) - Number(a.score||0)) ||
+                        (Number(b.seconds_remaining||0) - Number(a.seconds_remaining||0)));
+    } else {
+      arr = sortByPos(arr);
+    }
+
+    container.innerHTML = arr.map(s => {
+      if (isAllPlay) {
+        const name = s.display_name || '—';
+        const pts = Number(s.score || 0).toFixed(1);
+        const mins = Math.ceil(Number(s.seconds_remaining || 0) / 60);
+        return `
+          <tr>
+            <td class="col-pos">—</td>
+            <td class="col-name" title="${name}">${name}</td>
+            <td class="col-nfl">—</td>
+            <td class="col-pts">${pts}</td>
+            <td class="col-min">${mins}</td>
+          </tr>`;
+      } else {
+        const pid = idOf(s);
+        const pl = PLAYER_LOOKUP[pid] || {};
+        const pos = (pl.pos || '').toUpperCase();
+        const name = pl.name || (pid ? ('#' + pid) : '—');
+        const nfl = pl.team || '—';
+        const pts = Number(s.score || 0).toFixed(1);
+        const mins = Math.ceil(Number(s.seconds_remaining || 0) / 60);
+        return `
+          <tr>
+            <td class="col-pos">${pos || '—'}</td>
+            <td class="col-name" title="${name}">${name}</td>
+            <td class="col-nfl">${nfl}</td>
+            <td class="col-pts">${pts}</td>
+            <td class="col-min">${mins}</td>
+          </tr>`;
+      }
+    }).join('');
+  }
+
   function openLeagueDetail(tileData){
-    ldTitle.textContent = tileData.league_name || 'League Detail';
+    const isAllPlay = (tileData.mode === 'ALL_PLAY');
+    ldTitle.textContent = (tileData.league_name || 'League Detail') + (isAllPlay ? ' — All-Play' : '');
     ldMyScore.textContent = Number(tileData.my_score || 0).toFixed(1);
-    ldOppScore.textContent = Number(tileData.opp_score || 0).toFixed(1);
+    ldOppScore.textContent = isAllPlay ? '—' : Number(tileData.opp_score || 0).toFixed(1);
     ldMyBar.style.width = String(tileData.my_progress_pct || 0) + '%';
-    ldOppBar.style.width = String(tileData.opp_progress_pct || 0) + '%';
-    renderLeagueRows(ldBodyYou, tileData.my_starters || []);
-    renderLeagueRows(ldBodyOpp, tileData.opp_starters || []);
+    ldOppBar.style.width = isAllPlay ? '0%' : String(tileData.opp_progress_pct || 0) + '%';
+
+    renderLeaguePlayerRows(ldBodyYou, tileData.my_starters || []);
+    const rightList = isAllPlay ? (tileData.opp_starters || []) : (tileData.opp_starters || []);
+    renderLeagueOppRows(ldBodyOpp, rightList, isAllPlay);
+
+    if (ldOppCard) ldOppCard.classList.remove('hidden');
     detail.style.display = 'block';
     detail.scrollIntoView({behavior:'smooth', block:'start'});
   }
+
+  // --- Tile expand handlers (allow All-Play tiles even if they carry a note) ---
   document.querySelectorAll('.tile').forEach(tile => {
     tile.addEventListener('click', (e) => {
       const dataStr = tile.getAttribute('data-tile') || '{}';
       let data = {};
       try{ data = JSON.parse(dataStr); } catch(_){}
-      if (data && !data.note) openLeagueDetail(data);
+      if (data && (data.mode === 'ALL_PLAY' || !data.note)) openLeagueDetail(data);
     });
   });
   document.querySelectorAll('.btn-expand').forEach(btn => {
@@ -456,12 +555,12 @@
       if (!tile) return;
       try {
         const data = JSON.parse(tile.getAttribute('data-tile') || '{}');
-        if (data && !data.note) openLeagueDetail(data);
+        if (data && (data.mode === 'ALL_PLAY' || !data.note)) openLeagueDetail(data);
       } catch(_){}
     });
   });
 
-  // Header showdown gating: prevent expansion for Free
+  // Header showdown gating
   (function(){
     const CAN_EXPAND = {{ _can_expand|tojson }};
     const showdown = document.getElementById('showdown');
@@ -469,12 +568,11 @@
     const mask = document.getElementById('upsellMask');
     const close = document.getElementById('closeUpsell');
 
-    // start collapsed either way
     if (showdown) showdown.open = false;
 
     if (showdown && summary && !CAN_EXPAND) {
       summary.addEventListener('click', function(e){
-        e.preventDefault(); // block native <details> toggle
+        e.preventDefault();
         if (mask) mask.style.display = 'flex';
       });
     }

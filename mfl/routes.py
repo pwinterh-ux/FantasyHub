@@ -167,13 +167,50 @@ def _fetch_league_assets(
 
     return assets_payload, fallback_used, host_used
 
+
+def _refresh_sleeper_assets_for_user(user) -> tuple[int, list[str]]:
+    """Refresh Sleeper leagues for the given user, returning successes and failures."""
+
+    if not getattr(user, "sleeper_user_id", None):
+        return 0, []
+
+    sleeper_leagues = SleeperLeague.query.filter_by(user_id=user.id).all()
+    if not sleeper_leagues:
+        return 0, []
+
+    try:
+        from services.sleeper_client import SleeperClient
+        from services.sleeper_sync import sync_league_via_client
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        current_app.logger.exception("refresh_assets_all could not import Sleeper helpers: %s", exc)
+        return 0, ["Unable to import Sleeper helpers"]
+
+    sleeper_client = SleeperClient()
+    sleeper_success = 0
+    sleeper_failures: list[str] = []
+
+    for league in sleeper_leagues:
+        try:
+            sync_league_via_client(league, sleeper_client, site_user=user)
+            sleeper_success += 1
+        except Exception as exc:
+            db.session.rollback()
+            sleeper_failures.append(f"{league.name or league.sleeper_id}: {exc}")
+            current_app.logger.exception(
+                "refresh_assets_all sleeper failed for league=%s: %s",
+                league.sleeper_id,
+                exc,
+            )
+
+    return sleeper_success, sleeper_failures
+
 # --- entry point to the Offers flow from the Trades home ---
 @mfl_bp.route("/offers", methods=["GET"])
 @login_required
 def offers_entry():
     # keep the nav under the mfl/ namespace, but land in the offers app
     return redirect(url_for("offers.search"))
-
+    
 # --------------------------- Link / Login -----------------------------------
 
 @mfl_bp.route("/login", methods=["GET", "POST"])
@@ -1010,7 +1047,6 @@ def mfl_config_sync_one():
 
 # --------------------------- League assets refresh --------------------------
 
-
 @mfl_bp.route("/refresh-assets", methods=["GET"])
 @login_required
 def refresh_assets_all():
@@ -1019,8 +1055,12 @@ def refresh_assets_all():
     if miss:
         return miss
 
+    wants_json = _wants_json_response()
+
     leagues = League.query.filter_by(user_id=current_user.id).all()
     if not leagues:
+        if wants_json:
+            return jsonify({"ok": True, "mfl_refreshed": 0, "mfl_fallback": 0, "mfl_errors": []})
         flash("No leagues configured yet.", "warning")
         return redirect(url_for("leagues.my_leagues"))
 
@@ -1107,25 +1147,40 @@ def refresh_assets_all():
                     "refresh_assets_all failed for league=%s year=%s: %s", lid, year, exc
                 )
 
+    # Summaries for flashes (HTML) and JSON (overlay)
+    mfl_success_msg = None
     if success_count:
-        message = f"Refreshed assets for {success_count} league{'s' if success_count != 1 else ''}."
+        mfl_success_msg = f"Refreshed assets for {success_count} MFL league{'s' if success_count != 1 else ''}."
         if fallback_count:
-            message += f" Used fallback data for {fallback_count}."
-        flash(message, "success")
+            mfl_success_msg += f" Used fallback data for {fallback_count}."
+        flash(mfl_success_msg, "success")
+
+    # Older code tried to refresh Sleeper here; we're now letting the My Leagues overlay
+    # call Sleeper separately for better progress details.
 
     if failure_details:
         flash(
-            "Failed to refresh some leagues: " + "; ".join(failure_details[:3]) + (
+            "Failed to refresh some MFL leagues: " + "; ".join(failure_details[:3]) + (
                 "…" if len(failure_details) > 3 else ""
             ),
             "danger",
+        )
+
+    if wants_json:
+        return jsonify(
+            {
+                "ok": True,
+                "mfl_refreshed": success_count,
+                "mfl_fallback": fallback_count,
+                "mfl_errors": failure_details,
+                "message": mfl_success_msg,
+            }
         )
 
     if not success_count and not failure_details:
         flash("No leagues were refreshed.", "warning")
 
     return redirect(url_for("leagues.my_leagues"))
-
 
 # --------------------------- Trades: shared fetcher --------------------------
 

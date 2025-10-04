@@ -2,7 +2,7 @@
 
 {% block content %}
 <style>
-  /* Full-screen overlay (matches mfl_config look/feel) */
+  /* Full-screen overlay (matches config look/feel) */
   #syncOverlay {
     position: fixed; inset: 0;
     background: rgba(15, 23, 42, 0.82);
@@ -31,96 +31,28 @@
   .sync-actions { display:flex; gap:12px; }
   #syncRetry, #syncCancel { display:none; }
   .sync-progress { width:240px; max-width:100%; height:6px; background:rgba(255,255,255,.12); border-radius:4px; overflow:hidden; }
-  #syncProgressBar { height:100%; width:0%; background:#60a5fa; transition: width .25s ease; }
+  #syncProgressBar { height:100%; width:0%; transition: width .25s ease; }
   .btn-ghost.is-disabled { pointer-events:none; opacity:.6; }
-</style>
 
-<!-- Overlay -->
-<div id="syncOverlay" aria-live="polite" aria-busy="true">
-  <div class="sync-card">
-    <div class="spinner" id="syncSpinner"></div>
-    <div class="sync-headline" id="syncHeadline">Preparing refresh…</div>
-    <div class="sync-league" id="syncLeagueLabel"></div>
-    <div class="sync-phase" id="syncPhaseLabel"></div>
-    <div class="sync-progress" id="syncProgress" aria-hidden="true">
-      <div id="syncProgressBar"></div>
-    </div>
-    <div class="sync-detail" id="syncDetail">Gathering leagues…</div>
-    <div class="sync-actions">
-      <button type="button" class="button" id="syncRetry">Retry</button>
-      <button type="button" class="button" id="syncCancel" style="background:#444;">Cancel</button>
-    </div>
-  </div>
-</div>
+  /* header layout */
+  .leagues-header {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .leagues-header .left { display:flex; justify-content:flex-start; gap:8px; flex-wrap:wrap; }
+  .leagues-header .center { display:flex; justify-content:center; }
+  .leagues-header .right { display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
+  .leagues-header .hdr { margin:0; }
 
-<!-- Runtime config for endpoints used by JS -->
-<script id="leagueRefreshConfig" type="application/json">
-  {{ { "syncOneUrl": url_for('mfl.mfl_config_sync_one'),
-       "offersSearchUrl": url_for('offers.search') } | tojson }}
-</script>
+  @media (max-width: 720px){
+    .leagues-header { grid-template-columns: 1fr; gap:6px; }
+    .leagues-header .center { justify-content:flex-start; }
+    .leagues-header .right { justify-content:flex-start; }
+  }
 
-<div class="tile pad" style="max-width:1100px;margin:24px auto;">
-  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px;">
-    <h2 class="hdr" style="margin:0;">My Leagues</h2>
-    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-      <!-- NEW: assets-only refresh button -->
-      <a href="{{ url_for('mfl.refresh_assets_all') }}" class="btn-ghost" id="refreshAssetsLink">Refresh Assets</a>
-      <!-- RENAMED: from "Refresh Leagues" -->
-      <a href="{{ url_for('mfl.mfl_config') }}" class="btn-ghost">Add/Delete Leagues</a>
-    </div>
-  </div>
-
-  <div class="tile pad dark" style="margin-top:8px;">
-    <div class="responsive-table" style="overflow-x:auto;">
-      <table style="width:100%; border-collapse:separate; border-spacing:0 8px; color:#eaf1f7;">
-        <thead>
-          <tr style="text-align:left; opacity:.9;">
-            <th style="padding:10px;">League</th>
-            <th style="padding:10px;">Season</th>
-            <th style="padding:10px;">My Team</th>
-            <th style="padding:10px;">Record</th>
-            <th style="padding:10px;">Standing</th>
-            <th style="padding:10px;">Starters</th>
-          </tr>
-        </thead>
-        <tbody id="leagues-tbody">
-          {% for league in leagues %}
-            {% set my_team = my_teams.get(league.id) %}
-            <tr class="league-row"
-                data-league-row="{{ league.id }}"
-                data-league-name="{{ league.name }}"
-                data-league-year="{{ league.year }}"
-                data-mfl-id="{{ league.mfl_id }}"
-                data-details-url="{{ url_for('leagues.league_details_json', league_id=league.id) }}"
-                data-submit-url="{{ url_for('lineups.lineups_single_league', league_id=league.id, next=request.url) }}"
-                style="
-                  background: radial-gradient(120% 120% at 10% 0%, rgba(12,14,18,.86), rgba(8,10,12,.9));
-                  color:#eaf1f7;
-                  border:1px solid rgba(255,255,255,.12);
-                  border-radius:12px;
-                  box-shadow: 0 8px 22px rgba(0,0,0,.25);
-                ">
-              <td style="padding:14px; border-top-left-radius:12px; border-bottom-left-radius:12px; font-weight:600; cursor:pointer;">
-                {{ league.name }}
-                <div style="font-size: 12px; opacity:.8;">MFL: {{ league.mfl_id }}</div>
-              </td>
-              <td style="padding:14px; cursor:pointer;">{{ league.year }}</td>
-              <td style="padding:14px; cursor:pointer;">{{ my_team.name if my_team else '—' }}</td>
-              <td style="padding:14px; cursor:pointer;">{{ my_team.record if my_team and my_team.record else '—' }}</td>
-              <td style="padding:14px; cursor:pointer;">{{ my_team.standing if my_team and my_team.standing is not none else '—' }}</td>
-              <td style="padding:14px; border-top-right-radius:12px; border-bottom-right-radius:12px; cursor:pointer;">
-                <!-- RAW DB VALUE -->
-                <span class="roster-slots" data-raw="{{ league.roster_slots or '' }}">{{ league.roster_slots or 'Not set' }}</span>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
-<style>
   .details-row td {
     background: radial-gradient(120% 120% at 10% 0%, rgba(10,12,14,.92), rgba(6,8,10,.96));
     color: #eaf1f7;
@@ -164,24 +96,125 @@
   .btn-compact { padding:6px 10px; font-size:12px; border-radius:10px; }
 </style>
 
+<!-- Overlay -->
+<div id="syncOverlay" aria-live="polite" aria-busy="true">
+  <div class="sync-card">
+    <div class="spinner" id="syncSpinner"></div>
+    <div class="sync-headline" id="syncHeadline">Preparing refresh…</div>
+    <div class="sync-league" id="syncLeagueLabel"></div>
+    <div class="sync-phase" id="syncPhaseLabel"></div>
+    <div class="sync-progress" id="syncProgress" aria-hidden="true">
+      <div id="syncProgressBar"></div>
+    </div>
+    <div class="sync-detail" id="syncDetail">Gathering leagues…</div>
+    <div class="sync-actions">
+      <button type="button" class="button" id="syncRetry">Retry</button>
+      <button type="button" class="button" id="syncCancel" style="background:#444;">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Runtime config for endpoints used by JS -->
+<script id="leagueRefreshConfig" type="application/json">
+  {{ {
+       "mflSyncOneUrl": url_for('mfl.mfl_config_sync_one'),
+       "sleeperListUrl": url_for('sleeper.list_leagues'),
+       "sleeperSyncOneUrl": url_for('sleeper.sleeper_sync_one')
+     } | tojson }}
+</script>
+
+<div class="tile pad" style="max-width:1100px;margin:24px auto;">
+  <div class="leagues-header">
+    <div class="left">
+      <a href="{{ url_for('exposure.exposure_index') }}" class="btn-ghost">Exposure</a>
+    </div>
+    <div class="center">
+      <h2 class="hdr">My Leagues</h2>
+    </div>
+    <div class="right">
+      <a href="#" class="btn-ghost" id="refreshAssetsLink">Refresh Assets</a>
+      <a href="{{ url_for('mfl.mfl_config') }}" class="btn-ghost">Add/Delete Leagues</a>
+    </div>
+  </div>
+
+  <div class="tile pad dark" style="margin-top:8px;">
+    <div class="responsive-table" style="overflow-x:auto;">
+      <table style="width:100%; border-collapse:separate; border-spacing:0 8px; color:#eaf1f7;">
+        <thead>
+          <tr style="text-align:left; opacity:.9;">
+            <th style="padding:10px;">League</th>
+            <th style="padding:10px;">Season</th>
+            <th style="padding:10px;">My Team</th>
+            <th style="padding:10px;">Record</th>
+            <th style="padding:10px;">Standing</th>
+            <th style="padding:10px;">Starters</th>
+          </tr>
+        </thead>
+        <tbody id="leagues-tbody">
+          {% for league in leagues %}
+            <tr class="league-row"
+                data-league-row="{{ league.key }}"
+                data-platform="{{ league.platform }}"
+                data-db-id="{{ league.db_id }}"
+                data-league-name="{{ league.name }}"
+                data-league-year="{{ league.season }}"
+                data-external-id="{{ league.external_id or '' }}"
+                data-mfl-id="{{ league.external_id if league.platform == 'mfl' else '' }}"
+                data-details-url="{{ league.details_url }}"
+                data-submit-url="{{ league.submit_url or '' }}"
+                style="
+                  background: radial-gradient(120% 120% at 10% 0%, rgba(12,14,18,.86), rgba(8,10,12,.9));
+                  color:#eaf1f7;
+                  border:1px solid rgba(255,255,255,.12);
+                  border-radius:12px;
+                  box-shadow: 0 8px 22px rgba(0,0,0,.25);
+                ">
+              <td style="padding:14px; border-top-left-radius:12px; border-bottom-left-radius:12px; font-weight:600; cursor:pointer;">
+                {{ league.name }}
+                <div style="font-size: 12px; opacity:.8;">{{ league.platform_label }}{% if league.external_id %}: {{ league.external_id }}{% endif %}</div>
+              </td>
+              <td style="padding:14px; cursor:pointer;">{{ league.season or '—' }}</td>
+              <td style="padding:14px; cursor:pointer;">{{ league.my_team_name or '—' }}</td>
+              <td style="padding:14px; cursor:pointer;">{{ league.my_team_record or '—' }}</td>
+              <td style="padding:14px; cursor:pointer;">{% if league.my_team_standing is not none %}{{ league.my_team_standing }}{% else %}—{% endif %}</td>
+              <td style="padding:14px; border-top-right-radius:12px; border-bottom-right-radius:12px; cursor:pointer;">
+                <span class="roster-slots" data-raw="{{ league.roster_slots_display or '' }}">{{ league.roster_slots_display or 'Not set' }}</span>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
-  // ========= existing details behavior =========
   const tbody = document.getElementById('leagues-tbody');
+  const playersLookupUrl = "{{ url_for('leagues.players_lookup') }}";
   const baseOffersSearch = "{{ url_for('offers.search') }}";
 
+  // ---------- details view helpers (unchanged) ----------
   function pad4(x){ x = String(x || ''); return x.padStart(4, '0'); }
-
+  async function fetchSleeperNames(missingIds) {
+    if (!missingIds || !missingIds.length) return {};
+    const url = `${playersLookupUrl}?platform=sleeper&ids=${encodeURIComponent(missingIds.join(','))}`;
+    try {
+      const res = await fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' }});
+      if (!res.ok) return {};
+      return await res.json();
+    } catch { return {}; }
+  }
   function closeOpenDetails(exceptLeagueId) {
     document.querySelectorAll('tr.details-row').forEach(tr => {
       const lid = tr.getAttribute('data-for-league');
       if (!exceptLeagueId || String(lid) !== String(exceptLeagueId)) tr.remove();
     });
   }
-
   function standingsRows(teams, myFranchise) {
     return (teams || []).map((t, idx) => {
-      const mine = myFranchise && String(t.mfl_id) === String(myFranchise);
+      const identifier = t.identifier ?? t.mfl_id;
+      const mine = myFranchise && identifier && String(identifier) === String(myFranchise);
       const rank = (t.standing !== null && t.standing !== undefined) ? t.standing : (idx + 1);
       return `
         <tr class="${mine ? 'is-mine' : ''}">
@@ -194,9 +227,8 @@
       `;
     }).join('');
   }
-
   function renderRoster(roster) {
-    const order = { QB: 0, RB: 1, WR: 2, TE: 3 };
+    const order = { QB: 0, RB: 1, WR: 2, TE: 3, FLEX: 4, 'WR/RB': 5, 'WR/RB/TE': 6, SF: 7, 'SUPER_FLEX': 7, K: 8, DEF: 9 };
     const items = (roster || []).slice().sort((a,b) => {
       const pa = (a.position || '').toUpperCase();
       const pb = (b.position || '').toUpperCase();
@@ -206,7 +238,9 @@
       const sa = a.is_starter ? 0 : 1;
       const sb = b.is_starter ? 0 : 1;
       if (sa !== sb) return sa - sb;
-      return (a.name || '').localeCompare(b.name || '');
+      const an = a.name || a.player_id || '';
+      const bn = b.name || b.player_id || '';
+      return an.localeCompare(bn);
     });
 
     let lastPos = null;
@@ -215,11 +249,13 @@
       const groupStart = lastPos !== null && pos !== lastPos ? 'group-start' : '';
       lastPos = pos;
       const team = r.team ? `<span class="mini" style="margin-left:6px;white-space:nowrap;">— ${r.team}</span>` : '';
-      const sellHref = `${baseOffersSearch}?q=${encodeURIComponent(r.name || '')}&mode=sell`;
+      const sellQuery = r.name || r.player_id || '';
+      const sellHref = `${baseOffersSearch}?q=${encodeURIComponent(sellQuery)}&mode=sell`;
+      const displayName = r.name || r.player_id || '—';
       return `
         <tr class="${groupStart}">
           <td style="width:64px;"><span class="pos-chip">${pos || '—'}</span></td>
-          <td>${r.name || '—'} ${team}</td>
+          <td>${displayName} ${team}</td>
           <td style="width:100px;">
             <a class="btn-ghost btn-compact" href="${sellHref}">Sell</a>
           </td>
@@ -241,10 +277,14 @@
       </div>
     `;
   }
-
   function renderPicks(picks, teams) {
     const teamMap = {};
-    (teams || []).forEach(t => { teamMap[pad4(t.mfl_id)] = t.name || pad4(t.mfl_id); });
+    (teams || []).forEach(t => {
+      const keyRaw = t.identifier ?? t.mfl_id ?? t.sleeper_roster_id ?? '';
+      if (keyRaw === null || keyRaw === undefined || keyRaw === '') return;
+      const key = pad4(keyRaw);
+      teamMap[key] = t.name || pad4(keyRaw);
+    });
 
     const rows = (picks || []).map(p => {
       const fid = pad4(p.original_team || '');
@@ -273,18 +313,15 @@
       </div>
     `;
   }
-
   async function toggleDetails(rowEl) {
     const leagueId = rowEl.getAttribute('data-league-row');
     const url = rowEl.getAttribute('data-details-url');
     const submitUrl = rowEl.getAttribute('data-submit-url');
 
-    // close if already open
     const existing = document.querySelector(`tr.details-row[data-for-league="${leagueId}"]`);
     if (existing) { existing.remove(); return; }
     closeOpenDetails(leagueId);
 
-    // placeholder row
     const loadingRow = document.createElement('tr');
     loadingRow.className = 'details-row';
     loadingRow.setAttribute('data-for-league', leagueId);
@@ -307,25 +344,52 @@
       }
       const data = await res.json();
 
-      const myFranchise = data.league && data.league.franchise_id ? String(data.league.franchise_id) : null;
+      const myFranchise = data.league && data.league.my_team_identifier ? String(data.league.my_team_identifier) : null;
       const synced = data.league && data.league.synced_at ? new Date(data.league.synced_at).toLocaleString() : '—';
       const teams = data.teams || [];
       const slots = (data.league && data.league.roster_slots) ? data.league.roster_slots : 'Not set';
+      const platformLabel = data.league && data.league.external_id_label ? data.league.external_id_label : '';
+
+      let roster = data.my_roster || [];
+      try {
+        const isSleeper = (data.league && data.league.platform === 'sleeper');
+        if (isSleeper && roster.length) {
+          const missing = roster.filter(r => r.player_id).map(r => String(r.player_id));
+          if (missing.length) {
+            const nameMap = await fetchSleeperNames(missing);
+            roster = roster.map(r => {
+              const meta = nameMap[String(r.player_id)] || {};
+              const baseName = (r.name && String(r.name) !== String(r.player_id))
+                ? r.name
+                : (meta.name || r.player_id);
+              return {
+                ...r,
+                name: baseName,
+                position: r.position || meta.position || r.slot_position || null,
+                team: r.team || meta.team || null,
+                status: (r.status !== undefined && r.status !== null) ? r.status : (meta.status ?? null),
+              };
+            });
+          }
+        }
+      } catch (e) { console.warn('Sleeper name enrichment skipped:', e); }
+
+      const metaParts = [];
+      if (data.league && data.league.year) metaParts.push(`Season ${data.league.year}`);
+      if (platformLabel) metaParts.push(platformLabel);
+      if (synced && synced !== '—') metaParts.push(`Last sync: ${synced}`);
+      const metaLine = metaParts.join(' • ');
 
       td.innerHTML = `
         <div class="details-panel">
           <div class="details-top">
             <div class="details-header">
               <h3>${data.league.name}</h3>
-              <span class="mini">Season ${data.league.year} • MFL ${data.league.mfl_id} • Last sync: ${synced}</span>
+              <span class="mini">${metaLine || ''}</span>
             </div>
             <div>
-              <a href="${submitUrl}" class="btn-ghost btn-compact" title="Submit lineup for this league">Submit Lineup</a>
+              ${submitUrl ? `<a href="${submitUrl}" class="btn-ghost btn-compact" title="Submit lineup for this league">Submit Lineup</a>` : ''}
             </div>
-          </div>
-
-          <div style="margin-bottom: 8px;">
-            <strong>Lineup:</strong> ${slots}
           </div>
 
           <div class="grid-2">
@@ -347,7 +411,10 @@
               </table>
             </div>
             <div>
-              ${renderRoster(data.my_roster)}
+              <div style="margin-bottom:8px;">
+                <strong>Lineup:</strong> ${slots}
+              </div>
+              ${renderRoster(roster)}
               ${renderPicks(data.my_draft_picks, teams)}
             </div>
           </div>
@@ -358,7 +425,6 @@
       td.innerHTML = `<div class="details-panel">Could not load league details. Please try again.</div>`;
     }
   }
-
   if (tbody) {
     tbody.addEventListener('click', (e) => {
       const row = e.target.closest('tr.league-row');
@@ -367,7 +433,11 @@
     });
   }
 
-  // ========= assets-only refresh with overlay =========
+  // ---------- ASSETS REFRESH (MFL + Sleeper with correct labels) ----------
+  const cfgEl = document.getElementById('leagueRefreshConfig');
+  let endpoints = {};
+  try { endpoints = JSON.parse(cfgEl?.textContent || '{}') || {}; } catch {}
+
   const refreshLink = document.getElementById('refreshAssetsLink');
   const overlay = document.getElementById('syncOverlay');
   const spinner = document.getElementById('syncSpinner');
@@ -380,35 +450,14 @@
   const retryBtn = document.getElementById('syncRetry');
   const cancelBtn = document.getElementById('syncCancel');
 
-  // Ensure overlay on <body> (avoid stacking-context surprises)
   if (overlay && overlay.parentElement && overlay.parentElement !== document.body) {
     overlay.parentElement.removeChild(overlay);
     document.body.appendChild(overlay);
   }
 
-  // parse runtime cfg
-  let syncOneUrl = '';
-  try {
-    const cfg = JSON.parse((document.getElementById('leagueRefreshConfig')?.textContent || '{}'));
-    syncOneUrl = cfg.syncOneUrl || '';
-  } catch {}
-
-  function gatherLeaguesForRefresh() {
-    const rows = Array.from(document.querySelectorAll('tr.league-row'));
-    const seen = new Set();
-    const out = [];
-    for (const row of rows) {
-      const id = row.getAttribute('data-mfl-id') || '';
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      const name = row.getAttribute('data-league-name') || '';
-      const year = row.getAttribute('data-league-year') || '';
-      out.push({ id, name, year, display: name ? `${name} (${id})` : `League ${id}` });
-    }
-    return out;
-  }
-
-  function resetActions() {
+  function disableLink(){ if (refreshLink){ refreshLink.setAttribute('aria-disabled','true'); refreshLink.classList.add('is-disabled'); } }
+  function restoreLink(){ if (refreshLink){ refreshLink.removeAttribute('aria-disabled'); refreshLink.classList.remove('is-disabled'); } }
+  function resetActions(){
     if (!retryBtn || !cancelBtn) return;
     retryBtn.style.display = 'none';
     cancelBtn.style.display = 'none';
@@ -416,31 +465,22 @@
     cancelBtn.onclick = null;
     cancelBtn.textContent = 'Cancel';
   }
-  function updateProgress(done, total) {
+  function updateProgress(done, total){
     if (!progressBar) return;
-    const pct = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    const pct = total ? Math.min(100, Math.round((done/total)*100)) : 0;
     progressBar.style.width = pct + '%';
   }
-  function disableLink() {
-    if (!refreshLink) return;
-    refreshLink.setAttribute('aria-disabled', 'true');
-    refreshLink.classList.add('is-disabled');
-  }
-  function restoreLink() {
-    if (!refreshLink) return;
-    refreshLink.removeAttribute('aria-disabled');
-    refreshLink.classList.remove('is-disabled');
-  }
-  function promptRetry(message, allowRetry) {
+  function promptRetry(message, allowRetry){
     return new Promise(resolve => {
-      if (!retryBtn || !cancelBtn) return resolve(false);
       spinner.style.display = 'none';
       headline.textContent = 'Refresh paused';
       detail.textContent = message || 'An error occurred.';
       resetActions();
       if (allowRetry) {
         retryBtn.style.display = 'inline-flex';
-        retryBtn.onclick = () => { resetActions(); spinner.style.display = 'block'; detail.textContent = 'Retrying…'; resolve(true); };
+        retryBtn.onclick = () => {
+          resetActions(); spinner.style.display = 'block'; detail.textContent = 'Retrying…'; resolve(true);
+        };
       }
       cancelBtn.style.display = 'inline-flex';
       if (!allowRetry) cancelBtn.textContent = 'Close';
@@ -448,35 +488,54 @@
     });
   }
 
-  async function runAssetsPhaseRequest(league) {
-    if (!syncOneUrl) { const e = new Error('Refresh endpoint unavailable.'); e.retryable = false; throw e; }
+  function gatherMflFromTable(){
+    const rows = Array.from(document.querySelectorAll('tr.league-row[data-platform="mfl"]'));
+    const out = [];
+    const seen = new Set();
+    for (const row of rows) {
+      const mflId = row.getAttribute('data-mfl-id') || '';
+      if (!mflId || seen.has(mflId)) continue;
+      seen.add(mflId);
+      out.push({
+        id: mflId,                 // MFL league id string
+        year: row.getAttribute('data-league-year') || '',
+        name: row.getAttribute('data-league-name') || `MFL ${mflId}`,
+        display: `MFL — ${row.getAttribute('data-league-name') || 'League'} (${mflId})`
+      });
+    }
+    return out;
+  }
+
+  async function runMflAssetsPhase(league){
+    // Robust: send both league_id and mfl_id; many backends accept either.
     const body = new URLSearchParams();
     body.append('league_id', league.id);
+    body.append('mfl_id', league.id);
     body.append('phase', 'ASSETS');
-    if (league.year !== undefined && league.year !== null && league.year !== '') {
+    if (league.year !== undefined && league.year !== null && String(league.year) !== '') {
       body.append('year', league.year);
     }
-    const resp = await fetch(syncOneUrl, {
+    const resp = await fetch(endpoints.mflSyncOneUrl, {
       method: 'POST',
       body,
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'Accept': 'application/json' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Accept': 'application/json'
+      }
     });
     const text = await resp.text();
     let payload = {};
-    if (text) {
-      try { payload = JSON.parse(text); }
-      catch { const e = new Error('Refresh returned an invalid response.'); e.retryable = true; throw e; }
-    }
+    if (text) { try { payload = JSON.parse(text); } catch { const e = new Error('Refresh returned an invalid response.'); e.retryable = true; throw e; } }
     if (!resp.ok || (payload && payload.ok === false)) {
       const message = (payload && payload.error) ? payload.error : `Refresh failed (${resp.status})`;
       const e = new Error(message);
-      e.retryable = payload && Object.prototype.hasOwnProperty.call(payload, 'retryable') ? !!payload.retryable : resp.status >= 500;
+      e.retryable = payload && Object.prototype.hasOwnProperty.call(payload,'retryable') ? !!payload.retryable : resp.status >= 500;
       throw e;
     }
     return payload || {};
   }
 
-  function	describeAssetsMetrics(m) {
+  function describeAssetsMetrics(m){
     m = m || {};
     const parts = [];
     if (m.rosters_inserted) parts.push(`${m.rosters_inserted} roster spot${m.rosters_inserted === 1 ? '' : 's'}`);
@@ -485,53 +544,90 @@
     return parts.join(' • ');
   }
 
-  if (refreshLink) {
-    refreshLink.addEventListener('click', async (e) => {
-      // If JS unavailable, allow normal nav to /refresh-assets (server route)
-      if (!overlay || !window.fetch || !window.URLSearchParams) return;
-      if (refreshLink.getAttribute('aria-disabled') === 'true') { e.preventDefault(); return; }
-      e.preventDefault();
+  async function fetchSleeperSaved(yearStr){
+    const url = `${endpoints.sleeperListUrl}?year=${encodeURIComponent(yearStr || '')}`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' }});
+    const data = await res.json();
+    if (!res.ok || !data || !Array.isArray(data.leagues)) {
+      const msg = (data && data.error) ? data.error : 'Unable to load saved Sleeper leagues.';
+      const e = new Error(msg); e.retryable = false; throw e;
+    }
+    return data.leagues.map(l => ({
+      id: l.id, sleeper_id: l.sleeper_id, year: l.year,
+      name: l.name || `League ${l.sleeper_id}`,
+      display: `Sleeper — ${l.name || 'League'} (${l.sleeper_id || l.id})`
+    }));
+  }
 
-      const leagues = gatherLeaguesForRefresh();
+  async function runSleeperAssetsPhase(league){
+    const body = new URLSearchParams();
+    body.append('league_id', league.id); // DB id for SleeperLeague
+    // sleeper endpoint doesn’t need 'phase'; it runs a full assets sync
+    if (league.year !== undefined && league.year !== null && String(league.year) !== '') {
+      body.append('year', league.year);
+    }
+    const resp = await fetch(endpoints.sleeperSyncOneUrl, {
+      method: 'POST',
+      body,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'Accept': 'application/json' },
+    });
+    const text = await resp.text();
+    let payload = {};
+    if (text) { try { payload = JSON.parse(text); } catch { const e = new Error('Refresh returned an invalid response.'); e.retryable = true; throw e; } }
+    if (!resp.ok || (payload && payload.ok === false)) {
+      const message = (payload && payload.error) ? payload.error : `Refresh failed (${resp.status})`;
+      const e = new Error(message);
+      e.retryable = payload && Object.prototype.hasOwnProperty.call(payload,'retryable') ? !!payload.retryable : resp.status >= 500;
+      throw e;
+    }
+    return payload || {};
+  }
+
+  const refreshLinkEl = document.getElementById('refreshAssetsLink');
+  if (refreshLinkEl) {
+    refreshLinkEl.addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (!overlay || !window.fetch || !window.URLSearchParams) return;
 
       overlay.style.display = 'flex';
-      overlay.setAttribute('aria-busy', 'true');
+      overlay.setAttribute('aria-busy','true');
       spinner.style.display = 'block';
-      headline.textContent = leagues.length ? 'Preparing refresh…' : 'No leagues to refresh';
+      headline.textContent = 'Preparing refresh…';
       leagueLabel.textContent = '';
       phaseLabel.textContent = '';
-      detail.textContent = leagues.length ? 'Gathering leagues…' : 'Add leagues to refresh assets.';
-      updateProgress(0, Math.max(1, leagues.length));
-      progressWrap.setAttribute('aria-hidden', leagues.length ? 'false' : 'true');
-      progressWrap.style.display = leagues.length ? 'block' : 'none';
+      detail.textContent = 'Gathering leagues…';
       resetActions();
-
-      if (!leagues.length) {
-        cancelBtn.style.display = 'inline-flex';
-        cancelBtn.textContent = 'Close';
-        cancelBtn.onclick = () => { resetActions(); overlay.style.display = 'none'; };
-        return;
-      }
+      updateProgress(0, 1);
+      document.getElementById('syncProgress').style.display = 'block';
 
       disableLink();
 
       try {
-        const total = leagues.length;
-        let done = 0;
-        headline.textContent = 'Refreshing assets…';
+        // Collect MFL from table, then Sleeper from API
+        const mflLeagues = gatherMflFromTable();
+        // choose a year hint for Sleeper list (use most common season in table or current year)
+        const firstRow = document.querySelector('tr.league-row');
+        const yearHint = firstRow ? (firstRow.getAttribute('data-league-year') || '') : '';
+        const sleeperLeagues = await fetchSleeperSaved(yearHint);
 
-        for (let i = 0; i < leagues.length; ) {
-          const lg = leagues[i];
+        const total = mflLeagues.length + sleeperLeagues.length;
+        let done = 0;
+        updateProgress(0, Math.max(1,total));
+
+        // NOTE: run MFL first, then Sleeper. Swap order if you want Sleeper first.
+        if (mflLeagues.length) {
+          headline.textContent = 'Refreshing MFL assets…';
+        }
+        for (let i=0; i<mflLeagues.length; ) {
+          const lg = mflLeagues[i];
           leagueLabel.textContent = lg.display;
           phaseLabel.textContent = 'Assets';
           detail.textContent = 'Working…';
           spinner.style.display = 'block';
           resetActions();
-
           try {
-            const res = await runAssetsPhaseRequest(lg);
-            done += 1;
-            updateProgress(done, total);
+            const res = await runMflAssetsPhase(lg);
+            done += 1; updateProgress(done, total);
             let summary = describeAssetsMetrics(res.metrics || {});
             if (res.fallback_used) summary = summary ? `${summary} • Used fallback` : 'Used fallback data';
             if (res.warnings && res.warnings.length) {
@@ -541,19 +637,47 @@
             detail.textContent = summary || 'Assets refreshed.';
             spinner.style.display = 'none';
             phaseLabel.textContent = 'Assets ✓';
-            await new Promise(r => setTimeout(r, 150));
+            await new Promise(r => setTimeout(r, 120));
             spinner.style.display = 'block';
             phaseLabel.textContent = 'Assets';
             i += 1;
           } catch (err) {
-            const retryable = err && Object.prototype.hasOwnProperty.call(err, 'retryable') ? !!err.retryable : true;
+            const retryable = err && Object.prototype.hasOwnProperty.call(err,'retryable') ? !!err.retryable : true;
             const again = await promptRetry(err && err.message ? err.message : 'Refresh failed.', retryable);
-            if (!again) {
-              overlay.style.display = 'none';
-              overlay.setAttribute('aria-busy', 'false');
-              restoreLink();
-              return;
+            if (!again) { overlay.style.display = 'none'; overlay.setAttribute('aria-busy','false'); restoreLink(); return; }
+          }
+        }
+
+        if (sleeperLeagues.length) {
+          headline.textContent = 'Refreshing Sleeper assets…';
+        }
+        for (let j=0; j<sleeperLeagues.length; ) {
+          const lg = sleeperLeagues[j];
+          leagueLabel.textContent = lg.display;
+          phaseLabel.textContent = 'Assets';
+          detail.textContent = 'Working…';
+          spinner.style.display = 'block';
+          resetActions();
+          try {
+            const res = await runSleeperAssetsPhase(lg);
+            done += 1; updateProgress(done, total);
+            let summary = describeAssetsMetrics(res.metrics || {});
+            if (res.fallback_used) summary = summary ? `${summary} • Used fallback` : 'Used fallback data';
+            if (res.warnings && res.warnings.length) {
+              const warn = res.warnings.join('; ');
+              summary = summary ? `${summary} • Warnings: ${warn}` : `Warnings: ${warn}`;
             }
+            detail.textContent = summary || 'Assets refreshed.';
+            spinner.style.display = 'none';
+            phaseLabel.textContent = 'Assets ✓';
+            await new Promise(r => setTimeout(r, 120));
+            spinner.style.display = 'block';
+            phaseLabel.textContent = 'Assets';
+            j += 1;
+          } catch (err) {
+            const retryable = err && Object.prototype.hasOwnProperty.call(err,'retryable') ? !!err.retryable : true;
+            const again = await promptRetry(err && err.message ? err.message : 'Refresh failed.', retryable);
+            if (!again) { overlay.style.display = 'none'; overlay.setAttribute('aria-busy','false'); restoreLink(); return; }
           }
         }
 
@@ -562,15 +686,15 @@
         phaseLabel.textContent = '';
         detail.textContent = 'Reloading leagues…';
         headline.textContent = 'Refresh complete!';
-        overlay.setAttribute('aria-busy', 'false');
+        overlay.setAttribute('aria-busy','false');
         restoreLink();
         setTimeout(() => { window.location.reload(); }, 800);
       } catch (err) {
-        const retryable = err && Object.prototype.hasOwnProperty.call(err, 'retryable') ? !!err.retryable : false;
+        const retryable = err && Object.prototype.hasOwnProperty.call(err,'retryable') ? !!err.retryable : false;
         const again = await promptRetry(err && err.message ? err.message : 'Refresh failed.', retryable);
         if (!again) {
           overlay.style.display = 'none';
-          overlay.setAttribute('aria-busy', 'false');
+          overlay.setAttribute('aria-busy','false');
         }
         restoreLink();
       }

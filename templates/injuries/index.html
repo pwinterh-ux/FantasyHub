@@ -32,16 +32,31 @@
             <div class="card-head">
               <div class="lh">
                 <div class="name">{{ league.league_name }}</div>
-                <div class="meta">Season {{ league.league_year }} • League ID {{ league.league_mfl_id }}</div>
+                <div class="meta">
+                  Season {{ league.league_year }}
+                  • {{ 'League ID' if league.platform == 'mfl' else 'Sleeper ID' }} {{ league.league_mfl_id }}
+                </div>
               </div>
               <div class="rh">
-                {% if league.submit_url %}
-                  <a class="btn-mini" href="{{ league.submit_url }}">Submit lineup</a>
+                {% if league.platform == 'sleeper' and league.league_mfl_id %}
+                  <!-- Active Sleeper button (popup) -->
+                  <a
+                    href="https://sleeper.com/leagues/{{ league.league_mfl_id }}/team"
+                    class="btn-mini sleeper-link"
+                    data-league-id="{{ league.league_mfl_id }}"
+                    title="Open in Sleeper"
+                  >Go to Sleeper</a>
+                {% elif league.submit_url %}
+                  <a class="btn-mini" href="{{ league.submit_url }}">{{ league.submit_label or 'Submit lineup' }}</a>
+                {% else %}
+                  <button type="button" class="btn-mini" style="cursor:default; opacity:.8;" aria-disabled="true">
+                    {{ league.submit_label or 'Go to Sleeper' }}
+                  </button>
                 {% endif %}
               </div>
             </div>
 
-            <!-- Mellow summary chips -->
+            <!-- Summary chips -->
             <div class="chips soft">
               <span class="chip red">{{ league.red_count or 0 }} critical starter{{ 's' if (league.red_count or 0) != 1 }}</span>
               <span class="chip amb">{{ league.yellow_count or 0 }} questionable starter{{ 's' if (league.yellow_count or 0) != 1 }}</span>
@@ -49,7 +64,7 @@
               <span class="chip mut">{{ league.player_count or 0 }} total on report</span>
             </div>
 
-            <!-- Starters list (compact, high scan) -->
+            <!-- Starters list -->
             <div class="list">
               <div class="list-hdr">Starters on report <span class="dim">({{ starters|length }})</span></div>
 
@@ -62,7 +77,7 @@
               {% else %}
                 {% for p in starters %}
                   {% set up = (p.injury_status or '')|upper %}
-                  {% set is_red = ('OUT' in up) or ('IR' in up) or ('PUP' in up) %}
+                  {% set is_red = ('OUT' in up) or ('IR' in up) or ('PUP' in up) or ('SUSPENDED' in up) or ('DOUBTFUL' in up) %}
                   {% set is_yellow = ('QUESTIONABLE' in up) %}
                   {% set cls = 'red' if is_red else ('yellow' if is_yellow else 'normal') %}
                   <div class="row {{ cls }}">
@@ -123,19 +138,16 @@
 </div>
 
 <style>
-  /* Base palette to match Rapid Lineups look */
   .page-wrap { --fg:#eaf1f7; --mut:#aeb7c3; --bd:rgba(255,255,255,.12); --bg2:#0b1220; }
 
   .hdr-row { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; }
   .hdr { font-size:18px; }
   .sub { font-size:12px; color:var(--mut); }
 
-  /* Grid to match lineups screen */
   .grid { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:10px; }
   @media (max-width:1100px){ .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width:720px){ .grid { grid-template-columns: 1fr; } }
 
-  /* Card shell (same proportions as Rapid Lineups) */
   .card { border:1px solid var(--bd); border-radius:12px; background:rgba(10,12,14,.9); overflow:hidden; }
 
   .card-head{
@@ -146,7 +158,6 @@
   .meta { font-size:12px; color:var(--mut); }
   .rh { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 
-  /* Small primary button for CTA */
   .btn-mini{
     display:inline-flex; align-items:center; justify-content:center;
     padding:6px 10px; font-size:12px; border-radius:10px; text-decoration:none;
@@ -155,7 +166,6 @@
     box-shadow:0 2px 10px rgba(34,197,94,.18);
   }
 
-  /* Chips (muted) */
   .chips{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:8px 10px; border-bottom:1px solid rgba(255,255,255,.06); }
   .chips.soft .chip{ opacity:.9; }
   .chip{ border:1px solid var(--bd); padding:2px 8px; border-radius:999px; font-size:11px; background:rgba(255,255,255,.04); }
@@ -164,7 +174,6 @@
   .chip.blu{    border-color:rgba(37,99,235,.30); }
   .chip.mut{    border-color:rgba(148,163,184,.35); }
 
-  /* List rows (compact, high scan) */
   .list{ padding:8px 8px 10px; }
   .list.compact{ padding-top:6px; }
   .list-hdr{ font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--mut); padding:0 2px 6px; }
@@ -176,10 +185,6 @@
   }
   .row + .row { margin-top:6px; }
 
-  .row.normal{ background:rgba(148,163,184,.06); }
-  .row.muted{ background:rgba(148,163,184,.04); }
-
-  /* Stronger highlights (works on dark bg) */
   .row.red{
     background: rgba(239,68,68,.10);
     border-color: rgba(239,68,68,.30);
@@ -200,7 +205,6 @@
   .status{ font-size:12px; font-weight:800; text-transform:uppercase; }
   .expected{ font-size:12px; }
 
-  /* Expander */
   .expander{ border-top:1px dashed rgba(148,163,184,.25); padding:8px 8px 10px; }
   .expander > summary{
     cursor:pointer; user-select:none; list-style:none; font-size:12px; color:var(--fg);
@@ -208,11 +212,41 @@
   }
   .expander > summary::-webkit-details-marker{ display:none; }
 
-  /* Mobile behavior mirrors Lineups */
   @media (max-width:720px){
     .meta-col{ min-width:0; align-items:flex-start; }
     .status{ order:-1; }
   }
 
 </style>
+
+<script>
+// Turn any ".sleeper-link" into a popup opener.
+// Opens the user's Sleeper team page for that league.
+// If popups are blocked, the link will still work in a new tab.
+document.addEventListener('click', function (e) {
+  const a = e.target.closest('a.sleeper-link');
+  if (!a) return;
+
+  e.preventDefault();
+  const leagueId = a.dataset.leagueId;
+  if (!leagueId) { window.open(a.href, '_blank', 'noopener'); return; }
+
+  const url = `https://sleeper.com/leagues/${leagueId}/team`;
+  const name = `Sleeper_${leagueId}`;
+  const features = [
+    'width=1200',
+    'height=800',
+    'menubar=no',
+    'toolbar=no',
+    'location=yes',
+    'status=no',
+    'resizable=yes',
+    'scrollbars=yes'
+  ].join(',');
+
+  const w = window.open(url, name, features);
+  // Fallback to new tab if popup blocked
+  if (!w) window.open(url, '_blank', 'noopener');
+});
+</script>
 {% endblock %}

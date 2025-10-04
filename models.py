@@ -45,6 +45,9 @@ class User(UserMixin, db.Model):
     terms_accepted_at = db.Column(db.DateTime)
     terms_accepted_ip = db.Column(db.String(45))
 
+    sleeper_user_id = db.Column(db.String(40), index=True)
+    sleeper_display_name = db.Column(db.String(120))
+
     # Optional helpers (still inside User)
     def has_accepted_current_terms(self, versions: dict[str, str]) -> bool:
         """Compare stored versions to the current versions dict keys: tos, privacy, aup."""
@@ -57,6 +60,13 @@ class User(UserMixin, db.Model):
     # relationships
     leagues = db.relationship(
         "League",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    sleeper_leagues = db.relationship(
+        "SleeperLeague",
         back_populates="user",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -304,6 +314,148 @@ class DraftPick(db.Model):
 
     def __repr__(self) -> str:
         return f"<DraftPick {self.id} team:{self.team_id} {self.season} R{self.round} P{self.pick_number or '-'} orig:{self.original_team or '-'}>"
+
+
+# ----- Sleeper integration tables -------------------------------------------
+
+
+class SleeperLeague(db.Model):
+    __tablename__ = "sleeper_leagues"
+
+    id = db.Column(db.Integer, primary_key=True)
+    sleeper_id = db.Column(db.String(40), nullable=False, index=True)
+    name = db.Column(db.String(120))
+    year = db.Column(db.Integer, nullable=False)
+    synced_at = db.Column(db.DateTime)
+    roster_slots = db.Column(db.String(255))
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    draft_id = db.Column(db.String(40))
+    waiver_budget = db.Column(db.Integer)
+    scoring_json = db.Column(db.JSON)
+
+    user = db.relationship("User", back_populates="sleeper_leagues")
+    teams = db.relationship(
+        "SleeperTeam",
+        back_populates="league",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    def __repr__(self) -> str:
+        return f"<SleeperLeague {self.id} sid:{self.sleeper_id} {self.name or ''} {self.year}>"
+
+
+class SleeperTeam(db.Model):
+    __tablename__ = "sleeper_teams"
+
+    id = db.Column(db.Integer, primary_key=True)
+    league_id = db.Column(
+        db.Integer,
+        db.ForeignKey("sleeper_leagues.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sleeper_roster_id = db.Column(db.Integer, nullable=False, index=True)
+    owner_user_id = db.Column(db.String(40), index=True)
+    name = db.Column(db.String(120))
+    owner_name = db.Column(db.String(120))
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    record = db.Column(db.String(20))
+    points_for = db.Column(db.Numeric(8, 2))
+    points_against = db.Column(db.Numeric(8, 2))
+    standing = db.Column(db.Integer)
+    current_opponent_id = db.Column(db.Integer)
+    waiver_balance = db.Column(db.Integer)
+    meta_json = db.Column(db.JSON)
+
+    league = db.relationship("SleeperLeague", back_populates="teams")
+    rosters = db.relationship(
+        "SleeperRoster",
+        back_populates="team",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    draft_picks = db.relationship(
+        "SleeperDraftPick",
+        back_populates="team",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    def __repr__(self) -> str:
+        return f"<SleeperTeam {self.id} league:{self.league_id} roster:{self.sleeper_roster_id} {self.name or ''}>"
+
+
+class SleeperRoster(db.Model):
+    __tablename__ = "sleeper_rosters"
+
+    id = db.Column(db.Integer, primary_key=True)
+    team_id = db.Column(
+        db.Integer,
+        db.ForeignKey("sleeper_teams.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    player_sid = db.Column(db.String(40), nullable=False, index=True)
+    is_starter = db.Column(db.Boolean, nullable=False, default=False)
+    order_index = db.Column(db.SmallInteger)
+    lineup_slot = db.Column(db.String(20))
+
+    team = db.relationship("SleeperTeam", back_populates="rosters")
+
+    def __repr__(self) -> str:
+        return f"<SleeperRoster {self.id} team:{self.team_id} player:{self.player_sid} starter:{int(bool(self.is_starter))}>"
+
+
+class SleeperPlayer(db.Model):
+    __tablename__ = "sleeper_players"
+
+    id = db.Column(db.Integer, primary_key=True)
+    sleeper_id = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(120), index=True)
+    position = db.Column(db.String(10), index=True)
+    team = db.Column(db.String(10), index=True)
+    status = db.Column(db.String(20))
+
+    def __repr__(self) -> str:
+        return f"<SleeperPlayer {self.id} sid:{self.sleeper_id} {self.name or ''}>"
+
+
+class SleeperDraftPick(db.Model):
+    __tablename__ = "sleeper_draft_picks"
+
+    id = db.Column(db.Integer, primary_key=True)
+    league_id = db.Column(
+        db.Integer,
+        db.ForeignKey("sleeper_leagues.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    team_id = db.Column(
+        db.Integer,
+        db.ForeignKey("sleeper_teams.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    season = db.Column(db.Integer, nullable=False)
+    round = db.Column(db.Integer, nullable=False)
+    pick_number = db.Column(db.Integer)
+    original_team = db.Column(db.String(120))
+    original_roster_id = db.Column(db.Integer, nullable=False)
+
+    league = db.relationship("SleeperLeague")
+    team = db.relationship("SleeperTeam", back_populates="draft_picks")
+
+    def __repr__(self) -> str:
+        return (
+            f"<SleeperDraftPick {self.id} league:{self.league_id} team:{self.team_id} "
+            f"{self.season} R{self.round} orig:{self.original_roster_id}>"
+        )
 
 
 # ----- NFL Weekly Opponent Schedule (minimal) -------------------------------

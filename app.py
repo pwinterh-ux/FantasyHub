@@ -2,12 +2,13 @@
 import os
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, date
+from datetime import datetime
 
 from flask import Flask, render_template, redirect, url_for, request, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
 from flask_login import LoginManager, current_user, login_required
+from sqlalchemy import text  # for non-fatal warmup ping
 
 # Legal versions (single source of truth)
 from legal_versions import current_versions
@@ -23,12 +24,10 @@ def _configure_logging(app: Flask) -> None:
     Make INFO logs visible and also write to logs/fantasyhub.log with rotation.
     PythonAnywhere will also capture these in the Error log.
     """
-    # Raise app logger to INFO
     app.logger.setLevel(logging.INFO)
     for h in app.logger.handlers:
         h.setLevel(logging.INFO)
 
-    # Add a rotating file handler
     log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
     os.makedirs(log_dir, exist_ok=True)
     file_path = os.path.join(log_dir, "fantasyhub.log")
@@ -39,9 +38,8 @@ def _configure_logging(app: Flask) -> None:
         "%(asctime)s %(levelname)s %(name)s: %(message)s"
     ))
 
-    # Avoid adding duplicate handlers if app reloads
     already_added = any(
-        isinstance(h, RotatingFileHandler) and getattr(h, 'baseFilename', '') == file_path
+        isinstance(h, RotatingFileHandler) and getattr(h, "baseFilename", "") == file_path
         for h in app.logger.handlers
     )
     if not already_added:
@@ -50,13 +48,44 @@ def _configure_logging(app: Flask) -> None:
     app.logger.info("Logging configured. Writing to %s", file_path)
 
 
+def _apply_engine_defaults(app: Flask) -> None:
+    """
+    Apply safe SQLAlchemy engine defaults without clobbering values you may have in config.py.
+    """
+    opts = dict(app.config.get("SQLALCHEMY_ENGINE_OPTIONS", {}))
+
+    # Only set defaults if not already present
+    opts.setdefault("pool_pre_ping", True)
+    opts.setdefault("pool_recycle", 280)   # seconds; under common MySQL idle timeout
+    opts.setdefault("pool_size", 5)
+    opts.setdefault("max_overflow", 5)
+
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = opts
+
+
+def _nonfatal_db_warmup(app: Flask) -> None:
+    """
+    Best-effort ping to surface connectivity issues in logs without breaking app startup.
+    """
+    try:
+        with app.app_context():
+            # one quick round-trip; if MySQL is briefly down, this will just log a warning
+            db.session.execute(text("SELECT 1"))
+            db.session.commit()
+        app.logger.info("DB warmup ping: OK")
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        app.logger.warning("DB warmup ping failed (non-fatal). Service may be starting up.", exc_info=True)
+
+
 def create_app():
     app = Flask(
         __name__,
         static_folder="static",
-        template_folder=os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "templates"
-        ),
+        template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates"),
     )
 
     # Load configuration (expects config.py in project root)
@@ -68,18 +97,21 @@ def create_app():
     # Optional: cap MFL response body logging length (used by mfl_client)
     app.config.setdefault("MFL_LOG_BODY_CHARS", 5000)
 
+    # Apply resilient SQLAlchemy engine defaults
+    _apply_engine_defaults(app)
+
     # Initialize extensions
     db.init_app(app)
     bcrypt.init_app(app)
     login_manager.init_app(app)
-    login_manager.login_view = "auth.login"          # where @login_required redirects
+    login_manager.login_view = "auth.login"
     login_manager.login_message_category = "info"
 
     # Enable INFO logging & file logs
     _configure_logging(app)
 
     # Import models after db is ready to avoid circulars
-    from models import User, League  # noqa: F401
+    from models import User, League, SleeperLeague  # <-- includes SleeperLeague
 
     @login_manager.user_loader
     def load_user(user_id: str):
@@ -87,6 +119,42 @@ def create_app():
             return User.query.get(int(user_id))
         except Exception:
             return None
+
+    # ---- tiny helper: does this user have ANY leagues (MFL or Sleeper)? ----
+    def _user_has_any_leagues(user_id: int) -> bool:
+        try:
+            # Count is fine here; exists() is also OK if you prefer.
+            mfl_ct = League.query.filter_by(user_id=user_id).count()
+            if mfl_ct > 0:
+                return True
+            slp_ct = SleeperLeague.query.filter_by(user_id=user_id).count()
+            return slp_ct > 0
+        except Exception:
+            # Be permissive on errors (avoid trapping legit users)
+            return False
+
+    # ---- helper: does this user have MFL leagues? (for MFL-only gate) ----
+    def _user_has_mfl_leagues(user_id: int) -> bool:
+        try:
+            return League.query.filter_by(user_id=user_id).limit(1).count() > 0
+        except Exception:
+            return False
+
+    # ---- make MFL-only gate visible to ALL templates ----
+    @app.context_processor
+    def inject_feature_flags():
+        has_mfl = False
+        has_any = False
+        try:
+            if current_user.is_authenticated:
+                has_mfl = _user_has_mfl_leagues(current_user.id)
+                has_any = _user_has_any_leagues(current_user.id)
+        except Exception:
+            pass
+        return {
+            "has_mfl_leagues": has_mfl,  # <-- use this in buttons/links to gate MFL-only features
+            "has_any_leagues": has_any,  # optional convenience
+        }
 
     # ----- Blueprints -----
     from auth.routes import auth_bp
@@ -98,6 +166,8 @@ def create_app():
     from admin import bp as admin_bp
     from billing.routes import billing_bp
     from injuries.routes import injuries_bp
+    from sleeper.routes import sleeper_bp
+    from exposure.routes import exposure_bp
 
     app.register_blueprint(offers_bp)
     app.register_blueprint(mfl_bp)
@@ -108,6 +178,8 @@ def create_app():
     app.register_blueprint(injuries_bp)
     app.register_blueprint(admin_bp)  # hidden: /_admin/*
     app.register_blueprint(billing_bp)
+    app.register_blueprint(sleeper_bp)
+    app.register_blueprint(exposure_bp)
 
     # ----- Routes -----
     @app.route("/")
@@ -119,23 +191,29 @@ def create_app():
         """
         Universal entry for 'Get Started' / 'Leagues' buttons:
           - If NOT logged in -> site login page
-          - If logged in and has leagues -> leagues page
-          - If logged in and NO leagues -> MFL link/login page
+          - If logged in and has *any* leagues (MFL or Sleeper) -> leagues page
+          - If logged in and NO leagues -> provider link/chooser
         """
         if not current_user.is_authenticated:
             return redirect(url_for("auth.login"))
 
-        # local import to avoid early import cycles
-        from models import League as _League
-        has_leagues = _League.query.filter_by(user_id=current_user.id).count() > 0
-        if has_leagues:
+        if _user_has_any_leagues(current_user.id):
             return redirect(url_for("leagues.my_leagues"))
-        return redirect(url_for("mfl.mfl_login"))
 
-    # Dev convenience: create tables if they don't exist
-    with app.app_context():
-        db.create_all()
-        app.logger.info("Database tables ensured (create_all).")
+        # Show a simple provider chooser (you can send straight to Sleeper config if preferred)
+        return redirect(url_for("link_providers"))
+
+    @app.route("/link")
+    @login_required
+    def link_providers():
+        # Renders templates/auth/link_providers.html (two buttons: Sleeper / MFL)
+        return render_template("auth/link_providers.html")
+
+    # IMPORTANT: Do NOT connect to the DB at startup (no create_all here)
+    # If you need schema migrations, use Alembic or a one-off admin command.
+
+    # Optional: non-fatal warmup ping (logs only)
+    _nonfatal_db_warmup(app)
 
     @app.route("/pricing")
     def pricing():
@@ -153,20 +231,19 @@ def create_app():
     @app.route("/account")
     @login_required
     def account():
-        from models import League as _League
-        from services.entitlements import get_entitlements, describe_plan
-        from services.store import (
-            get_today_count,
-            get_bonus_balance,
-            get_weekly_free_used,
+        # Count both MFL + Sleeper leagues for display
+        leagues_count = (
+            League.query.filter_by(user_id=current_user.id).count()
+            + SleeperLeague.query.filter_by(user_id=current_user.id).count()
         )
+
+        from services.entitlements import get_entitlements, describe_plan
+        from services.store import get_today_count, get_bonus_balance, get_weekly_free_used
         from services.guards import week_monday_key
-        from datetime import date
 
         u = current_user
 
-        # Counts + plan
-        leagues_count = _League.query.filter_by(user_id=u.id).count()
+        # Plan + entitlements
         ent = get_entitlements(u)
         plan_label = describe_plan(u)
         plan_key = ent.get("plan_key", "free")
@@ -175,15 +252,15 @@ def create_app():
         raw_cap = ent.get("league_cap", 0)
         league_cap_display = "Unlimited" if plan_key in ("unlimited", "founder") else raw_cap
 
-        # Paid daily caps (shown for paid plans)
+        # Paid daily caps
         mass_offer_daily_cap = int(ent.get("mass_offer_daily_cap", 0) or 0)
-        mass_offers_today = int(get_today_count(u.id, date.today()) or 0)
+        mass_offers_today = int(get_today_count(u.id, datetime.utcnow().date()) or 0)
 
         # Free weekly allowance
-        weekly_free_quota = int(ent.get("free_mass_offer_weekly", 0) or 0)  # usually 1 on free, 0 on paid
+        weekly_free_quota = int(ent.get("free_mass_offer_weekly", 0) or 0)
         weekly_free_used = bool(get_weekly_free_used(u.id, week_monday_key())) if weekly_free_quota > 0 else False
 
-        # Bonus balance (applies to all plans)
+        # Bonus balance
         bonus_mass_offers = int(get_bonus_balance(u.id) or 0)
 
         # Legal status
@@ -215,6 +292,7 @@ def create_app():
             terms_accepted_ip=getattr(u, "terms_accepted_ip", None),
             legal_ok=legal_ok,
         )
+
     @app.route("/legal/terms")
     def legal_terms():
         return render_template("legal/terms.html")
@@ -232,10 +310,9 @@ def create_app():
     def _require_legal_acceptance():
         try:
             if not app.config.get("LEGAL_GATE_ENABLED", False):
-                return  # gate disabled by default until template is added
+                return
             if not current_user.is_authenticated:
                 return
-            # endpoints that must remain accessible
             allowed = {
                 "legal_terms", "legal_privacy", "legal_aup",
                 "legal_review", "legal_accept",
@@ -254,7 +331,6 @@ def create_app():
                 nxt = request.full_path if request.full_path else request.path
                 return redirect(url_for("legal_review", next=nxt))
         except Exception:
-            # Never block the request if something unexpected happens
             return
 
     @app.route("/legal/review")
@@ -270,7 +346,6 @@ def create_app():
             return redirect(url_for("auth.login"))
 
         v = current_versions()
-        # best-effort IP behind proxies
         ip = request.headers.get("X-Forwarded-For", request.remote_addr) or ""
         ip = ip.split(",")[0].strip() if ip else None
 
@@ -294,5 +369,4 @@ def create_app():
 
 if __name__ == "__main__":
     app = create_app()
-    # Use Flask's reloader for local dev
     app.run(debug=True)

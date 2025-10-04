@@ -196,10 +196,19 @@
       <nav>
         <ul class="nav-links">
           <li><a href="{{ url_for('start') }}">Leagues</a></li>
-          <!-- NOTE: no overlay binding on Trades here anymore -->
-          <li><a href="{{ url_for('mfl.trades_home') }}">Trades</a></li>
+
+          <!-- Gated: MFL-only -->
+          <li>
+            <a href="{{ url_for('mfl.trades_home') }}" data-mfl-only="1">Trades</a>
+          </li>
+
           <li><a href="{{ url_for('live.live_index') }}" data-overlay-intent="live">Matchups</a></li>
-          <li><a href="{{ url_for('lineups.lineups_rapid_start') }}">Lineups</a></li>
+
+          <!-- Gated: MFL-only -->
+          <li>
+            <a href="{{ url_for('lineups.lineups_rapid_start') }}" data-mfl-only="1">Lineups</a>
+          </li>
+
           <li><a href="{{ url_for('injuries.injuries_index') }}" data-overlay-intent="injuries">Injuries</a></li>
           <li><a href="#" class="disabled" aria-disabled="true" title="Coming soon">Waivers</a></li>
 
@@ -259,6 +268,23 @@
       <div class="gso-actions">
         <button type="button" class="button" id="gsoRetry" style="display:none;">Retry</button>
         <button type="button" class="button" id="gsoCancel" style="display:none;background:#444;">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MFL-only modal -->
+  <div id="mflOnlyMask" style="position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:10060;">
+    <div role="dialog" aria-modal="true" aria-labelledby="mflOnlyTitle"
+         style="width:420px;max-width:calc(100% - 24px);background:#0b1220;border:1px solid rgba(255,255,255,.12);
+                border-radius:12px;padding:18px;box-shadow:0 8px 40px rgba(0,0,0,.5);">
+      <h3 id="mflOnlyTitle" style="margin:0 0 6px;">MFL Feature Only</h3>
+      <p class="muted" style="margin:8px 0 0;">
+        Trades, Automated Offers, and Lineups currently work with <strong>MyFantasyLeague (MFL)</strong> only.
+        Link an MFL league to use these tools.
+      </p>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;">
+        <a class="btn-ghost" href="#" id="mflOnlyDismiss">Close</a>
+        <a class="btn" href="{{ url_for('mfl.mfl_config') }}">Link MFL</a>
       </div>
     </div>
   </div>
@@ -396,6 +422,39 @@
       } catch (e) {
         // non-fatal
       }
+    })();
+  </script>
+
+  <script>
+    // ===== MFL-only gate for Trades & Lineups =====
+    (function(){
+      const HAS_MFL = {{ has_mfl_leagues|tojson }};
+      const mask = document.getElementById('mflOnlyMask');
+      const close = document.getElementById('mflOnlyDismiss');
+
+      function showMflOnly() {
+        if (!mask) return;
+        mask.style.display = 'flex';
+      }
+      function hideMflOnly() {
+        if (!mask) return;
+        mask.style.display = 'none';
+      }
+      close?.addEventListener('click', (e) => { e.preventDefault(); hideMflOnly(); });
+      mask?.addEventListener('click', (e) => { if (e.target === mask) hideMflOnly(); });
+
+      // Intercept clicks on MFL-only links if user has no MFL leagues
+      document.querySelectorAll('a[data-mfl-only="1"]').forEach(a => {
+        a.addEventListener('click', (ev) => {
+          if (HAS_MFL) return;           // let it through
+          ev.preventDefault();           // block and show gate
+          showMflOnly();
+        }, { capture:true });
+        // Optional: reflect disabled state in UI if you like
+        if (!HAS_MFL) {
+          a.setAttribute('title', 'MFL Feature Only');
+        }
+      });
     })();
   </script>
 </body>
