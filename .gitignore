@@ -9,3 +9,19 @@ instance/
 .idea/
 .vscode/
 static/*.xml
+
+# ---- local env & Python noise ----
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ---- secrets/local overrides ----
+config.py
+.env
+.env.*
+
+# ---- one-off local scripts ----
+scripts/load_sleeper_players.py
+scripts/load_players_xml.py
