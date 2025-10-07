@@ -133,14 +133,16 @@ def sync_league_info(
     league: League,
     franchise_meta: Dict[str, Dict[str, Any]] | Dict[str, Any],
     roster_slots: Optional[str] = None,
+    ir_slots_max: Optional[int] = None,
     *,
     commit: bool = True,
 ) -> Dict[str, int]:
     """
-    Upsert franchise rows (names/owners/abbrev) and optionally update league.roster_slots.
+    Upsert franchise rows (names/owners/abbrev) and optionally update league.roster_slots / ir_slots_max.
     Accepts meta values as dicts OR dataclasses (via _get).
     """
     created = updated = roster_updated = 0
+    ir_updated = 0
 
     for fid_raw, meta in (franchise_meta or {}).items():
         fid = _fid(fid_raw)
@@ -182,12 +184,22 @@ def sync_league_info(
             league.roster_slots = roster_slots
             roster_updated = 1
 
+    # IR slots (only set if caller provided a value)
+    if ir_slots_max is not None and hasattr(league, "ir_slots_max"):
+        if league.ir_slots_max != ir_slots_max:
+            league.ir_slots_max = ir_slots_max
+            ir_updated = 1
+
     if commit:
         db.session.commit()
     else:
         db.session.flush()
-    return {"teams_created": created, "teams_updated": updated, "roster_text_updated": roster_updated}
-
+    return {
+        "teams_created": created,
+        "teams_updated": updated,
+        "roster_text_updated": roster_updated,
+        "ir_slots_updated": ir_updated,
+    }
 
 # ------------------------- Assets (rosters + picks) --------------------------
 

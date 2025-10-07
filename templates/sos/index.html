@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="tile pad" style="max-width:1100px;margin:24px auto;">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+    <div>
+      <h2 class="hdr" style="margin:0;">Strength of Schedule</h2>
+      <div class="mini" style="opacity:.85;">Compare upcoming opponents for each synced MFL league.</div>
+    </div>
+    <form method="get" style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">
+      <div>
+        <label class="mini" for="start_week" style="display:block; margin-bottom:4px; opacity:.8;">Start week</label>
+        <select id="start_week" name="start_week" class="sos-select">
+          {% for wk in range(1, (max_week or 18) + 1) %}
+            <option value="{{ wk }}" {% if start_week == wk %}selected{% endif %}>Week {{ wk }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="mini" for="span" style="display:block; margin-bottom:4px; opacity:.8;">Span</label>
+        <select id="span" name="span" class="sos-select">
+          {% for span_opt in [2, 3, 4, 5, 6, 7, 8] %}
+            <option value="{{ span_opt }}" {% if span_weeks == span_opt %}selected{% endif %}>{{ span_opt }} weeks</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn-ghost" style="padding:10px 14px; border-radius:10px;">Update</button>
+    </form>
+  </div>
+
+  <p class="mini" style="margin-top:12px; opacity:.75; max-width:720px;">
+    Difficulty is based on each opponent's current record and points for. Higher win percentages indicate a tougher matchup. Update the start week and span to explore different portions of the schedule.
+  </p>
+
+  {% if not has_mfl %}
+    <div class="tile pad dark" style="margin-top:16px; border:1px solid rgba(239,68,68,.35); border-radius:12px;">
+      <div class="mini" style="opacity:.9;">Link and sync your MFL leagues to unlock strength of schedule insights.</div>
+    </div>
+  {% else %}
+    {% if not has_data %}
+      <div class="tile pad dark" style="margin-top:16px; border:1px solid rgba(148,163,184,.35); border-radius:12px;">
+        <div class="mini" style="opacity:.85;">No schedule data was returned for the selected weeks. Try a different span or confirm your leagues are synced.</div>
+      </div>
+    {% endif %}
+
+    <div class="sos-grid">
+      {% for row in results %}
+        {% set league = row.league %}
+        <div class="tile pad dark sos-card">
+          <div class="sos-card-head">
+            <div>
+              <h3 style="margin:0 0 4px;">{{ league.name }}</h3>
+              <div class="mini" style="opacity:.85;">Season {{ league.year }} • Franchise {{ league.franchise_id or '—' }}</div>
+              {% if row.my_team %}
+                <div class="mini" style="opacity:.8;">My team: {{ row.my_team.name }}</div>
+              {% endif %}
+            </div>
+            {% if row.error %}
+              <span class="pill err">Error</span>
+            {% elif row.overall %}
+              <span class="pill {{ row.overall.tag }}">{{ row.overall.label }}</span>
+            {% endif %}
+          </div>
+
+          {% if row.error %}
+            <div class="mini" style="opacity:.85;">{{ row.error }}</div>
+          {% else %}
+            <div class="mini" style="margin:4px 0 12px; opacity:.8;">
+              {% if row.overall and row.overall.avg_win_pct is not none %}
+                Avg opponent win%: {{ (row.overall.avg_win_pct * 100) | round(1) }}%
+              {% else %}
+                Avg opponent win%: —
+              {% endif %}
+              {% if row.hardest_week %}
+                • Toughest week: {{ row.hardest_week.week }} ({{ row.hardest_week.difficulty_label }})
+              {% endif %}
+            </div>
+
+            <div class="sos-weeks">
+              {% for wk in row.weeks %}
+                <div class="sos-week {{ wk.difficulty_tag }}">
+                  <div class="sos-week-head">
+                    <span>Week {{ wk.week }}</span>
+                    <span class="mini" style="opacity:.75;">{{ wk.difficulty_label }}</span>
+                  </div>
+                  {% if wk.is_bye %}
+                    <div class="mini" style="opacity:.8;">Bye week</div>
+                  {% else %}
+                    <ul class="sos-opp-list">
+                      {% for opp in wk.opponents %}
+                        <li>
+                          <div class="opp-name">{{ opp.name }}</div>
+                          <div class="opp-meta mini">
+                            <span>{{ opp.record }}</span>
+                            <span>Win%: {% if opp.win_pct is not none %}{{ (opp.win_pct * 100) | round(1) }}{% else %}—{% endif %}</span>
+                            <span>PF: {% if opp.pf is not none %}{{ opp.pf | round(1) }}{% else %}—{% endif %}</span>
+                          </div>
+                        </li>
+                      {% endfor %}
+                    </ul>
+                    <div class="mini" style="opacity:.7; margin-top:6px;">
+                      {% if wk.avg_win_pct is not none %}Avg win%: {{ (wk.avg_win_pct * 100) | round(1) }}%{% else %}Avg win%: —{% endif %}
+                      {% if wk.avg_pf is not none %} • Avg PF: {{ wk.avg_pf | round(1) }}{% endif %}
+                    </div>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>
+
+<style>
+  .mini { font-size:12px; }
+  .sos-select {
+    appearance:none;
+    background:#0b1220;
+    color:#eaf1f7;
+    border:1px solid rgba(255,255,255,.14);
+    border-radius:10px;
+    padding:8px 10px;
+    min-width:110px;
+  }
+  .sos-grid {
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap:16px;
+    margin-top:18px;
+  }
+  .sos-card {
+    border-radius:12px;
+    border:1px solid rgba(255,255,255,.12);
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+  }
+  .sos-card-head {
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:10px;
+  }
+  .pill {
+    display:inline-block;
+    padding:6px 10px;
+    border-radius:999px;
+    font-size:12px;
+    border:1px solid rgba(255,255,255,.18);
+    background:#0b1220;
+  }
+  .pill.err { border-color: rgba(239,68,68,.45); color:#ffb4b4; }
+  .pill.hard { border-color: rgba(248,113,113,.5); color:#fecaca; }
+  .pill.easy { border-color: rgba(16,185,129,.45); color:#86f3c0; }
+  .pill.medium { border-color: rgba(96,165,250,.45); color:#bfdbfe; }
+  .pill.unknown { border-color: rgba(148,163,184,.45); color:#cbd5f5; }
+  .sos-weeks {
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+  .sos-week {
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:10px;
+    padding:10px 12px;
+    background: rgba(11,18,32,.72);
+  }
+  .sos-week.hard { border-color: rgba(248,113,113,.45); }
+  .sos-week.easy { border-color: rgba(16,185,129,.35); }
+  .sos-week.medium { border-color: rgba(96,165,250,.35); }
+  .sos-week.unknown { border-color: rgba(148,163,184,.25); }
+  .sos-week-head {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:6px;
+  }
+  .sos-opp-list {
+    list-style:none;
+    margin:0;
+    padding:0;
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+  .sos-opp-list li {
+    background: rgba(15,23,42,.45);
+    border:1px solid rgba(255,255,255,.08);
+    border-radius:8px;
+    padding:8px 10px;
+  }
+  .opp-name { font-weight:600; font-size:13px; }
+  .opp-meta {
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    margin-top:4px;
+  }
+</style>
+{% endblock %}

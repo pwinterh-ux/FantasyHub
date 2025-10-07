@@ -163,11 +163,14 @@ def create_app():
     from offers.routes import offers_bp
     from live.routes import live_bp
     from lineups.routes import lineups_bp
+    from lineups.routes import lineups_bp
+    from ir.routes import ir_bp
     from admin import bp as admin_bp
     from billing.routes import billing_bp
     from injuries.routes import injuries_bp
     from sleeper.routes import sleeper_bp
     from exposure.routes import exposure_bp
+    from sos import sos_bp
 
     app.register_blueprint(offers_bp)
     app.register_blueprint(mfl_bp)
@@ -175,11 +178,13 @@ def create_app():
     app.register_blueprint(leagues_bp)
     app.register_blueprint(live_bp)
     app.register_blueprint(lineups_bp)
+    app.register_blueprint(ir_bp)
     app.register_blueprint(injuries_bp)
     app.register_blueprint(admin_bp)  # hidden: /_admin/*
     app.register_blueprint(billing_bp)
     app.register_blueprint(sleeper_bp)
     app.register_blueprint(exposure_bp)
+    app.register_blueprint(sos_bp)
 
     # ----- Routes -----
     @app.route("/")

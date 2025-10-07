@@ -32,6 +32,7 @@ from services.lineups_service import (
     # rapid helpers
     parse_lineup_requirements,
     pick_optimal_lineup,
+    Projection,
 )
 
 lineups_bp = Blueprint("lineups", __name__, template_folder="../templates")
@@ -425,6 +426,227 @@ def lineups_submit():
     results = _parallel_map(_submit_one, jobs, max_workers=PARALLEL_WORKERS)
 
     return render_template("lineups/summary.html", week=week_i, results=results)
+
+
+@lineups_bp.route("/lineups/auto-submit", methods=["POST"])
+@login_required
+def lineups_auto_submit():
+    gate = _require_recent_sync_or_gate()
+    if gate:
+        return gate
+
+    try:
+        week_i = int(str(request.form.get("week")))
+    except Exception:
+        flash("Missing or invalid week.", "warning")
+        return redirect(url_for("lineups.lineups_index"))
+
+    leagues = _user_synced_leagues()
+    if not leagues:
+        flash("No synced leagues to submit.", "warning")
+        return redirect(url_for("lineups.lineups_index"))
+
+    forced_results: List[Dict[str, object]] = []
+    jobs: List[dict] = []
+
+    for lg in leagues:
+        if getattr(lg, "user_id", None) != current_user.id:
+            forced_results.append(
+                dict(
+                    league=lg,
+                    ok=False,
+                    message="Skipped: league not owned by current user",
+                    lineup=[],
+                    projected_total=None,
+                )
+            )
+            continue
+
+        host = _league_host(lg) or "api.myfantasyleague.com"
+        cookie = _cookie_header_for_host(host)
+        players = build_players_for_review(lg.id)
+        if not players:
+            forced_results.append(
+                dict(
+                    league=lg,
+                    ok=False,
+                    message="Skipped: no rostered players found",
+                    lineup=[],
+                    projected_total=None,
+                )
+            )
+            continue
+
+        starters_label = getattr(lg, "roster_slots", None) or ""
+        total_required, ranges = parse_lineup_requirements(starters_label)
+        pid_list = [pid for (pid, _name, _pos, _team) in players]
+        if not pid_list:
+            forced_results.append(
+                dict(
+                    league=lg,
+                    ok=False,
+                    message="Skipped: empty roster",
+                    lineup=[],
+                    projected_total=None,
+                )
+            )
+            continue
+
+        jobs.append(
+            dict(
+                league=lg,
+                host=host,
+                cookie=cookie,
+                players=players,
+                pid_list=pid_list,
+                total_required=total_required,
+                ranges=ranges,
+            )
+        )
+
+    def _fetch(job: dict) -> Tuple[int, Dict[int, Projection], Optional[str]]:
+        lg: League = job["league"]
+        try:
+            proj = fetch_projected_scores(
+                job["host"],
+                lg.mfl_id,
+                lg.year,
+                week_i,
+                job["pid_list"],
+                cookie=job["cookie"],
+            )
+            return (lg.id, proj, None)
+        except Exception as exc:
+            return (lg.id, {}, str(exc))
+
+    proj_results: Dict[int, Dict[str, object]] = {}
+    if jobs:
+        for league_id, proj_map, error in _parallel_map(_fetch, jobs, max_workers=PARALLEL_WORKERS):
+            proj_results[league_id] = {"projections": proj_map, "error": error}
+
+    auto_results: List[Dict[str, object]] = []
+
+    for job in jobs:
+        lg: League = job["league"]
+        entry = proj_results.get(lg.id) or {"projections": {}, "error": "Projection lookup failed"}
+        error_msg = entry.get("error")
+        if error_msg:
+            auto_results.append(
+                dict(
+                    league=lg,
+                    ok=False,
+                    message=f"Projection error: {error_msg}",
+                    lineup=[],
+                    projected_total=None,
+                )
+            )
+            continue
+
+        projections: Dict[int, Projection] = entry.get("projections", {})  # type: ignore[assignment]
+        players = job["players"]
+        total_required = job["total_required"]
+        ranges = job["ranges"]
+        auto_ids = pick_optimal_lineup(players, projections, total_required, ranges)
+
+        allowed_ids = {pid for (pid, _name, _pos, _team) in players}
+        starters = [pid for pid in auto_ids if pid in allowed_ids]
+        if not starters:
+            auto_results.append(
+                dict(
+                    league=lg,
+                    ok=False,
+                    message="Unable to identify starters for submission",
+                    lineup=[],
+                    projected_total=None,
+                )
+            )
+            continue
+
+        players_lookup = {
+            pid: dict(name=name, position=pos, team=nfl)
+            for (pid, name, pos, nfl) in players
+        }
+
+        try:
+            ok, raw = submit_lineup(
+                job["host"],
+                lg.mfl_id,
+                lg.year,
+                week_i,
+                starters,
+                cookie=job["cookie"],
+            )
+        except Exception as exc:
+            auto_results.append(
+                dict(
+                    league=lg,
+                    ok=False,
+                    message=f"Submission error: {exc}",
+                    lineup=[],
+                    projected_total=None,
+                )
+            )
+            continue
+
+        raw_text = raw or ("OK" if ok else "")
+        clean = _clean_mfl_message(raw_text or ("OK" if ok else "Failed"))
+        final_ok = ok or _is_ok_payload(raw_text)
+
+        lineup_details: List[Dict[str, object]] = []
+        projected_total: Optional[float] = None
+        total_sum = 0.0
+        counted = 0
+
+        for pid in starters:
+            info = players_lookup.get(pid, {})
+            proj_entry = projections.get(pid)
+            proj_val = proj_entry.projected if proj_entry else None
+            if proj_val is not None:
+                try:
+                    total_sum += float(proj_val)
+                    counted += 1
+                except (TypeError, ValueError):
+                    pass
+            lineup_details.append(
+                dict(
+                    player_id=pid,
+                    name=info.get("name") or f"Player {pid}",
+                    position=info.get("position") or "",
+                    team=info.get("team") or "",
+                    projected=proj_val,
+                )
+            )
+
+        if counted:
+            projected_total = round(total_sum, 2)
+
+        lineup_details.sort(
+            key=lambda row: (
+                row.get("projected") is None,
+                -float(row.get("projected") or 0.0),
+                str(row.get("name") or ""),
+            )
+        )
+
+        auto_results.append(
+            dict(
+                league=lg,
+                ok=final_ok,
+                message=clean or ("Lineup submitted successfully" if final_ok else ""),
+                lineup=lineup_details,
+                projected_total=projected_total,
+            )
+        )
+
+    all_results = forced_results + auto_results
+    all_results.sort(key=lambda r: str(r["league"].name or "").lower())
+
+    return render_template(
+        "lineups/summary.html",
+        week=week_i,
+        results=all_results,
+        auto_mode=True,
+    )
 
 # ============================ Rapid flow (one-by-one) ========================
 

@@ -36,19 +36,32 @@
       </div>
     </div>
 
-    <!-- Tile 2: Optimize (Coming Soon) -->
-    <div class="tile pad dark" style="display:flex; flex-direction:column; gap:12px; opacity:.9;">
+     <!-- Tile 2: Auto submit -->
+    <div class="tile pad dark" style="display:flex; flex-direction:column; gap:12px;">
       <div>
-        <h3 style="margin:0 0 6px;">Optimize Lineups</h3>
-        <div style="opacity:.85;">Coming soon — one-click fill using projections and your roster slots.</div>
+        <h3 style="margin:0 0 6px;">Auto Set Best Lineups</h3>
+        <div style="opacity:.85;">Pick a week and we’ll submit the optimal projected starters to every synced league.</div>
       </div>
 
-      <!-- Broken/placeholder link by request -->
-      <a href="#"
-         class="btn-ghost"
-         style="pointer-events:none; opacity:.6; padding:10px 14px; border-radius:10px;">
-        Optimize (Coming Soon)
-      </a>
+      <form method="POST" action="{{ url_for('lineups.lineups_auto_submit') }}" style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">
+        <div>
+          <label for="auto-week" style="display:block; font-size:12px; opacity:.9; margin-bottom:4px;">Week</label>
+          <select id="auto-week" name="week"
+                  style="appearance:none; background:#0b1220; color:#eaf1f7; border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:8px 10px; min-width:120px;">
+            {% for w in weeks %}
+              <option value="{{ w }}" {% if selected_week == w %}selected{% endif %}>Week {{ w }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <button type="submit" class="btn-ghost" style="padding:10px 14px; border-radius:10px;">
+          Auto Submit Lineups
+        </button>
+      </form>
+
+      <div style="font-size:12px; opacity:.8;">
+        We use your roster rules, projections, and franchise cookies to send the lineup directly to MFL for each league.
+      </div>
     </div>
   </div>
 </div>

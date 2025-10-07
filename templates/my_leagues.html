@@ -127,6 +127,9 @@
   <div class="leagues-header">
     <div class="left">
       <a href="{{ url_for('exposure.exposure_index') }}" class="btn-ghost">Exposure</a>
+      {% if has_mfl_leagues %}
+        <a href="{{ url_for('sos.strength_of_schedule') }}" class="btn-ghost">Strength of Schedule</a>
+      {% endif %}
     </div>
     <div class="center">
       <h2 class="hdr">My Leagues</h2>

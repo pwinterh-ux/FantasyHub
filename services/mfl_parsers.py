@@ -120,14 +120,15 @@ def parse_user_leagues(xml_bytes: bytes) -> List[dict]:
     return out
 
 
-# ---------- League info (franchise names/owners + optional lineup) ----------
+# ---------- League info (franchise names/owners + optional lineup + IR) -----
 
-def parse_league_info(xml: bytes) -> tuple[dict[str, dict], str | None, str | None]:
+def parse_league_info(xml: bytes) -> tuple[dict[str, dict], str | None, str | None, Optional[int]]:
     """
     Returns:
       - franchise meta map: { "0001": {"name": "...", "owner_name": "...", "abbrev": "..."} , ...}
       - lineup/roster string e.g. "QB:1,RB:2-4,WR:3-5,TE:1-3"
       - baseURL e.g. "https://www43.myfantasyleague.com"
+      - ir_slots_max (int) if discoverable
     """
     root = ET.fromstring(xml)
     league_el = root.find(".//league")
@@ -147,7 +148,10 @@ def parse_league_info(xml: bytes) -> tuple[dict[str, dict], str | None, str | No
     # 2) lineup string (best effort)
     lineup_str = _extract_lineup_string(root)
 
-    return meta, lineup_str, base_url
+    # 3) IR slots (best effort)
+    ir_slots_max = _extract_ir_slots(root)
+
+    return meta, lineup_str, base_url, ir_slots_max
 
 
 def _extract_lineup_string(root: ET.Element) -> Optional[str]:
@@ -202,6 +206,50 @@ def _extract_lineup_string(root: ET.Element) -> Optional[str]:
     if text and total_count:
         return f"{total_count}:{text}"
     return text
+
+
+def _extract_ir_slots(root: ET.Element) -> Optional[int]:
+    """
+    Minimal IR discovery (no extra normalization). Try a few common shapes:
+      - <rosterPositions><position name="IR" limit="3" .../></rosterPositions>
+      - <rosterLimits><position name="IR" max="3" .../></rosterLimits>
+      - <injuredReserve limit="3"/> / <injured_reserve .../> / <injuryReserve .../>
+    Returns int or None.
+    """
+    def _try_int(val: Any) -> Optional[int]:
+        if val is None:
+            return None
+        try:
+            return int(str(val).strip())
+        except Exception:
+            return None
+
+    # A) rosterPositions
+    pos = root.find(".//rosterPositions/position[@name='IR']") or root.find(".//rosterPositions/position[@id='IR']")
+    if pos is not None:
+        for key in ("limit", "max", "count"):
+            iv = _try_int(pos.get(key))
+            if iv is not None:
+                return iv
+
+    # B) rosterLimits
+    pos = root.find(".//rosterLimits/position[@name='IR']") or root.find(".//rosterLimits/position[@id='IR']")
+    if pos is not None:
+        for key in ("limit", "max", "count"):
+            iv = _try_int(pos.get(key))
+            if iv is not None:
+                return iv
+
+    # C) single node variants
+    ir = root.find(".//injuredReserve") or root.find(".//injured_reserve") or root.find(".//injuryReserve")
+    if ir is not None:
+        for key in ("limit", "max", "count"):
+            iv = _try_int(ir.get(key))
+            if iv is not None:
+                return iv
+
+    return None
+
 
 # ---------- League assets (rosters + future picks in one call) --------------
 

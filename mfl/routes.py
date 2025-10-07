@@ -16,7 +16,7 @@ from services.mfl_parsers import (
     parse_user_leagues,
     parse_assets,
     parse_standings,
-    parse_league_info,           # (franchise_meta_map, roster_slots_text, league_base_url)
+    parse_league_info,           # (franchise_meta_map, roster_slots_text, league_base_url, ir_slots_max)
     parse_rosters_fallback,      # used when assets is blocked
     parse_future_picks_fallback, # used when assets is blocked
     parse_pending_trades,        # parses export?TYPE=pendingTrades (open trades only)
@@ -210,7 +210,7 @@ def _refresh_sleeper_assets_for_user(user) -> tuple[int, list[str]]:
 def offers_entry():
     # keep the nav under the mfl/ namespace, but land in the offers app
     return redirect(url_for("offers.search"))
-    
+
 # --------------------------- Link / Login -----------------------------------
 
 @mfl_bp.route("/login", methods=["GET", "POST"])
@@ -665,12 +665,15 @@ def mfl_config_submit():
                     },
                 )
                 try:
-                    franchise_meta, roster_text, league_base_url = parse_league_info(info_xml) if info_xml else ({}, None, None)
+                    franchise_meta, roster_text, league_base_url, ir_max = (
+                        parse_league_info(info_xml) if info_xml else ({}, None, None, None)
+                    )
                 except Exception as e:
-                    franchise_meta, roster_text, league_base_url = {}, None, None
+                    franchise_meta, roster_text, league_base_url, ir_max = {}, None, None, None
                     out["errors"].append(f"parse_league_info:{e}")
                 out["franchise_meta"] = franchise_meta
                 out["roster_text"] = roster_text
+                out["ir_max"] = ir_max
                 out["resolved_host"] = spec["prefer_host"] or _host_only(league_base_url) or host_by_lid.get(lid) or host_key
 
                 # 2) assets (host first, fallback to API if blocked)
@@ -796,6 +799,7 @@ def mfl_config_submit():
                 lg,
                 bundle.get("franchise_meta") or {},
                 roster_slots=bundle.get("roster_text"),
+                ir_slots_max=bundle.get("ir_max"),
             )
             db.session.commit()
         except Exception as e:
@@ -928,11 +932,11 @@ def mfl_config_sync_one():
         if phase == "FAST":
             info_xml = api_client.get_league_info(league_id, api_cookie)
             try:
-                franchise_meta, roster_text, league_base_url = (
-                    parse_league_info(info_xml) if info_xml else ({}, None, None)
+                franchise_meta, roster_text, league_base_url, ir_max = (
+                    parse_league_info(info_xml) if info_xml else ({}, None, None, None)
                 )
             except Exception as parse_err:
-                franchise_meta, roster_text, league_base_url = {}, None, None
+                franchise_meta, roster_text, league_base_url, ir_max = {}, None, None, None
                 warnings.append(f"parse_league_info:{parse_err}")
 
             resolved_host = (
@@ -967,6 +971,7 @@ def mfl_config_sync_one():
                     league,
                     franchise_meta or {},
                     roster_slots=roster_text,
+                    ir_slots_max=ir_max,
                     commit=False,
                 )
                 standings_count = sync_league_standings(league, standings or [], commit=False)
@@ -981,6 +986,7 @@ def mfl_config_sync_one():
                 "teams_created": metrics_info.get("teams_created", 0),
                 "teams_updated": metrics_info.get("teams_updated", 0),
                 "roster_text_updated": metrics_info.get("roster_text_updated", 0),
+                "ir_slots_updated": metrics_info.get("ir_slots_updated", 0),
                 "standings_updated": standings_count,
             }
         else:  # ASSETS        else:  # ASSETS

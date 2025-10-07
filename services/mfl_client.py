@@ -251,6 +251,19 @@ class MFLClient:
             ctx.update(context)
         return self._export("rosters", params={"L": league_id}, cookie=cookie, context=ctx)
 
+    def get_schedule(
+        self,
+        league_id: str,
+        cookie: str,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bytes:
+        """Season schedule for the given league (TYPE=schedule)."""
+        ctx = {"resource": "schedule", "league_id": str(league_id)}
+        if context:
+            ctx.update(context)
+        return self._export("schedule", params={"L": league_id}, cookie=cookie, context=ctx)
+
     def get_future_picks(
         self,
         league_id: str,

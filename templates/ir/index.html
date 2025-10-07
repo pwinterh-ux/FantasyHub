@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="tile pad" style="max-width:1100px;margin:24px auto;display:flex;flex-direction:column;gap:20px;">
+  <div>
+    <h2 class="hdr" style="margin:0 0 6px;">IR Optimizer</h2>
+    <div class="mini" style="opacity:.8;">Hidden screen • Applies IR swaps immediately for your MFL leagues</div>
+  </div>
+
+  {% if summary %}
+    <div class="ir-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;">
+      {% for row in summary %}
+        <div class="tile pad dark" style="display:flex;flex-direction:column;gap:14px;">
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <div style="font-weight:600;">{{ row.league.name }} — IR {{ row.ir_used_after if row.ir_used_after is not none else "?" }}/{{ row.ir_slots_max }}</div>
+            <div class="mini" style="opacity:.75;">League ID {{ row.league.mfl_id }} • Franchise {{ row.league.franchise_id }}</div>
+          </div>
+
+          <div class="ir-columns" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+            <div>
+              <div class="mini" style="text-transform:uppercase;letter-spacing:.04em;opacity:.75;margin-bottom:6px;">Activated (off IR)</div>
+              {% if row.activated %}
+                <ul class="plain" style="margin:0;padding-left:16px;">
+                  {% for player in row.activated %}
+                    <li>{{ player.name or 'Unknown' }} <span class="mini" style="opacity:.6;">(#{{ player.id }})</span></li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <div style="opacity:.6;">None</div>
+              {% endif %}
+            </div>
+
+            <div>
+              <div class="mini" style="text-transform:uppercase;letter-spacing:.04em;opacity:.75;margin-bottom:6px;">Deactivated (to IR)</div>
+              {% if row.deactivated %}
+                <ul class="plain" style="margin:0;padding-left:16px;">
+                  {% for player in row.deactivated %}
+                    <li>{{ player.name or 'Unknown' }} <span class="mini" style="opacity:.6;">(#{{ player.id }})</span></li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <div style="opacity:.6;">None</div>
+              {% endif %}
+            </div>
+
+            <div>
+              <div class="mini" style="text-transform:uppercase;letter-spacing:.04em;opacity:.75;margin-bottom:6px;">Notes</div>
+              {% if row.notes %}
+                <ul class="plain" style="margin:0;padding-left:16px;">
+                  {% for note in row.notes %}
+                    <li>{{ note }}</li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <div style="opacity:.6;">No issues reported</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="tile pad dark" style="opacity:.85;">No IR changes were applied this run.</div>
+  {% endif %}
+
+  {% if skipped %}
+    <div class="tile pad" style="background:rgba(9,16,29,.4);border:1px solid rgba(255,255,255,.08);border-radius:16px;">
+      <div style="font-weight:600;margin-bottom:8px;">Skipped leagues</div>
+      <ul class="plain" style="margin:0;padding-left:16px;display:flex;flex-direction:column;gap:4px;">
+        {% for item in skipped %}
+          <li><strong>{{ item.league }}</strong>: {{ item.reason }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  <div class="mini" style="opacity:.7;">Eligible statuses: {{ statuses|join(", ") }}</div>
+</div>
+{% endblock %}
