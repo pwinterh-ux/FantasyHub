@@ -1,0 +1,550 @@
+{% extends "base.html" %}
+{% block content %}
+
+{# expects from tools/routes.py:
+   has_mfl_leagues (bool), page_visible (bool), last_sync_label (str),
+   refresh_required (bool), weeks (iterable[int]), selected_week (int),
+   mfl_leagues (list[dict] with keys: db_id, mfl_id, year, name)
+#}
+
+<style>
+  :root{
+    --tile-bg: radial-gradient(120% 120% at 10% 0%, rgba(12,14,18,.86), rgba(8,10,12,.9));
+    --tile-dark: rgba(10,12,16,.75);
+    --border: rgba(255,255,255,.12);
+  }
+  .page{display:flex;flex-direction:column;gap:16px;max-width:1100px;margin:24px auto;}
+  .hdr{background:var(--tile-dark);border:1px solid var(--border);border-radius:14px;padding:14px;}
+  .hdr h2{margin:0;font-size:22px;}
+  .sub{font-size:12px;opacity:.9;}
+
+  .helper{
+    display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+    background:var(--tile-dark);border:1px solid var(--border);border-radius:14px;padding:12px 14px;
+  }
+  .helper .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .pill{display:inline-flex;align-items:center;gap:8px;font-size:12px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.16);}
+  .pill.alert{border-color:#f87171;background:rgba(248,113,113,.12);}
+  .btn{cursor:pointer;user-select:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 12px;border-radius:12px;font-size:13px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);}
+  .btn:hover{background:rgba(255,255,255,.1);}
+  .btn-ghost.is-disabled{pointer-events:none;opacity:.6;}
+
+  /* Exactly 2 tiles per row on desktop */
+  .grid{display:grid;gap:18px;grid-template-columns:1fr;}
+  @media (min-width: 1000px){
+    .grid{grid-template-columns:repeat(2, minmax(520px, 1fr));}
+  }
+
+  .card{position:relative;overflow:hidden;border-radius:14px;border:1px solid var(--border);background:var(--tile-bg);}
+  .card-inner{padding:16px;display:flex;flex-direction:column;gap:10px;min-height:180px;}
+  .card h3{margin:0;font-size:18px;}
+  .card .desc{font-size:13px;opacity:.9;line-height:1.45;}
+  .badge{position:absolute;top:10px;right:10px;font-size:10px;padding:6px 8px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);}
+  .is-disabled{opacity:.55;filter:grayscale(.2);}  /* clickable so modal can show if gated */
+  .actions{margin-top:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+
+  .week-chip{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);}
+  .week-chip label{font-size:12px;opacity:.9;}
+  .week-chip select{appearance:none;background:transparent;border:none;color:inherit;font-size:13px;padding:4px 6px;outline:none;}
+
+  /* Overlay */
+  #syncOverlay{position:fixed;inset:0;background:rgba(15,23,42,0.82);display:none;align-items:center;justify-content:center;z-index:9999;padding:20px;}
+  .sync-card{background:rgba(15,23,42,0.96);border:1px solid rgba(96,165,250,0.25);border-radius:14px;box-shadow:0 18px 38px rgba(15,23,42,0.55);padding:28px 26px;width:min(420px,100%);display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;}
+  .spinner{width:56px;height:56px;border:6px solid rgba(255,255,255,.25);border-top-color:#38bdf8;border-radius:50%;animation:spin 1s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .sync-headline{color:#fff;font-weight:600;font-size:1.15rem;}
+  .sync-league{color:rgba(255,255,255,0.82);font-size:1rem;}
+  .sync-phase{color:rgba(96,165,250,0.9);font-size:0.95rem;font-weight:500;}
+  .sync-detail{color:rgba(226,232,240,0.95);font-size:0.95rem;min-height:1.6em;}
+  .sync-actions{display:flex;gap:12px;}
+  #syncRetry,#syncCancel{display:none;}
+  .sync-progress{width:240px;max-width:100%;height:6px;background:rgba(255,255,255,.12);border-radius:4px;overflow:hidden;}
+  #syncProgressBar{height:100%;width:0%;transition:width .25s ease;}
+</style>
+
+<!-- Overlay -->
+<div id="syncOverlay" aria-live="polite" aria-busy="true">
+  <div class="sync-card">
+    <div class="spinner" id="syncSpinner"></div>
+    <div class="sync-headline" id="syncHeadline">Preparing refresh…</div>
+    <div class="sync-league" id="syncLeagueLabel"></div>
+    <div class="sync-phase" id="syncPhaseLabel"></div>
+    <div class="sync-progress" id="syncProgress" aria-hidden="true"><div id="syncProgressBar"></div></div>
+    <div class="sync-detail" id="syncDetail">Gathering leagues…</div>
+    <div class="sync-actions">
+      <button type="button" class="button" id="syncRetry">Retry</button>
+      <button type="button" class="button" id="syncCancel" style="background:#444;">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Runtime config -->
+<script id="leagueRefreshConfig" type="application/json">
+  {{ {
+       "mflSyncOneUrl": url_for('mfl.mfl_config_sync_one'),
+       "sleeperListUrl": url_for('sleeper.list_leagues'),
+       "sleeperSyncOneUrl": url_for('sleeper.sleeper_sync_one')
+     } | tojson }}
+</script>
+
+<div class="page">
+  <div class="hdr">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h2>Tools Hub</h2>
+        <div class="sub">Kickoff for IR Optimizer, lineup helpers, Exposures, and Waivers (coming soon).</div>
+      </div>
+      {# removed the "Hidden page (no nav link)" pill #}
+    </div>
+  </div>
+
+  <!-- Helper: last sync + refresh assets -->
+  <div class="helper">
+    <div class="row">
+      <span class="pill"><strong>Last Roster Sync:</strong>&nbsp;{{ last_sync_label }}</span>
+      <span class="sub">Some tools require a recent refresh to function properly.</span>
+      {% if refresh_required %}
+        <span class="pill alert">Refresh required</span>
+      {% endif %}
+    </div>
+    <div class="row">
+      <a href="#" class="btn" id="refreshAssetsLink">Refresh Assets</a>
+    </div>
+  </div>
+
+  <div class="grid">
+
+    <!-- IR Optimizer (MFL Only) -->
+    <div class="card {% if not has_mfl_leagues %}is-disabled{% endif %}">
+      <div class="badge">MFL Only</div>
+      <div class="card-inner">
+        <h3>IR Optimizer</h3>
+        <div class="desc">
+          Identify IR-eligible players and **demote** them to IR to free bench spots, and **promote**
+          players who are no longer eligible off IR. Runs through all synced MFL leagues.
+        </div>
+        <div class="actions">
+          <a class="btn open-tool" data-tool="IR Optimizer" href="/ir" data-mfl-only="1">Open</a>
+          <span class="sub">Works best after a fresh sync.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Lineup Injury Check (NOT gated; works with Sleeper too) -->
+    <div class="card">
+      <div class="card-inner">
+        <h3>Lineup Injury Check</h3>
+        <div class="desc">
+          Shows starters who appear on the weekly injury report (OUT/Doubtful/Questionable/Suspended) so you can review before lock.
+        </div>
+        <div class="actions">
+          <a class="btn open-tool" data-tool="Lineup Injury Check" href="/injuries">Open</a>
+          <span class="sub">Requires current injury data.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rapid Lineups (MFL Only) -->
+    <div class="card {% if not has_mfl_leagues %}is-disabled{% endif %}">
+      <div class="badge">MFL Only</div>
+      <div class="card-inner">
+        <h3>Rapid Lineups</h3>
+        <div class="desc">
+          Review and submit lineups one league at a time. Designed for Tue–Thu initial submissions; locked-starter support coming soon.
+        </div>
+        <div class="actions">
+          <form method="POST"
+                action="{{ url_for('lineups.lineups_rapid_start') }}"
+                class="open-form"
+                data-tool="Rapid Lineups"
+                data-mfl-only="1"
+                style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span class="week-chip">
+              <label for="rapid-week">Week</label>
+              <select id="rapid-week" name="week">
+                {% for w in weeks %}
+                  <option value="{{ w }}" {% if selected_week == w %}selected{% endif %}>Week {{ w }}</option>
+                {% endfor %}
+              </select>
+            </span>
+            <button class="btn" type="submit">Begin</button>
+          </form>
+          <div class="sub" style="flex-basis:100%;">We’ll fetch projections and pre-fill a recommended lineup; you can adjust before submitting to MFL.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Auto Set (MFL Only) -->
+    <div class="card {% if not has_mfl_leagues %}is-disabled{% endif %}">
+      <div class="badge">MFL Only</div>
+      <div class="card-inner">
+        <h3>Auto Set</h3>
+        <div class="desc">Pick a week and we’ll submit the optimal projected starters to every synced league.</div>
+        <div class="actions">
+          <form method="POST"
+                action="{{ url_for('lineups.lineups_auto_submit') }}"
+                class="open-form"
+                data-tool="Auto Set"
+                data-mfl-only="1"
+                style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span class="week-chip">
+              <label for="auto-week">Week</label>
+              <select id="auto-week" name="week">
+                {% for w in weeks %}
+                  <option value="{{ w }}" {% if selected_week == w %}selected{% endif %}>Week {{ w }}</option>
+                {% endfor %}
+              </select>
+            </span>
+            <button class="btn" type="submit">Auto Submit Lineups</button>
+          </form>
+          <div class="sub" style="flex-basis:100%;">We’ll fetch projections and submit a recommended lineup for all your leagues.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Exposures (works with Sleeper too) -->
+    <div class="card">
+      <div class="card-inner">
+        <h3>Exposures</h3>
+        <div class="desc">
+          Unified view of your player shares across Sleeper + MFL: overall % owned, platform split, overlap,
+          and quick filters by position/team to spot over- or under-exposed bets.
+        </div>
+        <div class="actions">
+          <a class="btn open-tool" data-tool="Exposures" href="/exposure">Open</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Waivers (Coming Soon) -->
+    <div class="card is-disabled">
+      <div class="badge">Coming Soon</div>
+      <div class="card-inner">
+        <h3>Waivers</h3>
+        <div class="desc">Targets, FAAB guidance, and league-aware availability. Module under active development.</div>
+        <div class="actions">
+          <button class="btn" disabled>Open</button>
+          <span class="pill">ETA: TBD</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- JS: MFL-only gating + Refresh overlay + tool-launch spinner -->
+<script>
+(function attachToolsHandlers(){
+  // ----- MFL-only gating (uses modal already in base.html) -----
+  (function gateMflOnly(){
+    const HAS_MFL = {{ has_mfl_leagues|tojson }};
+    const mask = document.getElementById('mflOnlyMask');
+    const close = document.getElementById('mflOnlyDismiss');
+
+    function show(){ if (mask) mask.style.display = 'flex'; }
+    function hide(){ if (mask) mask.style.display = 'none'; }
+    close?.addEventListener('click', (e)=>{ e.preventDefault(); hide(); });
+    mask?.addEventListener('click', (e)=>{ if (e.target === mask) hide(); });
+
+    function intercept(ev){
+      if (HAS_MFL) return;                 // allow when user has MFL
+      ev.preventDefault();
+      ev.stopImmediatePropagation();       // stop other handlers (like spinner)
+      show();
+    }
+
+    // Intercept ONLY the MFL-only actions
+    document.querySelectorAll('[data-mfl-only="1"]').forEach(el => {
+      if (el.tagName === 'FORM') {
+        el.addEventListener('submit', intercept, { capture:true });
+      } else {
+        el.addEventListener('click', intercept, { capture:true });
+      }
+      if (!HAS_MFL) el.setAttribute('title','MFL Feature Only');
+    });
+  })();
+
+  // Safe init after DOM is ready
+  const onReady = (fn) => {
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+      setTimeout(fn, 0);
+    } else {
+      document.addEventListener('DOMContentLoaded', fn, { once: true });
+    }
+  };
+
+  onReady(() => {
+    try {
+      const overlay = document.getElementById('syncOverlay');
+      const spinner = document.getElementById('syncSpinner');
+      const headline = document.getElementById('syncHeadline');
+      const leagueLabel = document.getElementById('syncLeagueLabel');
+      const phaseLabel = document.getElementById('syncPhaseLabel');
+      const detail = document.getElementById('syncDetail');
+      const progressWrap = document.getElementById('syncProgress');
+      const progressBar = document.getElementById('syncProgressBar');
+      const retryBtn = document.getElementById('syncRetry');
+      const cancelBtn = document.getElementById('syncCancel');
+      const refreshLinkEl = document.getElementById('refreshAssetsLink');
+
+      if (!overlay) console.error('[Tools] #syncOverlay not found.');
+      else if (overlay.parentElement !== document.body) { overlay.parentElement.removeChild(overlay); document.body.appendChild(overlay); }
+
+      // Endpoints
+      let endpoints = {};
+      try {
+        const cfgEl = document.getElementById('leagueRefreshConfig');
+        endpoints = JSON.parse(cfgEl?.textContent || '{}') || {};
+      } catch (e) {}
+
+      const resetActions = () => {
+        if (!retryBtn || !cancelBtn) return;
+        retryBtn.style.display = 'none';
+        cancelBtn.style.display = 'none';
+        retryBtn.onclick = null;
+        cancelBtn.onclick = null;
+        cancelBtn.textContent = 'Cancel';
+      };
+      const updateProgress = (done, total) => {
+        if (!progressBar) return;
+        const pct = total ? Math.min(100, Math.round((done/total)*100)) : 0;
+        progressBar.style.width = pct + '%';
+      };
+      const promptRetry = (message, allowRetry) => new Promise(resolve => {
+        if (!overlay) return resolve(false);
+        spinner.style.display = 'none';
+        headline.textContent = 'Refresh paused';
+        detail.textContent = message || 'An error occurred.';
+        resetActions();
+        if (allowRetry) {
+          retryBtn.style.display = 'inline-flex';
+          retryBtn.onclick = () => { resetActions(); spinner.style.display = 'block'; detail.textContent = 'Retrying…'; resolve(true); };
+        }
+        cancelBtn.style.display = 'inline-flex';
+        if (!allowRetry) cancelBtn.textContent = 'Close';
+        cancelBtn.onclick = () => { resetActions(); resolve(false); };
+      });
+      const describeAssetsMetrics = (m) => {
+        m = m || {};
+        const parts = [];
+        if (m.rosters_inserted) parts.push(`${m.rosters_inserted} roster spots`);
+        if (m.picks_inserted) parts.push(`${m.picks_inserted} draft picks`);
+        if (m.teams_touched) parts.push(`${m.teams_touched} teams touched`);
+        return parts.join(' • ');
+      };
+
+      async function runMflAssetsPhase(league){
+        const body = new URLSearchParams();
+        body.append('league_id', league.mfl_id);
+        body.append('mfl_id', league.mfl_id);
+        if (league.year) body.append('year', league.year);
+        body.append('phase', 'ASSETS');
+        const url = endpoints.mflSyncOneUrl;
+        if (!url) { const e = new Error('MFL sync endpoint missing'); e.retryable = false; throw e; }
+        const resp = await fetch(url, {
+          method:'POST',
+          body,
+          headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','Accept':'application/json'}
+        });
+        const text = await resp.text(); let payload = {};
+        if (text){ try{ payload = JSON.parse(text); }catch{ const e=new Error('Refresh returned an invalid response.'); e.retryable=true; throw e; } }
+        if (!resp.ok || (payload && payload.ok === false)){
+          const message = (payload && payload.error) ? payload.error : `Refresh failed (${resp.status})`;
+          const e = new Error(message);
+          e.retryable = payload && Object.prototype.hasOwnProperty.call(payload,'retryable') ? !!payload.retryable : resp.status >= 500;
+          throw e;
+        }
+        return payload || {};
+      }
+
+      async function fetchSleeperSaved(yearStr){
+        const url = endpoints.sleeperListUrl ? `${endpoints.sleeperListUrl}?year=${encodeURIComponent(yearStr||'')}` : null;
+        if (!url) { return []; }
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' }});
+        const data = await res.json();
+        if (!res.ok || !data || !Array.isArray(data.leagues)) {
+          const msg = (data && data.error) ? data.error : 'Unable to load saved Sleeper leagues.';
+          const e = new Error(msg); e.retryable = false; throw e;
+        }
+        return data.leagues.map(l => ({
+          id: l.id, sleeper_id: l.sleeper_id, year: l.year,
+          name: l.name || `League ${l.sleeper_id}`,
+          display: `Sleeper — ${l.name || 'League'} (${l.sleeper_id || l.id})`
+        }));
+      }
+      async function runSleeperAssetsPhase(league){
+        const body = new URLSearchParams();
+        body.append('league_id', league.id);
+        if (league.year) body.append('year', league.year);
+        const url = endpoints.sleeperSyncOneUrl;
+        if (!url) { const e = new Error('Sleeper sync endpoint missing'); e.retryable = false; throw e; }
+        const resp = await fetch(url, {
+          method:'POST',
+          body,
+          headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','Accept':'application/json'},
+        });
+        const text = await resp.text(); let payload = {};
+        if (text){ try{ payload = JSON.parse(text); }catch{ const e=new Error('Refresh returned an invalid response.'); e.retryable=true; throw e; } }
+        if (!resp.ok || (payload && payload.ok === false)){
+          const message = (payload && payload.error) ? payload.error : `Refresh failed (${resp.status})`;
+          const e = new Error(message);
+          e.retryable = payload && Object.prototype.hasOwnProperty.call(payload,'retryable') ? !!payload.retryable : resp.status >= 500;
+          throw e;
+        }
+        return payload || {};
+      }
+
+      document.getElementById('refreshAssetsLink')?.addEventListener('click', async (e) => {
+        try {
+          e.preventDefault();
+
+          const MFL_LIST = ({{ (mfl_leagues or []) | tojson }}) || [];
+          const sleeperYearHint = (MFL_LIST && MFL_LIST.length && MFL_LIST[0].year) ? String(MFL_LIST[0].year) : '';
+
+          overlay.style.display='flex';
+          overlay.setAttribute('aria-busy','true');
+          spinner.style.display='block';
+          headline.textContent='Preparing refresh…';
+          leagueLabel.textContent='';
+          phaseLabel.textContent='';
+          detail.textContent='Collecting leagues…';
+          document.getElementById('syncProgress').style.display='block';
+          const updateProgress = (done, total) => {
+            const pct = total ? Math.min(100, Math.round((done/total)*100)) : 0;
+            document.getElementById('syncProgressBar').style.width = pct + '%';
+          };
+          updateProgress(0, 1);
+          {{ "" }}
+
+          let sleeperLeagues = [];
+          try { sleeperLeagues = await fetchSleeperSaved(sleeperYearHint); }
+          catch (e) { console.warn('[Tools] Sleeper list fetch failed:', e); }
+
+          const total = (MFL_LIST.length + sleeperLeagues.length) || 1;
+          let done = 0; updateProgress(0, total);
+
+          if (MFL_LIST.length) headline.textContent = 'Refreshing MFL assets…';
+          for (let i=0; i<MFL_LIST.length; ){
+            const lg = MFL_LIST[i];
+            leagueLabel.textContent = `MFL — ${lg.name || 'League'} (${lg.mfl_id})`;
+            phaseLabel.textContent = 'Assets';
+            detail.textContent = 'Working…';
+            spinner.style.display = 'block';
+            try{
+              const res = await runMflAssetsPhase(lg);
+              done += 1; updateProgress(done, total);
+              let summary = describeAssetsMetrics(res.metrics || {});
+              if (res.fallback_used) summary = summary ? `${summary} • Used fallback` : 'Used fallback data';
+              if (res.warnings && res.warnings.length) summary = summary ? `${summary} • Warnings: ${res.warnings.join('; ')}` : `Warnings: ${res.warnings.join('; ')}`;
+              detail.textContent = summary || 'Assets refreshed.';
+              spinner.style.display = 'none';
+              phaseLabel.textContent = 'Assets ✓';
+              await new Promise(r => setTimeout(r, 120));
+              spinner.style.display = 'block';
+              phaseLabel.textContent = 'Assets';
+              i += 1;
+            } catch (err){
+              const retryable = err && Object.prototype.hasOwnProperty.call(err,'retryable') ? !!err.retryable : true;
+              const again = await (function(message, allowRetry){
+                return new Promise(resolve => {
+                  spinner.style.display = 'none';
+                  headline.textContent = 'Refresh paused';
+                  detail.textContent = message || 'An error occurred.';
+                  document.getElementById('syncRetry').style.display = allowRetry ? 'inline-flex' : 'none';
+                  document.getElementById('syncCancel').style.display = 'inline-flex';
+                  document.getElementById('syncRetry').onclick = () => { document.getElementById('syncRetry').style.display='none'; document.getElementById('syncCancel').style.display='none'; spinner.style.display='block'; detail.textContent='Retrying…'; resolve(true); };
+                  document.getElementById('syncCancel').onclick = () => { document.getElementById('syncRetry').style.display='none'; document.getElementById('syncCancel').style.display='none'; resolve(false); };
+                });
+              })(err && err.message ? err.message : 'Refresh failed.', retryable);
+              if (!again){ overlay.style.display='none'; overlay.setAttribute('aria-busy','false'); return; }
+              spinner.style.display='block';
+            }
+          }
+
+          if (sleeperLeagues.length) headline.textContent = 'Refreshing Sleeper assets…';
+          for (let j=0; j<sleeperLeagues.length; ){
+            const lg = sleeperLeagues[j];
+            leagueLabel.textContent = lg.display;
+            phaseLabel.textContent = 'Assets';
+            detail.textContent = 'Working…';
+            spinner.style.display = 'block';
+            try{
+              const res = await runSleeperAssetsPhase(lg);
+              done += 1; updateProgress(done, total);
+              let summary = describeAssetsMetrics(res.metrics || {});
+              if (res.fallback_used) summary = summary ? `${summary} • Used fallback` : 'Used fallback data';
+              if (res.warnings && res.warnings.length) summary = summary ? `${summary} • Warnings: ${res.warnings.join('; ')}` : `Warnings: ${res.warnings.join('; ')}`;
+              detail.textContent = summary || 'Assets refreshed.';
+              spinner.style.display = 'none';
+              phaseLabel.textContent = 'Assets ✓';
+              await new Promise(r => setTimeout(r, 120));
+              spinner.style.display = 'block';
+              phaseLabel.textContent = 'Assets';
+              j += 1;
+            } catch (err){
+              const retryable = err && Object.prototype.hasOwnProperty.call(err,'retryable') ? !!err.retryable : true;
+              const again = await (function(message, allowRetry){
+                return new Promise(resolve => {
+                  spinner.style.display = 'none';
+                  headline.textContent = 'Refresh paused';
+                  detail.textContent = message || 'An error occurred.';
+                  document.getElementById('syncRetry').style.display = allowRetry ? 'inline-flex' : 'none';
+                  document.getElementById('syncCancel').style.display = 'inline-flex';
+                  document.getElementById('syncRetry').onclick = () => { document.getElementById('syncRetry').style.display='none'; document.getElementById('syncCancel').style.display='none'; spinner.style.display='block'; detail.textContent='Retrying…'; resolve(true); };
+                  document.getElementById('syncCancel').onclick = () => { document.getElementById('syncRetry').style.display='none'; document.getElementById('syncCancel').style.display='none'; resolve(false); };
+                });
+              })(err && err.message ? err.message : 'Refresh failed.', retryable);
+              if (!again){ overlay.style.display='none'; overlay.setAttribute('aria-busy','false'); return; }
+              spinner.style.display='block';
+            }
+          }
+
+          headline.textContent='Refresh complete!';
+          phaseLabel.textContent='';
+          detail.textContent='Reloading…';
+          document.getElementById('syncProgressBar').style.width='100%';
+          overlay.setAttribute('aria-busy','false');
+          setTimeout(()=>window.location.reload(), 800);
+        } catch (outerErr) {
+          console.error('[Tools] Refresh click handler failed:', outerErr);
+        }
+      });
+
+      // Tool-launch spinner
+      function showLaunching(toolName){
+        if (!overlay) return;
+        if (overlay.parentElement !== document.body) {
+          overlay.parentElement.removeChild(overlay);
+          document.body.appendChild(overlay);
+        }
+        overlay.style.display = 'flex';
+        overlay.setAttribute('aria-busy', 'true');
+        spinner.style.display = 'block';
+        headline.textContent = `Opening ${toolName}…`;
+        leagueLabel.textContent = '';
+        phaseLabel.textContent = '';
+        detail.textContent = 'Please wait';
+        document.getElementById('syncProgress').style.display = 'none';
+        document.getElementById('syncProgressBar').style.width = '0%';
+      }
+
+      document.querySelectorAll('a.open-tool[href]').forEach(a => {
+        a.addEventListener('click', function(){
+          if (a.matches('[data-mfl-only="1"]') && {{ has_mfl_leagues|tojson }} === false) return; // modal will handle
+          showLaunching(a.getAttribute('data-tool') || 'Tool');
+        });
+      });
+      document.querySelectorAll('form.open-form').forEach(f => {
+        f.addEventListener('submit', function(){
+          if (f.matches('[data-mfl-only="1"]') && {{ has_mfl_leagues|tojson }} === false) return; // modal will handle
+          const name = f.getAttribute('data-tool') || 'Tool';
+          showLaunching(name);
+        });
+      });
+    } catch (initErr) {
+      console.error('[Tools] Initialization failed:', initErr);
+    }
+  });
+})();
+</script>
+{% endblock %}

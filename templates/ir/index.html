@@ -22,7 +22,20 @@
               {% if row.activated %}
                 <ul class="plain" style="margin:0;padding-left:16px;">
                   {% for player in row.activated %}
-                    <li>{{ player.name or 'Unknown' }} <span class="mini" style="opacity:.6;">(#{{ player.id }})</span></li>
+                    {# derive current placement from the live snapshot; skip TAXI #}
+                    {% set pid = (player.id|string) %}
+                    {% set placement = row.placements[pid] if row.placements and pid in row.placements else '' %}
+                    {% if placement is mapping %}
+                      {% set slot = (placement.slot or placement.status or placement.roster_slot or '') | upper %}
+                    {% else %}
+                      {% set slot = (placement or '') | upper %}
+                    {% endif %}
+                    {% if 'TAXI' not in slot %}
+                      <li>
+                        {{ player.name or 'Unknown' }}
+                        <span class="mini" style="opacity:.6;">(#{{ player.id }}{% if slot %} • {{ slot }}{% endif %})</span>
+                      </li>
+                    {% endif %}
                   {% endfor %}
                 </ul>
               {% else %}
@@ -35,7 +48,20 @@
               {% if row.deactivated %}
                 <ul class="plain" style="margin:0;padding-left:16px;">
                   {% for player in row.deactivated %}
-                    <li>{{ player.name or 'Unknown' }} <span class="mini" style="opacity:.6;">(#{{ player.id }})</span></li>
+                    {# derive current placement from the live snapshot; skip TAXI #}
+                    {% set pid = (player.id|string) %}
+                    {% set placement = row.placements[pid] if row.placements and pid in row.placements else '' %}
+                    {% if placement is mapping %}
+                      {% set slot = (placement.slot or placement.status or placement.roster_slot or '') | upper %}
+                    {% else %}
+                      {% set slot = (placement or '') | upper %}
+                    {% endif %}
+                    {% if 'TAXI' not in slot %}
+                      <li>
+                        {{ player.name or 'Unknown' }}
+                        <span class="mini" style="opacity:.6;">(#{{ player.id }}{% if slot %} • {{ slot }}{% endif %})</span>
+                      </li>
+                    {% endif %}
                   {% endfor %}
                 </ul>
               {% else %}

@@ -9,10 +9,21 @@
   <link rel="preload" as="image" href="{{ url_for('static', filename='img/rosterdash-wordmark.png') }}">
   <style>
     :root{
+      /* Colors */
       --tile-bg: radial-gradient(120% 120% at 10% 0%, rgba(22,22,26,.90), rgba(10,12,14,.94));
       --tile-dark: radial-gradient(120% 120% at 10% 0%, rgba(10,12,14,.92), rgba(6,8,10,.96));
       --border: rgba(255,255,255,.12);
       --muted: rgba(255,255,255,.85);
+
+      /* Spacing scale */
+      --space-1: 6px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+      --space-7: 32px;
+      --space-8: 40px;
     }
 
     /* --------- Global background with subtle overlay --------- */
@@ -22,6 +33,7 @@
       color: #eaf1f7;
       margin: 0;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      line-height: 1.45; /* a touch more breathing room */
       position: relative;
       min-height: 100vh;
     }
@@ -42,7 +54,7 @@
       color: #eaf1f7;
     }
     .tile.dark{ background: var(--tile-dark); }
-    .tile.pad{ padding: 14px; }
+    .tile.pad{ padding: var(--space-5); }
 
     .btn{
       background: linear-gradient(180deg, #10b981, #059669);
@@ -55,31 +67,41 @@
       border-radius:10px; padding:10px 14px; text-decoration:none; display:inline-block;
     }
 
-    .page-wrap{ max-width: 1200px; margin: 0 auto; padding: 16px; }
+    /* Layout container */
+    .page-wrap{
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: var(--space-7) var(--space-6); /* more generous default */
+    }
 
     /* --------- Header / Nav --------- */
     .site-header{
       position: sticky; top:0; z-index: 50;
-      padding: 8px 0;
-      margin-bottom: 8px;
+      padding: var(--space-3) 0;
+      margin-bottom: var(--space-6); /* more room before content */
       backdrop-filter: blur(6px);
     }
     .nav-bar{
-      align-items: center; justify-content: space-between; gap: 12px;
       display:flex;
+      align-items: center; justify-content: space-between;
+      gap: var(--space-4);
       border-radius: 14px;
       border: 1px solid var(--border);
       background: var(--tile-dark);
-      padding: 10px 14px;
+      padding: var(--space-4) var(--space-5); /* bigger touch target */
     }
 
-    /* Logo: image-only */
     .logo{ display:flex; align-items:center; }
     .logo img{ display:block; height:28px; width:auto; }
 
-    .nav-links{ display:flex; gap: 14px; list-style:none; margin:0; padding:0; align-items:center; }
+    .nav-links{
+      display:flex; gap: var(--space-4);
+      list-style:none; margin:0; padding:0; align-items:center;
+    }
     .nav-links a{
-      color:#e5e7eb; text-decoration:none; padding:8px 10px; border-radius:8px;
+      color:#e5e7eb; text-decoration:none;
+      padding: 10px 12px; /* slightly larger */
+      border-radius:8px;
       border:1px solid transparent;
     }
     .nav-links a:hover{
@@ -90,15 +112,19 @@
     }
 
     /* --------- Main / Footer --------- */
-    main.content{ padding: 8px 0 24px; }
+    main.content{ padding: var(--space-6) 0 var(--space-8); } /* open up below header and above footer */
     footer.site-footer{
-      text-align:center; color:#cbd5e1; font-size: 13px; padding: 12px 0 18px;
+      text-align:center; color:#cbd5e1; font-size: 13px;
+      padding: var(--space-5) 0 var(--space-7);
       opacity:.9;
     }
 
     /* --------- Toasts --------- */
     #toast-stack{
-      position: fixed; top: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 10040;
+      position: fixed;
+      top: var(--space-6); right: var(--space-6); /* off the edges a bit more */
+      display: flex; flex-direction: column; gap: var(--space-3);
+      z-index: 10040;
     }
     .toast{
       backdrop-filter: blur(8px);
@@ -107,7 +133,7 @@
       border-radius: 10px;
       box-shadow: 0 10px 25px rgba(0,0,0,0.25);
       padding: 10px 14px;
-      min-width: 280px; max-width: 460px;
+      min-width: 280px; max-width: 520px; /* a hair wider */
       display: flex; align-items: center; gap: 10px;
       border-left: 6px solid transparent;
       opacity: 1; transform: translateY(0);
@@ -135,7 +161,7 @@
       position: fixed; inset: 0;
       background: rgba(15, 23, 42, 0.82);
       display: none; align-items: center; justify-content: center;
-      z-index: 10050; padding: 20px;
+      z-index: 10050; padding: var(--space-6);
     }
     .gso-card {
       background: rgba(15, 23, 42, 0.96);
@@ -143,9 +169,9 @@
       border-radius: 14px;
       box-shadow: 0 18px 38px rgba(15, 23, 42, 0.55);
       padding: 28px 26px;
-      width: min(420px, 100%);
+      width: min(480px, 100%); /* slightly wider */
       display: flex; flex-direction: column; align-items: center;
-      gap: 14px; text-align: center;
+      gap: var(--space-4); text-align: center;
     }
     .gso-spinner {
       width: 56px; height: 56px; border: 6px solid rgba(255,255,255,.25);
@@ -156,8 +182,8 @@
     .gso-league   { color:rgba(255,255,255,0.82); font-size:1rem; }
     .gso-phase    { color:rgba(96,165,250,0.9); font-size:0.95rem; font-weight:500; }
     .gso-detail   { color:rgba(226,232,240,0.95); font-size:0.95rem; min-height:1.6em; }
-    .gso-actions  { display:flex; gap:12px; }
-    .gso-progress { width:240px; max-width:100%; height:6px; background:rgba(255,255,255,.12); border-radius:4px; overflow:hidden; }
+    .gso-actions  { display:flex; gap:var(--space-3); }
+    .gso-progress { width:280px; max-width:100%; height:6px; background:rgba(255,255,255,.12); border-radius:4px; overflow:hidden; }
     .gso-progress > div { height:100%; width:0%; background:#60a5fa; transition: width .25s ease; }
   </style>
 </head>
@@ -204,13 +230,10 @@
 
           <li><a href="{{ url_for('live.live_index') }}" data-overlay-intent="live">Matchups</a></li>
 
-          <!-- Gated: MFL-only -->
+          <!-- Tools hub replaces individual items -->
           <li>
-            <a href="{{ url_for('lineups.lineups_rapid_start') }}" data-mfl-only="1">Lineups</a>
+            <a href="{{ url_for('tools.index') }}">Tools</a>
           </li>
-
-          <li><a href="{{ url_for('injuries.injuries_index') }}" data-overlay-intent="injuries">Injuries</a></li>
-          <li><a href="#" class="disabled" aria-disabled="true" title="Coming soon">Waivers</a></li>
 
           {% if current_user.is_authenticated %}
             <li class="muted">
@@ -396,9 +419,7 @@
       try {
         const cfg = JSON.parse((document.getElementById('baseOverlayConfig')?.textContent || '{}'));
         const rules = [
-          // Matchups: show headline + keep room for per-league progress (subtitle set by pages if needed)
           { sel: `a.nav-links a[data-overlay-intent="live"], a[href="${cfg.live||''}"]`, headline: 'Checking scoring…', phase: 'Matchups', withLeague: true },
-          // Injuries: headline only; do NOT show league subtitle
           { sel: `a.nav-links a[data-overlay-intent="injuries"], a[href="${cfg.injuries||''}"]`, headline: 'Checking injuries…', phase: 'Injuries', withLeague: false },
         ];
 
@@ -407,15 +428,12 @@
             a.addEventListener('click', (ev) => {
               let subtitle = '';
               if (rule.withLeague) {
-                // If the click originated inside a league row we can show it,
-                // but it’s okay if we don’t find one (page can update it later).
                 const src = ev.target.closest('[data-league-name],[data-mfl-id]') || document.querySelector('[data-league-name]');
                 const league = src?.getAttribute?.('data-league-name') || '';
                 const mflId  = src?.getAttribute?.('data-mfl-id') || '';
                 subtitle = league ? (mflId ? `${league} (${mflId})` : league) : '';
               }
               show({ headline: rule.headline, phase: rule.phase, league: rule.withLeague ? subtitle : '', detail: 'Please wait…', spinner: true });
-              // allow normal navigation
             }, { capture: true });
           });
         });
@@ -446,11 +464,10 @@
       // Intercept clicks on MFL-only links if user has no MFL leagues
       document.querySelectorAll('a[data-mfl-only="1"]').forEach(a => {
         a.addEventListener('click', (ev) => {
-          if (HAS_MFL) return;           // let it through
-          ev.preventDefault();           // block and show gate
+          if (HAS_MFL) return;
+          ev.preventDefault();
           showMflOnly();
         }, { capture:true });
-        // Optional: reflect disabled state in UI if you like
         if (!HAS_MFL) {
           a.setAttribute('title', 'MFL Feature Only');
         }

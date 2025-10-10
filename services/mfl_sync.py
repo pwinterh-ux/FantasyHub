@@ -138,8 +138,7 @@ def sync_league_info(
     commit: bool = True,
 ) -> Dict[str, int]:
     """
-    Upsert franchise rows (names/owners/abbrev) and optionally update league.roster_slots / ir_slots_max.
-    Accepts meta values as dicts OR dataclasses (via _get).
+    Upsert franchise rows and optionally update league.roster_slots / ir_slots_max.
     """
     created = updated = roster_updated = 0
     ir_updated = 0
@@ -186,7 +185,9 @@ def sync_league_info(
 
     # IR slots (only set if caller provided a value)
     if ir_slots_max is not None and hasattr(league, "ir_slots_max"):
-        if league.ir_slots_max != ir_slots_max:
+        changed = (league.ir_slots_max != ir_slots_max)
+        print(f"[IR-DEBUG] applying ir_slots_max: existing={league.ir_slots_max} new={ir_slots_max} changed={changed}")
+        if changed:
             league.ir_slots_max = ir_slots_max
             ir_updated = 1
 
@@ -238,7 +239,7 @@ def sync_league_assets(
         player_ids = list(_iter_player_ids(fr))
         pick_items = list(_iter_picks(fr))
         name_hint = _get(fr, "name") or _get(fr, "team_name")
-        
+
         normalized_franchises.append(
             {
                 "franchise_id": franchise_id,

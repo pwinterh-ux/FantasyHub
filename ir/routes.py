@@ -19,6 +19,7 @@ from services import ir_optimizer
 from services.mfl_ir_client import import_ir, sync_in_ir_flags
 
 IR_STATUSES = {"IR", "IR-PUP", "IR-NFI", "IR-R"}
+TAXI_PREFIX = "TAXI"
 
 ir_bp = Blueprint("ir", __name__, url_prefix="/ir", template_folder="../templates")
 
@@ -39,6 +40,50 @@ def _max_slots(league: League) -> int:
         return 0
 
 
+# -------- TAXI helpers --------
+
+def _normalize_slot(raw: Any) -> str:
+    s = str(raw or "").strip().upper()
+    if s in {"T", "TAXI"} or s.startswith(TAXI_PREFIX):
+        return "TAXI"
+    return s
+
+def _extract_taxi_ids(placements: Dict[str, Any]) -> Set[str]:
+    """
+    placements shape (from mfl_ir_client.sync_in_ir_flags):
+      { "1234": "ROSTER" | "IR" | "TAXI_SQUAD" | ... }  (or dict rows in the future)
+    """
+    taxi: Set[str] = set()
+    if not isinstance(placements, dict):
+        return taxi
+    for pid, v in placements.items():
+        if isinstance(v, str):
+            if "TAXI" in v.upper():
+                taxi.add(str(pid))
+        elif isinstance(v, dict):
+            slot = _normalize_slot(v.get("slot") or v.get("status") or v.get("roster_slot"))
+            if slot.startswith(TAXI_PREFIX):
+                taxi.add(str(pid))
+    return taxi
+
+def _count_ir_now(placements: Dict[str, Any]) -> int:
+    """Count players currently occupying IR slot (Taxi never counted)."""
+    if not isinstance(placements, dict):
+        return 0
+    total = 0
+    for v in placements.values():
+        if isinstance(v, str):
+            if v.upper() == "IR":
+                total += 1
+        elif isinstance(v, dict):
+            slot = _normalize_slot(v.get("slot") or v.get("status") or v.get("roster_slot"))
+            if slot == "IR":
+                total += 1
+    return total
+
+# --------------------------------
+
+
 @ir_bp.route("/", methods=["GET"])
 @login_required
 def ir_index():
@@ -53,7 +98,7 @@ def ir_index():
         flash("Could not refresh the current-week injuries feed. Using an empty set.", "warning")
         injuries_map = {}
 
-    ir_eligible_ids = _eligible_ids(injuries_map)
+    ir_eligible_ids_all = _eligible_ids(injuries_map)  # strings
 
     leagues: List[League] = (
         db.session.query(League)
@@ -76,13 +121,10 @@ def ir_index():
             skipped.append({"league": league.name, "reason": "No roster synced"})
             continue
 
-        if not (rostered_ids & ir_eligible_ids):
-            skipped.append({"league": league.name, "reason": "No IR-eligible injuries"})
-            continue
-
         host = _league_host(league) or "api.myfantasyleague.com"
         cookie = _cookie_header_for_host(host)
 
+        # 1) Live placements FIRST so Taxi is known
         try:
             placements = sync_in_ir_flags(
                 league=league,
@@ -94,38 +136,50 @@ def ir_index():
             current_app.logger.exception(
                 "IR optimizer: roster sync failed", extra={"league_id": league.id, "franchise": franchise_id}
             )
-            summary_rows.append(
-                {
-                    "league": league,
-                    "ir_used_after": None,
-                    "ir_slots_max": _max_slots(league),
-                    "activated": [],
-                    "deactivated": [],
-                    "notes": [f"Roster sync failed: {exc}"],
-                    "placements": {},
-                }
-            )
+            skipped.append({"league": league.name, "reason": f"Roster sync failed: {exc}"})
             continue
 
+        taxi_ids = _extract_taxi_ids(placements)                 # set of strings
+        rostered_non_taxi = {str(pid) for pid in rostered_ids if str(pid) not in taxi_ids}
+
+        # 2) Build IR-eligible set with Taxi removed (so planning never sees Taxi)
+        ir_eligible_ids = {pid for pid in ir_eligible_ids_all if pid in rostered_non_taxi}
+        if not ir_eligible_ids:
+            skipped.append({"league": league.name, "reason": "No IR-eligible injuries (non-Taxi)"})
+            continue
+
+        # 3) Plan with Taxi-free eligible ids
         plan = ir_optimizer.plan_for_league(
             league=league,
             franchise_id=franchise_id,
-            ir_eligible_ids=ir_eligible_ids,
+            ir_eligible_ids=ir_eligible_ids,   # already stripped of Taxi
         )
 
-        if not plan.has_changes:
+        # 4) Replace plan.activate with Taxi-filtered version (belt-and-suspenders)
+        activate_filtered = [pid for pid in plan.activate if str(pid) not in taxi_ids]
+
+        # If nothing to change after Taxi filtering, skip
+        if not activate_filtered and not plan.deactivate:
             skipped.append({"league": league.name, "reason": "No IR changes needed"})
             continue
 
+        # 5) Accurate IR usage for display (Taxi not counted)
+        ir_used_now = _count_ir_now(placements)
+        ir_used_after_display = ir_used_now - len(activate_filtered) + len(plan.deactivate)
+
         notes: List[str] = []
-        import_result: Dict[str, Any]
+        filtered_out_count = len(plan.activate) - len(activate_filtered)
+        if filtered_out_count > 0:
+            notes.append(f"Excluded {filtered_out_count} Taxi player(s) from IR activation.")
+
+        # 6) Submit with filtered activation list only
         try:
-            import_result = import_ir(
+            import_result: Dict[str, Any] = import_ir(
                 league=league,
                 franchise_id=franchise_id,
                 host=host,
                 cookie=cookie,
-                activate_ids=plan.activate,
+                activate_ids=activate_filtered,
                 deactivate_ids=plan.deactivate,
             )
         except Exception as exc:
@@ -136,7 +190,13 @@ def ir_index():
             import_result = {"ok": False, "payload": {}}
         else:
             if import_result.get("ok"):
-                ir_optimizer.flip_ir_flags(plan)
+                # Update local flags only for what we actually sent
+                original_activate = list(getattr(plan, "activate", []))
+                try:
+                    plan.activate = activate_filtered
+                    ir_optimizer.flip_ir_flags(plan)
+                finally:
+                    plan.activate = original_activate
             else:
                 status_code = import_result.get("status_code")
                 payload = import_result.get("payload")
@@ -149,13 +209,17 @@ def ir_index():
                     if message:
                         notes.append(str(message))
 
+        # 7) Resolve rows for display (already filtered for activate)
+        activated_rows = ir_optimizer.resolve_player_rows(plan, activate_filtered)
+        deactivated_rows = ir_optimizer.resolve_player_rows(plan, plan.deactivate)
+
         summary_rows.append(
             {
                 "league": league,
-                "ir_used_after": plan.ir_used_after,
+                "ir_used_after": ir_used_after_display,   # Taxi-free
                 "ir_slots_max": _max_slots(league),
-                "activated": ir_optimizer.resolve_player_rows(plan, plan.activate),
-                "deactivated": ir_optimizer.resolve_player_rows(plan, plan.deactivate),
+                "activated": activated_rows,
+                "deactivated": deactivated_rows,
                 "notes": notes,
                 "placements": placements,
             }

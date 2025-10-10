@@ -1,202 +1,138 @@
 {% extends "base.html" %}
-
 {% block content %}
-<div class="tile pad" style="max-width:1100px;margin:24px auto;">
-  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-    <div>
-      <h2 class="hdr" style="margin:0;">Strength of Schedule</h2>
-      <div class="mini" style="opacity:.85;">Compare upcoming opponents for each synced MFL league.</div>
-    </div>
-    <form method="get" style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">
-      <div>
-        <label class="mini" for="start_week" style="display:block; margin-bottom:4px; opacity:.8;">Start week</label>
-        <select id="start_week" name="start_week" class="sos-select">
-          {% for wk in range(1, (max_week or 18) + 1) %}
-            <option value="{{ wk }}" {% if start_week == wk %}selected{% endif %}>Week {{ wk }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div>
-        <label class="mini" for="span" style="display:block; margin-bottom:4px; opacity:.8;">Span</label>
-        <select id="span" name="span" class="sos-select">
-          {% for span_opt in [2, 3, 4, 5, 6, 7, 8] %}
-            <option value="{{ span_opt }}" {% if span_weeks == span_opt %}selected{% endif %}>{{ span_opt }} weeks</option>
-          {% endfor %}
-        </select>
-      </div>
-      <button type="submit" class="btn-ghost" style="padding:10px 14px; border-radius:10px;">Update</button>
-    </form>
-  </div>
+<style>
+  .sos-wrap{display:flex;flex-direction:column;gap:12px;}
+  .tile{background:var(--tile-dark); border:1px solid var(--border); border-radius:14px; padding:12px;}
+  .hdr{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+  .hdr h2{margin:0;font-size:20px;}
+  .sub{font-size:12px;opacity:.85}
 
-  <p class="mini" style="margin-top:12px; opacity:.75; max-width:720px;">
-    Difficulty is based on each opponent's current record and points for. Higher win percentages indicate a tougher matchup. Update the start week and span to explore different portions of the schedule.
-  </p>
+  .grid-outer{margin-top:10px;}
+  .league-row{background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:10px; margin-bottom:10px;}
 
-  {% if not has_mfl %}
-    <div class="tile pad dark" style="margin-top:16px; border:1px solid rgba(239,68,68,.35); border-radius:12px;">
-      <div class="mini" style="opacity:.9;">Link and sync your MFL leagues to unlock strength of schedule insights.</div>
+  .badge{font-size:10px; padding:2px 6px; border:1px solid rgba(255,255,255,.2); border-radius:999px; opacity:.8}
+  .badge-mfl{background:rgba(96,165,250,.15);}
+  .badge-slp{background:rgba(34,197,94,.15);}
+
+  .pills{display:flex; flex-wrap:wrap; gap:6px;}
+  .pill{display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; border:1px solid rgba(255,255,255,.15); white-space:nowrap; max-width:260px; overflow:hidden; text-overflow:ellipsis;}
+  .tier-top{background:rgba(220,38,38,.18);}     /* tough */
+  .tier-mid{background:rgba(245,158,11,.16);}    /* balanced */
+  .tier-bot{background:rgba(34,197,94,.16);}     /* favorable */
+  .pill-bye, .cell-bye{background:rgba(148,163,184,.18);}
+
+  details.league{background:var(--tile-bg); border:1px solid var(--border); border-radius:12px; padding:10px; margin-top:10px;}
+  details.league summary{cursor:pointer; list-style:none; padding:6px 4px; margin:-6px -4px 8px; font-weight:600;}
+
+  /* Comparison grid */
+  .cmp { width:100%; border-collapse:separate; border-spacing:0; }
+  .cmp th, .cmp td { padding:6px 8px; font-size:12px; text-align:center; }
+  .cmp thead th { position:sticky; top:0; background:rgba(0,0,0,.15); backdrop-filter:blur(8px); }
+  .cmp th.sticky-name, .cmp td.sticky-name{ text-align:left; position:sticky; left:0; background:rgba(0,0,0,.12); backdrop-filter:blur(8px);}
+  .cell { border:1px solid rgba(255,255,255,.1); border-radius:6px; min-width:56px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cell.tier-top{ background:rgba(220,38,38,.18); }
+  .cell.tier-mid{ background:rgba(245,158,11,.16); }
+  .cell.tier-bot{ background:rgba(34,197,94,.16); }
+  .cell-bye { background:rgba(148,163,184,.18); }
+  .name-short{ font-weight:600; }
+
+  .total{font-weight:600;}
+</style>
+
+<div class="sos-wrap">
+  <div class="tile">
+    <div class="hdr">
+      <h2>Strength of Schedule — Remaining Regular Season</h2>
+      <div class="sub">
+        Grid shows <em>opponent short name</em> per week; hover for full name + record. Color = tier by current win%.
+      </div>
     </div>
-  {% else %}
+
     {% if not has_data %}
-      <div class="tile pad dark" style="margin-top:16px; border:1px solid rgba(148,163,184,.35); border-radius:12px;">
-        <div class="mini" style="opacity:.85;">No schedule data was returned for the selected weeks. Try a different span or confirm your leagues are synced.</div>
-      </div>
-    {% endif %}
-
-    <div class="sos-grid">
-      {% for row in results %}
-        {% set league = row.league %}
-        <div class="tile pad dark sos-card">
-          <div class="sos-card-head">
-            <div>
-              <h3 style="margin:0 0 4px;">{{ league.name }}</h3>
-              <div class="mini" style="opacity:.85;">Season {{ league.year }} • Franchise {{ league.franchise_id or '—' }}</div>
-              {% if row.my_team %}
-                <div class="mini" style="opacity:.8;">My team: {{ row.my_team.name }}</div>
+      <div class="sub">No leagues with schedules yet.</div>
+    {% else %}
+      <div class="grid-outer">
+        {% for row in grid %}
+          <div class="league-row">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <div style="font-weight:700;">{{ row.league_name }}</div>
+              {% if row.platform == 'mfl' %}
+                <span class="badge badge-mfl">MFL</span>
+              {% else %}
+                <span class="badge badge-slp">SLP</span>
               {% endif %}
+              {% if row.header_weeks and row.header_weeks|length > 0 %}
+                <div class="sub">Weeks {{ row.header_weeks[0] }}–{{ row.header_weeks[-1] }}</div>
+              {% endif %}
+            </div>
+
+            <!-- My-team quick strip -->
+            <div class="sub" style="margin-top:6px;">
+              My Team:
+              {% if row.my_team %} {{ row.my_team.name }} {% else %} (unknown) {% endif %}
             </div>
             {% if row.error %}
-              <span class="pill err">Error</span>
-            {% elif row.overall %}
-              <span class="pill {{ row.overall.tag }}">{{ row.overall.label }}</span>
+              <div class="sub" style="color:#fca5a5;">Error: {{ row.error }}</div>
+            {% else %}
+              <div class="pills" style="margin:6px 0 10px;">
+                {% for c in row.my_cells %}
+                  {% if c.is_bye %}
+                    <span class="pill pill-bye" title="BYE">W{{ c.week }} BYE</span>
+                  {% else %}
+                    {% set cls = 'tier-mid' %}
+                    {% if c.tier == 'top' %}{% set cls = 'tier-top' %}{% endif %}
+                    {% if c.tier == 'bot' %}{% set cls = 'tier-bot' %}{% endif %}
+                    <span class="pill {{ cls }}" title="{{ c.title }}">W{{ c.week }}: {{ c.text_short }}</span>
+                  {% endif %}
+                {% endfor %}
+              </div>
+
+              <details class="league">
+                <summary>Expand: League Comparison Grid</summary>
+                <div style="overflow:auto;">
+                  <table class="cmp">
+                    <thead>
+                      <tr>
+                        <th class="sticky-name" style="min-width:220px; text-align:left;">Team</th>
+                        {% for wk in row.header_weeks %}
+                          <th>W{{ wk }}</th>
+                        {% endfor %}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for trow in row.grid %}
+                        <tr>
+                          <td class="sticky-name"><span class="name-short" title="{{ trow.name_full }}">{{ trow.name_short }}</span></td>
+                          {% for cell in trow.cells %}
+                            {% if cell.is_bye %}
+                              <td><div class="cell cell-bye" title="BYE">BYE</div></td>
+                            {% else %}
+                              {% set ccls = 'tier-mid' %}
+                              {% if cell.tier == 'top' %}{% set ccls = 'tier-top' %}{% endif %}
+                              {% if cell.tier == 'bot' %}{% set ccls = 'tier-bot' %}{% endif %}
+                              <td><div class="cell {{ ccls }}" title="{{ cell.title }}">{{ cell.text_short }}</div></td>
+                            {% endif %}
+                          {% endfor %}
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+
+              <div class="total" style="margin-top:8px;">
+                Total Opponent Record: 
+                {% if row.total_record %}
+                  {{ row.total_record.wins }}-{{ row.total_record.losses }}{% if row.total_record.ties and row.total_record.ties>0 %}-{{ row.total_record.ties }}{% endif %}
+                {% else %}
+                  —
+                {% endif %}
+              </div>
             {% endif %}
           </div>
-
-          {% if row.error %}
-            <div class="mini" style="opacity:.85;">{{ row.error }}</div>
-          {% else %}
-            <div class="mini" style="margin:4px 0 12px; opacity:.8;">
-              {% if row.overall and row.overall.avg_win_pct is not none %}
-                Avg opponent win%: {{ (row.overall.avg_win_pct * 100) | round(1) }}%
-              {% else %}
-                Avg opponent win%: —
-              {% endif %}
-              {% if row.hardest_week %}
-                • Toughest week: {{ row.hardest_week.week }} ({{ row.hardest_week.difficulty_label }})
-              {% endif %}
-            </div>
-
-            <div class="sos-weeks">
-              {% for wk in row.weeks %}
-                <div class="sos-week {{ wk.difficulty_tag }}">
-                  <div class="sos-week-head">
-                    <span>Week {{ wk.week }}</span>
-                    <span class="mini" style="opacity:.75;">{{ wk.difficulty_label }}</span>
-                  </div>
-                  {% if wk.is_bye %}
-                    <div class="mini" style="opacity:.8;">Bye week</div>
-                  {% else %}
-                    <ul class="sos-opp-list">
-                      {% for opp in wk.opponents %}
-                        <li>
-                          <div class="opp-name">{{ opp.name }}</div>
-                          <div class="opp-meta mini">
-                            <span>{{ opp.record }}</span>
-                            <span>Win%: {% if opp.win_pct is not none %}{{ (opp.win_pct * 100) | round(1) }}{% else %}—{% endif %}</span>
-                            <span>PF: {% if opp.pf is not none %}{{ opp.pf | round(1) }}{% else %}—{% endif %}</span>
-                          </div>
-                        </li>
-                      {% endfor %}
-                    </ul>
-                    <div class="mini" style="opacity:.7; margin-top:6px;">
-                      {% if wk.avg_win_pct is not none %}Avg win%: {{ (wk.avg_win_pct * 100) | round(1) }}%{% else %}Avg win%: —{% endif %}
-                      {% if wk.avg_pf is not none %} • Avg PF: {{ wk.avg_pf | round(1) }}{% endif %}
-                    </div>
-                  {% endif %}
-                </div>
-              {% endfor %}
-            </div>
-          {% endif %}
-        </div>
-      {% endfor %}
-    </div>
-  {% endif %}
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
 </div>
-
-<style>
-  .mini { font-size:12px; }
-  .sos-select {
-    appearance:none;
-    background:#0b1220;
-    color:#eaf1f7;
-    border:1px solid rgba(255,255,255,.14);
-    border-radius:10px;
-    padding:8px 10px;
-    min-width:110px;
-  }
-  .sos-grid {
-    display:grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    gap:16px;
-    margin-top:18px;
-  }
-  .sos-card {
-    border-radius:12px;
-    border:1px solid rgba(255,255,255,.12);
-    display:flex;
-    flex-direction:column;
-    gap:12px;
-  }
-  .sos-card-head {
-    display:flex;
-    justify-content:space-between;
-    align-items:flex-start;
-    gap:10px;
-  }
-  .pill {
-    display:inline-block;
-    padding:6px 10px;
-    border-radius:999px;
-    font-size:12px;
-    border:1px solid rgba(255,255,255,.18);
-    background:#0b1220;
-  }
-  .pill.err { border-color: rgba(239,68,68,.45); color:#ffb4b4; }
-  .pill.hard { border-color: rgba(248,113,113,.5); color:#fecaca; }
-  .pill.easy { border-color: rgba(16,185,129,.45); color:#86f3c0; }
-  .pill.medium { border-color: rgba(96,165,250,.45); color:#bfdbfe; }
-  .pill.unknown { border-color: rgba(148,163,184,.45); color:#cbd5f5; }
-  .sos-weeks {
-    display:flex;
-    flex-direction:column;
-    gap:10px;
-  }
-  .sos-week {
-    border:1px solid rgba(255,255,255,.12);
-    border-radius:10px;
-    padding:10px 12px;
-    background: rgba(11,18,32,.72);
-  }
-  .sos-week.hard { border-color: rgba(248,113,113,.45); }
-  .sos-week.easy { border-color: rgba(16,185,129,.35); }
-  .sos-week.medium { border-color: rgba(96,165,250,.35); }
-  .sos-week.unknown { border-color: rgba(148,163,184,.25); }
-  .sos-week-head {
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    margin-bottom:6px;
-  }
-  .sos-opp-list {
-    list-style:none;
-    margin:0;
-    padding:0;
-    display:flex;
-    flex-direction:column;
-    gap:6px;
-  }
-  .sos-opp-list li {
-    background: rgba(15,23,42,.45);
-    border:1px solid rgba(255,255,255,.08);
-    border-radius:8px;
-    padding:8px 10px;
-  }
-  .opp-name { font-weight:600; font-size:13px; }
-  .opp-meta {
-    display:flex;
-    gap:10px;
-    flex-wrap:wrap;
-    margin-top:4px;
-  }
-</style>
 {% endblock %}

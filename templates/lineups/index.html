@@ -8,14 +8,18 @@
   </div>
 
   <div class="grid" style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;">
-    <!-- Tile 1: Review & Submit All Lineups -->
+    <!-- Tile 1: Rapid Lineups (one-league-at-a-time) -->
     <div class="tile pad dark" style="display:flex; flex-direction:column; gap:12px;">
       <div>
-        <h3 style="margin:0 0 6px;">Review &amp; Submit All Lineups</h3>
-        <div style="opacity:.85;">Pick a week and review projected points for every synced league, then submit starters in one pass.</div>
+        <h3 style="margin:0 0 6px;">Rapid Lineups</h3>
+        <div style="opacity:.85;">
+          Review and submit lineups one league at a time.
+          Designed for Tuesday–Thursday initial submissions; future updates will support locked starters.
+        </div>
       </div>
 
-      <form method="POST" action="{{ url_for('lineups.lineups_review') }}" style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">
+      <form method="POST" action="{{ url_for('lineups.lineups_rapid_start') }}"
+            style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">
         <div>
           <label for="week" style="display:block; font-size:12px; opacity:.9; margin-bottom:4px;">Week</label>
           <select id="week" name="week"
@@ -27,23 +31,24 @@
         </div>
 
         <button type="submit" class="btn-ghost" style="padding:10px 14px; border-radius:10px;">
-          Review Lineups
+          Begin
         </button>
       </form>
 
       <div style="font-size:12px; opacity:.8;">
-        Tip: We’ll fetch projections for all players on your roster in each league. Blank projections show as “—”.
+        We’ll fetch projections and pre-fill a recommended lineup; you can adjust before submitting to MFL.
       </div>
     </div>
 
-     <!-- Tile 2: Auto submit -->
+    <!-- Tile 2: Auto submit -->
     <div class="tile pad dark" style="display:flex; flex-direction:column; gap:12px;">
       <div>
-        <h3 style="margin:0 0 6px;">Auto Set Best Lineups</h3>
+        <h3 style="margin:0 0 6px;">Auto Set</h3>
         <div style="opacity:.85;">Pick a week and we’ll submit the optimal projected starters to every synced league.</div>
       </div>
 
-      <form method="POST" action="{{ url_for('lineups.lineups_auto_submit') }}" style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">
+      <form method="POST" action="{{ url_for('lineups.lineups_auto_submit') }}"
+            style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">
         <div>
           <label for="auto-week" style="display:block; font-size:12px; opacity:.9; margin-bottom:4px;">Week</label>
           <select id="auto-week" name="week"
@@ -60,7 +65,7 @@
       </form>
 
       <div style="font-size:12px; opacity:.8;">
-        We use your roster rules, projections, and franchise cookies to send the lineup directly to MFL for each league.
+        We’ll fetch projections and submit a recommended lineup for all your leagues.
       </div>
     </div>
   </div>
