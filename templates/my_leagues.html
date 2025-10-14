@@ -124,11 +124,26 @@
 </script>
 
 <div class="tile pad" style="max-width:1100px;margin:24px auto;">
+  <style>
+    /* Allow hover on this specific disabled link so title tooltip appears */
+    .btn-ghost.is-disabled.soon-tip {
+      pointer-events: auto;   /* enable hover */
+      cursor: not-allowed;    /* still looks disabled */
+      opacity: .6;            /* ghosty look */
+    }
+  </style>
+
   <div class="leagues-header">
     <div class="left">
       <a href="{{ url_for('exposure.exposure_index') }}" class="btn-ghost">Exposure</a>
       {% if has_mfl_leagues %}
-        <a href="{{ url_for('sos.strength_of_schedule') }}" class="btn-ghost">Strength of Schedule</a>
+        <a href="#"
+           class="btn-ghost is-disabled soon-tip"
+           aria-disabled="true"
+           title="Coming soon"
+           onclick="event.preventDefault(); return false;">
+          Strength of Schedule
+        </a>
       {% endif %}
     </div>
     <div class="center">
@@ -139,6 +154,9 @@
       <a href="{{ url_for('mfl.mfl_config') }}" class="btn-ghost">Add/Delete Leagues</a>
     </div>
   </div>
+</div>
+
+
 
   <div class="tile pad dark" style="margin-top:8px;">
     <div class="responsive-table" style="overflow-x:auto;">

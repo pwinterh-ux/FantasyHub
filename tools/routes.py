@@ -1,5 +1,9 @@
 # tools/routes.py
+from __future__ import annotations
+
 from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Any
+
 from flask import Blueprint, render_template, current_app
 from flask_login import login_required, current_user
 from sqlalchemy import func
@@ -11,6 +15,14 @@ try:
     from models import SleeperLeague
 except Exception:  # pragma: no cover
     SleeperLeague = None
+
+# ✅ Reuse the exact week logic already vetted in lineups/routes.py
+from lineups.routes import (
+    _pick_year_for_week_lookup,
+    _effective_current_week,
+    _allowed_weeks_from,
+    MFL_MAX_WEEKS_FALLBACK,
+)
 
 bp = Blueprint("tools", __name__, url_prefix="/tools")
 
@@ -55,34 +67,20 @@ def _max_timestamp_for(model, user_id, candidate_cols):
     return best
 
 
-def _current_week_bundle():
+def _week_bundle_from_lineups() -> tuple[int, list[int]]:
     """
-    Produce (current_week, weeks_list) using config knobs, clamped to max weeks,
-    and only showing current week and forward.
+    Produce (selected_week, weeks_list) using the same helpers as lineups/routes.py:
+      - _pick_year_for_week_lookup()
+      - _effective_current_week(year)
+      - _allowed_weeks_from(current_week, max_week)
     """
-    # Prefer the same keys you already use elsewhere
-    cfg_week = (
-        current_app.config.get("MFL_CURRENT_WEEK")
-        or current_app.config.get("CURRENT_NFL_WEEK")
-        or current_app.config.get("CURRENT_WEEK")
-        or 1
-    )
+    year_for_lookup = _pick_year_for_week_lookup()
+    current_week = _effective_current_week(year_for_lookup)
     try:
-        current_week = int(cfg_week)
-    except Exception:
-        current_week = 1
-
-    try:
-        max_week = int(current_app.config.get("MFL_MAX_WEEKS", 18))
-    except Exception:
-        max_week = 18
-
-    if current_week < 1:
-        current_week = 1
-    if max_week < current_week:
-        max_week = current_week
-
-    weeks = list(range(current_week, max_week + 1))
+        max_week = int(current_app.config.get("MFL_MAX_WEEKS", MFL_MAX_WEEKS_FALLBACK))
+    except (TypeError, ValueError):
+        max_week = MFL_MAX_WEEKS_FALLBACK
+    weeks = _allowed_weeks_from(current_week, max_week)
     return current_week, weeks
 
 
@@ -104,7 +102,7 @@ def index():
         has_mfl = False
 
     # ----- Build MFL list for client-side "Refresh Assets" (id/name/year/mfl_id)
-    mfl_leagues = []
+    mfl_leagues: List[Dict[str, Any]] = []
     try:
         leagues = (
             db.session.query(League)
@@ -137,20 +135,15 @@ def index():
     )
 
     # Pick the freshest timestamp of the two; show a dash if none
-    last_sync = None
-    if mfl_last and slpr_last:
-        last_sync = mfl_last if mfl_last >= slpr_last else slpr_last
-    else:
-        last_sync = mfl_last or slpr_last
-
+    last_sync = mfl_last if (mfl_last and (not slpr_last or mfl_last >= slpr_last)) else slpr_last
     last_sync_label = _fmt_dt(last_sync) if last_sync else "—"
 
     # Refresh required if older than 4 hours (or never synced)
     refresh_cutoff = datetime.now(timezone.utc) - timedelta(hours=4)
     refresh_required = (not last_sync) or (last_sync < refresh_cutoff)
 
-    # ----- Week dropdown (current and forward only)
-    selected_week, weeks = _current_week_bundle()
+    # ----- Week dropdown (current and forward only) — pulled from lineups helpers
+    selected_week, weeks = _week_bundle_from_lineups()
 
     return render_template(
         "tools/index.html",

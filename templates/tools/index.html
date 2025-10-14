@@ -122,6 +122,8 @@
         <div class="desc">
           Identify IR-eligible players and **demote** them to IR to free bench spots, and **promote**
           players who are no longer eligible off IR. Runs through all synced MFL leagues.
+          Current Functionality only considers IR as eligible. If your league allows Sus or Out players,
+          they will be ignored and/or promoted from IR using this feature.
         </div>
         <div class="actions">
           <a class="btn open-tool" data-tool="IR Optimizer" href="/ir" data-mfl-only="1">Open</a>
@@ -414,7 +416,6 @@
             document.getElementById('syncProgressBar').style.width = pct + '%';
           };
           updateProgress(0, 1);
-          {{ "" }}
 
           let sleeperLeagues = [];
           try { sleeperLeagues = await fetchSleeperSaved(sleeperYearHint); }

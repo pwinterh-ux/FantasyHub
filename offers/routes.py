@@ -56,9 +56,13 @@ PRICE_TEMPLATES = [
     ("1st", "1st", {1: 1}),
     ("2x2nd", "Two 2nds", {2: 2}),
     ("2nd", "2nd", {2: 1}),
+    ("2nd+3rd", "2nd + 3rd", {2: 1, 3: 1}),
     ("2x3rd", "Two 3rds", {3: 2}),
     ("3rd", "3rd", {3: 1}),
+    ("3rd+4th", "3rd + 4th", {3: 1, 4: 1}),
     ("4th", "4th", {4: 1}),
+    ("5th", "5th", {5: 1}),
+    ("6th", "6th", {6: 1}),
     # NOTE: Pick Upgrade template is handled specially and not part of PRICE_TEMPLATES
 ]
 PRICE_INDEX = {code: req for code, _label, req in PRICE_TEMPLATES}
