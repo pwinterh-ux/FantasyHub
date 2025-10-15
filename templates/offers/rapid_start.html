@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-wrap" style="max-width:1100px;">
+  <div class="tile pad" style="margin-bottom:18px;">
+    <h2 style="margin:0 0 6px 0;">Rapid Trade Offers</h2>
+    <p class="muted" style="margin:0;">Work through MyFantasyLeague trades one league at a time. Fine-tune each offer, get an instant status message, and we&rsquo;ll keep a running summary for you.</p>
+    <p class="muted" style="margin:8px 0 0 0;font-size:13px;">Rapid Trade Offers currently supports MyFantasyLeague (MFL) leagues that are synced to your account.</p>
+  </div>
+
+  <div class="tile pad" style="display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));">
+    <section>
+      <h3 style="margin-top:0;">Buy Flow</h3>
+      <p class="muted" style="margin-top:0;">Pick a core player. We&rsquo;ll step through every synced MFL league where you don&rsquo;t already roster them.</p>
+
+      <form method="GET" action="{{ url_for('offers.rapid_start') }}" style="display:flex;gap:10px;margin-bottom:12px;">
+        <input type="text" name="q" value="{{ q }}" placeholder="Search players" style="flex:1;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:rgba(15,23,42,.65);color:#f8fafc;">
+        <button type="submit" class="btn">Search</button>
+      </form>
+
+      {% if players %}
+      <div class="muted" style="font-size:13px;margin-bottom:8px;">Top {{ players|length }} results. Choose a player to begin.</div>
+      <div style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow:auto;padding-right:6px;">
+        {% for player in players %}
+          <form method="POST" action="{{ url_for('offers.rapid_start') }}" class="tile pad" style="background:rgba(12,18,30,.65);border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <div>
+              <div style="font-weight:600;">{{ player.name }}</div>
+              <div class="muted" style="font-size:13px;">{{ player.position or '–' }} &bull; {{ player.team or 'FA' }} &bull; ID {{ player.id }}</div>
+            </div>
+            <div>
+              <input type="hidden" name="mode" value="buy">
+              <input type="hidden" name="player_id" value="{{ player.id }}">
+              <button type="submit" class="btn" style="white-space:nowrap;">Start Buy Flow</button>
+            </div>
+          </form>
+        {% endfor %}
+      </div>
+      {% elif q %}
+        <div class="muted" style="font-style:italic;">No players matched "{{ q }}".</div>
+      {% else %}
+        <div class="muted" style="font-style:italic;">Search for a player to get started.</div>
+      {% endif %}
+    </section>
+
+    <section>
+      <h3 style="margin-top:0;">Sell Flow</h3>
+      <p class="muted" style="margin-top:0;">Choose the league to work through. You can preload your outbound assets or customize each offer as you go.</p>
+
+      <form method="GET" action="{{ url_for('offers.rapid_start') }}" style="display:flex;gap:10px;margin-bottom:14px;align-items:center;">
+        <select name="sell_league_id" style="flex:1;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:rgba(15,23,42,.65);color:#f8fafc;">
+          <option value="">Select a league…</option>
+          {% for lg in leagues %}
+            <option value="{{ lg.mfl_id }}" {% if sell_league_id and sell_league_id == lg.mfl_id %}selected{% endif %}>{{ lg.name }} (ID {{ lg.mfl_id }})</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn-ghost">Load</button>
+      </form>
+
+      {% if selected_league %}
+        <div class="tile pad" style="background:rgba(12,18,30,.65);border:1px solid rgba(255,255,255,.08);margin-bottom:14px;">
+          <div style="font-weight:600;">{{ selected_league.name }}</div>
+          <div class="muted" style="font-size:13px;">League ID {{ selected_league.mfl_id }}</div>
+          {% if not sell_assets %}
+            <div class="muted" style="margin-top:8px;font-style:italic;">We couldn&rsquo;t load your roster for this league. Make sure it&rsquo;s synced.</div>
+          {% endif %}
+        </div>
+
+        <form method="POST" action="{{ url_for('offers.rapid_start') }}" class="tile pad" style="background:rgba(12,18,30,.55);border:1px solid rgba(255,255,255,.08);display:flex;flex-direction:column;gap:14px;">
+          <input type="hidden" name="mode" value="sell">
+          <input type="hidden" name="sell_league_id" value="{{ selected_league.mfl_id }}">
+
+          <div>
+            <div style="font-weight:600;margin-bottom:6px;">Outbound asset strategy</div>
+            <label style="display:block;margin-bottom:4px;font-size:14px;">
+              <input type="radio" name="preset_mode" value="custom" checked>
+              I&rsquo;ll choose assets for each offer.
+            </label>
+            <label style="display:block;font-size:14px;">
+              <input type="radio" name="preset_mode" value="preset" {% if sell_assets %}{% else %}disabled{% endif %}>
+              Use the assets I select below in every offer (you can still tweak).
+            </label>
+          </div>
+
+          {% if sell_assets %}
+            <div>
+              <div style="font-weight:600;margin-bottom:6px;">Players to include by default</div>
+              <div class="muted" style="font-size:13px;margin-bottom:6px;">Only used when “Use the assets I select” is chosen. You can adjust on any step.</div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                {% for pl in sell_assets.players %}
+                  <label style="background:rgba(15,23,42,.65);border:1px solid rgba(255,255,255,.08);padding:8px 10px;border-radius:10px;font-size:14px;display:flex;align-items:center;gap:6px;">
+                    <input type="checkbox" name="default_player" value="{{ pl.id }}">
+                    {{ pl.position or '–' }} {{ pl.name }}
+                  </label>
+                {% endfor %}
+                {% if sell_assets.players|length == 0 %}
+                  <div class="muted" style="font-style:italic;">No rostered players found.</div>
+                {% endif %}
+              </div>
+            </div>
+
+            <div>
+              <div style="font-weight:600;margin-bottom:6px;">Draft picks to include by default</div>
+              <div class="muted" style="font-size:13px;margin-bottom:6px;">Only available when the preset option is selected.</div>
+              <div style="display:flex;flex-direction:column;gap:6px;max-height:180px;overflow:auto;padding-right:4px;">
+                {% for pk in sell_assets.picks %}
+                  {% if pk.usable %}
+                    <label style="background:rgba(15,23,42,.65);border:1px solid rgba(255,255,255,.08);padding:8px 10px;border-radius:10px;font-size:14px;display:flex;align-items:center;gap:6px;">
+                      <input type="checkbox" name="default_pick" value="{{ pk.id }}">
+                      {{ pk.label }}
+                    </label>
+                  {% else %}
+                    <div class="muted" style="font-size:13px;opacity:.7;">{{ pk.label }} (unavailable)</div>
+                  {% endif %}
+                {% endfor %}
+                {% if sell_assets.picks|length == 0 %}
+                  <div class="muted" style="font-style:italic;">No picks on record.</div>
+                {% endif %}
+              </div>
+            </div>
+          {% endif %}
+
+          <div>
+            <button type="submit" class="btn" style="width:100%;">Start Sell Flow</button>
+          </div>
+        </form>
+      {% else %}
+        <div class="muted" style="font-style:italic;">Load a league to choose default assets and start selling.</div>
+      {% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}
