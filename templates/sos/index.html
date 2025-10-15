@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .sos-wrap{display:flex;flex-direction:column;gap:12px;}
+  .tile{background:var(--tile-dark); border:1px solid var(--border); border-radius:14px; padding:12px;}
+  .hdr{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+  .hdr h2{margin:0;font-size:20px;}
+  .sub{font-size:12px;opacity:.85}
+
+  .grid-outer{margin-top:10px;}
+  .league-row{background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:10px; margin-bottom:10px;}
+
+  .badge{font-size:10px; padding:2px 6px; border:1px solid rgba(255,255,255,.2); border-radius:999px; opacity:.8}
+  .badge-mfl{background:rgba(96,165,250,.15);}
+  .badge-slp{background:rgba(34,197,94,.15);}
+
+  .pills{display:flex; flex-wrap:wrap; gap:6px;}
+  .pill{display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; border:1px solid rgba(255,255,255,.15); white-space:nowrap; max-width:260px; overflow:hidden; text-overflow:ellipsis;}
+  .tier-top{background:rgba(220,38,38,.18);}     /* tough */
+  .tier-mid{background:rgba(245,158,11,.16);}    /* balanced */
+  .tier-bot{background:rgba(34,197,94,.16);}     /* favorable */
+  .pill-bye, .cell-bye{background:rgba(148,163,184,.18);}
+
+  details.league{background:var(--tile-bg); border:1px solid var(--border); border-radius:12px; padding:10px; margin-top:10px;}
+  details.league summary{cursor:pointer; list-style:none; padding:6px 4px; margin:-6px -4px 8px; font-weight:600;}
+
+  /* Comparison grid */
+  .cmp { width:100%; border-collapse:separate; border-spacing:0; }
+  .cmp th, .cmp td { padding:6px 8px; font-size:12px; text-align:center; }
+  .cmp thead th { position:sticky; top:0; background:rgba(0,0,0,.15); backdrop-filter:blur(8px); }
+  .cmp th.sticky-name, .cmp td.sticky-name{ text-align:left; position:sticky; left:0; background:rgba(0,0,0,.12); backdrop-filter:blur(8px);}
+  .cell { border:1px solid rgba(255,255,255,.1); border-radius:6px; min-width:56px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cell.tier-top{ background:rgba(220,38,38,.18); }
+  .cell.tier-mid{ background:rgba(245,158,11,.16); }
+  .cell.tier-bot{ background:rgba(34,197,94,.16); }
+  .cell-bye { background:rgba(148,163,184,.18); }
+  .name-short{ font-weight:600; }
+
+  .total{font-weight:600;}
+</style>
+
+<div class="sos-wrap">
+  <div class="tile">
+    <div class="hdr">
+      <h2>Strength of Schedule — Remaining Regular Season</h2>
+      <div class="sub">
+        Grid shows <em>opponent short name</em> per week; hover for full name + record. Color = tier by current win%.
+      </div>
+    </div>
+
+    {% if not has_data %}
+      <div class="sub">No leagues with schedules yet.</div>
+    {% else %}
+      <div class="grid-outer">
+        {% for row in grid %}
+          <div class="league-row">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <div style="font-weight:700;">{{ row.league_name }}</div>
+              {% if row.platform == 'mfl' %}
+                <span class="badge badge-mfl">MFL</span>
+              {% else %}
+                <span class="badge badge-slp">SLP</span>
+              {% endif %}
+              {% if row.header_weeks and row.header_weeks|length > 0 %}
+                <div class="sub">Weeks {{ row.header_weeks[0] }}–{{ row.header_weeks[-1] }}</div>
+              {% endif %}
+            </div>
+
+            <!-- My-team quick strip -->
+            <div class="sub" style="margin-top:6px;">
+              My Team:
+              {% if row.my_team %} {{ row.my_team.name }} {% else %} (unknown) {% endif %}
+            </div>
+            {% if row.error %}
+              <div class="sub" style="color:#fca5a5;">Error: {{ row.error }}</div>
+            {% else %}
+              <div class="pills" style="margin:6px 0 10px;">
+                {% for c in row.my_cells %}
+                  {% if c.is_bye %}
+                    <span class="pill pill-bye" title="BYE">W{{ c.week }} BYE</span>
+                  {% else %}
+                    {% set cls = 'tier-mid' %}
+                    {% if c.tier == 'top' %}{% set cls = 'tier-top' %}{% endif %}
+                    {% if c.tier == 'bot' %}{% set cls = 'tier-bot' %}{% endif %}
+                    <span class="pill {{ cls }}" title="{{ c.title }}">W{{ c.week }}: {{ c.text_short }}</span>
+                  {% endif %}
+                {% endfor %}
+              </div>
+
+              <details class="league">
+                <summary>Expand: League Comparison Grid</summary>
+                <div style="overflow:auto;">
+                  <table class="cmp">
+                    <thead>
+                      <tr>
+                        <th class="sticky-name" style="min-width:220px; text-align:left;">Team</th>
+                        {% for wk in row.header_weeks %}
+                          <th>W{{ wk }}</th>
+                        {% endfor %}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for trow in row.grid %}
+                        <tr>
+                          <td class="sticky-name"><span class="name-short" title="{{ trow.name_full }}">{{ trow.name_short }}</span></td>
+                          {% for cell in trow.cells %}
+                            {% if cell.is_bye %}
+                              <td><div class="cell cell-bye" title="BYE">BYE</div></td>
+                            {% else %}
+                              {% set ccls = 'tier-mid' %}
+                              {% if cell.tier == 'top' %}{% set ccls = 'tier-top' %}{% endif %}
+                              {% if cell.tier == 'bot' %}{% set ccls = 'tier-bot' %}{% endif %}
+                              <td><div class="cell {{ ccls }}" title="{{ cell.title }}">{{ cell.text_short }}</div></td>
+                            {% endif %}
+                          {% endfor %}
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+
+              <div class="total" style="margin-top:8px;">
+                Total Opponent Record: 
+                {% if row.total_record %}
+                  {{ row.total_record.wins }}-{{ row.total_record.losses }}{% if row.total_record.ties and row.total_record.ties>0 %}-{{ row.total_record.ties }}{% endif %}
+                {% else %}
+                  —
+                {% endif %}
+              </div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

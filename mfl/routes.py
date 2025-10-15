@@ -10,13 +10,13 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_required, current_user
 
 from app import db
-from models import League, Team, Roster, DraftPick, Player
+from models import League, Team, Roster, DraftPick, Player, SleeperLeague
 from services.mfl_client import MFLClient
 from services.mfl_parsers import (
     parse_user_leagues,
     parse_assets,
     parse_standings,
-    parse_league_info,           # (franchise_meta_map, roster_slots_text, league_base_url)
+    parse_league_info,           # (franchise_meta_map, roster_slots_text, league_base_url, ir_slots_max)
     parse_rosters_fallback,      # used when assets is blocked
     parse_future_picks_fallback, # used when assets is blocked
     parse_pending_trades,        # parses export?TYPE=pendingTrades (open trades only)
@@ -106,6 +106,9 @@ def _normalize_host_candidate(value: str | None) -> str | None:
 
 
 def _append_user_id_cookie(base_cookie: str | None, api_cookie_val: str | None) -> str | None:
+    """
+    Ensure the cookie string we send also carries MFL_USER_ID (helps MFL auth checks).
+    """
     if not api_cookie_val:
         return base_cookie
     try:
@@ -118,6 +121,26 @@ def _append_user_id_cookie(base_cookie: str | None, api_cookie_val: str | None) 
     if "MFL_USER_ID=" not in base_cookie:
         base_cookie = (base_cookie + "; " if base_cookie else "") + f"MFL_USER_ID={uid}"
     return base_cookie
+
+
+def _mask_cookie_val(val: str | None) -> str:
+    """Mask cookie values for logs (keeps keys, truncates values)."""
+    if not val:
+        return "None"
+    parts = []
+    for seg in str(val).split(";"):
+        seg = seg.trim() if hasattr(seg, "trim") else seg.strip()
+        if not seg or "=" not in seg:
+            continue
+        k, v = seg.split("=", 1)
+        v = v.strip()
+        if not v:
+            parts.append(f"{k}=")
+        else:
+            head = v[:4]
+            tail = v[-2:] if len(v) > 6 else ""
+            parts.append(f"{k}={head}…{tail}")
+    return "; ".join(parts) or "present"
 
 
 def _wants_json_response() -> bool:
@@ -210,7 +233,7 @@ def _refresh_sleeper_assets_for_user(user) -> tuple[int, list[str]]:
 def offers_entry():
     # keep the nav under the mfl/ namespace, but land in the offers app
     return redirect(url_for("offers.search"))
-    
+
 # --------------------------- Link / Login -----------------------------------
 
 @mfl_bp.route("/login", methods=["GET", "POST"])
@@ -534,7 +557,7 @@ def mfl_config_submit():
             db.session.delete(lg)
             db.session.flush()
         except Exception as e:
-            db.session.rollback
+            db.session.rollback()
             current_app.logger.exception("Failed deleting league %s: %s", lg.mfl_id, e)
             flash(f"Failed deleting league {lg.mfl_id}: {e}", "danger")
             continue
@@ -613,7 +636,6 @@ def mfl_config_submit():
     except Exception as e:
         current_app.logger.info("could not build myleagues host map for config sync: %s", e)
 
-    # small helper to ensure the cookie we send carries MFL_USER_ID
     # -------------------- FETCH PHASE (per-host threads) ---------------------
     # Prepare per-league immutable fetch spec (avoid ORM objects in threads)
     fetch_specs: list[dict] = []
@@ -665,12 +687,15 @@ def mfl_config_submit():
                     },
                 )
                 try:
-                    franchise_meta, roster_text, league_base_url = parse_league_info(info_xml) if info_xml else ({}, None, None)
+                    franchise_meta, roster_text, league_base_url, ir_slots_max = (
+                        parse_league_info(info_xml) if info_xml else ({}, None, None, None)
+                    )
                 except Exception as e:
-                    franchise_meta, roster_text, league_base_url = {}, None, None
+                    franchise_meta, roster_text, league_base_url, ir_slots_max = {}, None, None, None
                     out["errors"].append(f"parse_league_info:{e}")
                 out["franchise_meta"] = franchise_meta
                 out["roster_text"] = roster_text
+                out["ir_slots_max"] = ir_slots_max
                 out["resolved_host"] = spec["prefer_host"] or _host_only(league_base_url) or host_by_lid.get(lid) or host_key
 
                 # 2) assets (host first, fallback to API if blocked)
@@ -788,10 +813,13 @@ def mfl_config_submit():
                 lg.home_url = lg.url_for_league_home()
             db.session.commit()
         except Exception as e:
-            current_app.logger.info("could not stamp league_host/home_url for L=%s: %s", lg.mfl_id, e)
+            current_app.logger.info("could not opportunistically set league_host/home_url for L=%s: %s", lg.mfl_id, e)
 
         # Sync info
         try:
+            if bundle.get("ir_slots_max") is not None:
+                lg.ir_slots_max = bundle["ir_slots_max"]
+
             sync_league_info(
                 lg,
                 bundle.get("franchise_meta") or {},
@@ -928,11 +956,11 @@ def mfl_config_sync_one():
         if phase == "FAST":
             info_xml = api_client.get_league_info(league_id, api_cookie)
             try:
-                franchise_meta, roster_text, league_base_url = (
-                    parse_league_info(info_xml) if info_xml else ({}, None, None)
+                franchise_meta, roster_text, league_base_url, ir_slots_max = (
+                    parse_league_info(info_xml) if info_xml else ({}, None, None, None)
                 )
             except Exception as parse_err:
-                franchise_meta, roster_text, league_base_url = {}, None, None
+                franchise_meta, roster_text, league_base_url, ir_slots_max = {}, None, None, None
                 warnings.append(f"parse_league_info:{parse_err}")
 
             resolved_host = (
@@ -956,12 +984,14 @@ def mfl_config_sync_one():
             metrics_info: dict = {}
             standings_count = 0
 
-            # CHANGED: remove db.session.begin() and use explicit commit/rollback
             try:
                 if host_used and getattr(league, "league_host", None) != host_used:
                     league.league_host = host_used
                     if hasattr(league, "home_url"):
                         league.home_url = league.url_for_league_home()
+
+                if ir_slots_max is not None:
+                    league.ir_slots_max = ir_slots_max
 
                 metrics_info = sync_league_info(
                     league,
@@ -983,7 +1013,20 @@ def mfl_config_sync_one():
                 "roster_text_updated": metrics_info.get("roster_text_updated", 0),
                 "standings_updated": standings_count,
             }
-        else:  # ASSETS        else:  # ASSETS
+        else:  # ASSETS
+            # 0) Always fetch league info first so Team names exist before asset upserts
+            info_xml = api_client.get_league_info(league_id, api_cookie)
+            try:
+                franchise_meta, roster_text, league_base_url, ir_slots_max = (
+                    parse_league_info(info_xml) if info_xml else ({}, None, None, None)
+                )
+            except Exception as parse_err:
+                franchise_meta, roster_text, league_base_url, ir_slots_max = {}, None, None, None
+                warnings.append(f"parse_league_info:{parse_err}")
+
+            if ir_slots_max is not None:
+                league.ir_slots_max = ir_slots_max
+
             resolved_host = getattr(league, "league_host", None)
             data_client, data_cookie, host_used_initial = _resolve_client(resolved_host)
 
@@ -997,9 +1040,10 @@ def mfl_config_sync_one():
             )
 
             metrics_assets: dict = {}
-
-            # CHANGED: remove db.session.begin() and use explicit commit/rollback
             try:
+                # Ensure team rows (with real names) exist/update before rosters/picks
+                sync_league_info(league, franchise_meta or {}, roster_slots=roster_text, commit=False)
+
                 metrics_assets = sync_league_assets(league, assets_payload or [], commit=False)
                 league.synced_at = datetime.utcnow()
                 db.session.commit()
@@ -1111,6 +1155,19 @@ def refresh_assets_all():
         for league in year_leagues:
             lid = league.mfl_id
             try:
+                # Always ensure franchise names exist before assets
+                info_xml = api_client.get_league_info(lid, api_cookie)
+                try:
+                    franchise_meta, roster_text, league_base_url, ir_slots_max = (
+                        parse_league_info(info_xml) if info_xml else ({}, None, None, None)
+                    )
+                except Exception:
+                    franchise_meta, roster_text, league_base_url, ir_slots_max = {}, None, None, None
+
+                if ir_slots_max is not None:
+                    league.ir_slots_max = ir_slots_max
+                sync_league_info(league, franchise_meta or {}, roster_slots=roster_text, commit=False)
+
                 data_client, data_cookie, host_used_initial = _resolve_client(
                     league, getattr(league, "league_host", None)
                 )
@@ -1155,9 +1212,6 @@ def refresh_assets_all():
             mfl_success_msg += f" Used fallback data for {fallback_count}."
         flash(mfl_success_msg, "success")
 
-    # Older code tried to refresh Sleeper here; we're now letting the My Leagues overlay
-    # call Sleeper separately for better progress details.
-
     if failure_details:
         flash(
             "Failed to refresh some MFL leagues: " + "; ".join(failure_details[:3]) + (
@@ -1184,19 +1238,21 @@ def refresh_assets_all():
 
 # --------------------------- Trades: shared fetcher --------------------------
 
-def _gather_open_trades(year: int) -> dict:
+def _gather_open_trades(year: int, trace: bool = False) -> dict:
     """
     Core fetcher: returns the same shape the JSON endpoint exposes.
-    Uses league-host cookie when available, else falls back to API host.
 
-    UPDATED: per-host concurrency (one worker per distinct host). Threads do
-    network + parsing only; final packaging is assembled in the main thread.
+    IMPORTANT: No API-host fallback for trades.
+      - If a league host cannot be resolved, we SKIP that league (and log when trace=1).
+      - We always use the league's own host client (e.g., www43) for pendingTrades.
     """
+    logger = current_app.logger
+
     # Cookies
     api_cookie = getattr(current_user, "mfl_cookie_api", None) or getattr(current_user, "session_key", None)
     host_cookies = current_user.get_mfl_host_cookies() if hasattr(current_user, "get_mfl_host_cookies") else {}
 
-    # Client pinned to API host (we'll swap to league host when we can)
+    # Client pinned to API host for myleagues discovery only
     api_client = MFLClient(year=year)
 
     # Build a fresh map of league_id -> host from myleagues (helps when league_host isn't stamped yet)
@@ -1208,29 +1264,53 @@ def _gather_open_trades(year: int) -> dict:
                 lid = str(rec.get("league_id") or rec.get("id") or "").strip()
                 host = rec.get("host")
                 if lid and host:
-                    host_by_lid[lid] = host
+                    normalized = _normalize_host_candidate(host)
+                    if normalized:
+                        host_by_lid[lid] = normalized
     except Exception as e:
-        current_app.logger.info("could not build myleagues host map for trades sync: %s", e)
+        logger.info("trades: could not build myleagues host map: %s", e)
 
     # All leagues for this user/season
     leagues = League.query.filter_by(user_id=current_user.id, year=year).all()
 
-    # Group by resolved host
+    if trace:
+        logger.info("trades: gather year=%s leagues=%d", year, len(leagues))
+        logger.info("trades: host_by_lid entries=%d", len(host_by_lid))
+
+    # Group by resolved host (skip leagues with no resolved host)
     groups: dict[str, list[str]] = {}
+    skipped = 0
     for lg in leagues:
-        host = getattr(lg, "league_host", None) or host_by_lid.get(lg.mfl_id) or "api.myfantasyleague.com"
+        host = getattr(lg, "league_host", None) or host_by_lid.get(lg.mfl_id)
+        host = _normalize_host_candidate(host)
+        if not host:
+            skipped += 1
+            continue
         groups.setdefault(host, []).append(lg.mfl_id)
+
+    if trace:
+        for host, lids in groups.items():
+            logger.info("trades: group host=%s leagues=%d", host, len(lids))
+        if skipped:
+            logger.info("trades: skipped leagues with no resolved host: %d", skipped)
 
     # Prepare clients/cookies per host
     clients_by_host: dict[str, MFLClient] = {}
     cookie_by_host: dict[str, str | None] = {}
+
     for host in groups.keys():
-        if host == "api.myfantasyleague.com":
-            clients_by_host[host] = api_client
-            cookie_by_host[host] = api_cookie
-        else:
-            clients_by_host[host] = MFLClient(year=year, base_url=f"https://{host}/{year}/")
-            cookie_by_host[host] = host_cookies.get(host) or api_cookie
+        clients_by_host[host] = MFLClient(year=year, base_url=f"https://{host}/{year}/")
+        host_cookie = host_cookies.get(host) or api_cookie
+        cookie_by_host[host] = _append_user_id_cookie(host_cookie, api_cookie)
+
+    if trace:
+        for host in groups.keys():
+            logger.info(
+                "trades: cookie host=%s present=%s masked=%s",
+                host,
+                "yes" if cookie_by_host.get(host) else "no",
+                _mask_cookie_val(cookie_by_host.get(host))
+            )
 
     # Worker: fetch + parse pending trades for the leagues on a host
     def _worker(host_key: str, lids: list[str]) -> list[dict]:
@@ -1245,8 +1325,31 @@ def _gather_open_trades(year: int) -> dict:
                 "error": None,
             }
             try:
+                if trace:
+                    logger.info(
+                        "trades: fetch pendingTrades host=%s lid=%s cookie_present=%s",
+                        host_key, lid, "yes" if cookie else "no"
+                    )
+
                 xml = client.get_pending_trades(lid, cookie)
+
+                if trace and xml:
+                    try:
+                        root_tag = ET.fromstring(xml).tag
+                    except Exception:
+                        root_tag = "parse-error"
+                    snippet = (xml[:160] if isinstance(xml, (bytes, bytearray)) else str(xml)[:160])
+                    if isinstance(snippet, (bytes, bytearray)):
+                        try:
+                            snippet = snippet.decode("utf-8", "ignore")
+                        except Exception:
+                            snippet = str(snippet)
+                    logger.info("trades: xml root=%s host=%s lid=%s snippet=%r", root_tag, host_key, lid, snippet)
+
                 trades = parse_pending_trades(xml)
+
+                if trace:
+                    logger.info("trades: parsed count=%d host=%s lid=%s", len(trades), host_key, lid)
 
                 def _side_to_dict(side):
                     return {
@@ -1279,6 +1382,8 @@ def _gather_open_trades(year: int) -> dict:
                 league_payload["trades"] = t_list
             except Exception as e:
                 league_payload["error"] = str(e)
+                if trace:
+                    logger.warning("trades: error host=%s lid=%s err=%s", host_key, lid, e)
             results.append(league_payload)
         return results
 
@@ -1287,7 +1392,7 @@ def _gather_open_trades(year: int) -> dict:
     total_trades = 0
 
     # Execute workers
-    with ThreadPoolExecutor(max_workers=len(groups)) as ex:
+    with ThreadPoolExecutor(max_workers=len(groups) or 1) as ex:
         futures = [ex.submit(_worker, host, lids) for host, lids in groups.items()]
         for fut in as_completed(futures):
             try:
@@ -1309,7 +1414,10 @@ def _gather_open_trades(year: int) -> dict:
                         })
                     total_trades += len(lp.get("trades") or [])
             except Exception as e:
-                current_app.logger.info("trades worker failed: %s", e)
+                logger.info("trades worker failed: %s", e)
+
+    if trace:
+        logger.info("trades: fetched leagues=%d total_trades=%d", len(results), total_trades)
 
     return {
         "ok": True,
@@ -1366,6 +1474,8 @@ def trades_open():
     if miss:
         return miss
 
+    trace = request.args.get("trace") in {"1", "true", "yes"}
+
     try:
         year = int(request.args.get("year", datetime.utcnow().year))
     except ValueError:
@@ -1375,7 +1485,7 @@ def trades_open():
 
     cached, age_sec = _cache_get(current_user.id, year)
     if not cached or force:
-        data = _gather_open_trades(year)
+        data = _gather_open_trades(year, trace=trace)
         _cache_set(current_user.id, year, data)
         cached = data
         age_sec = 0.0  # just fetched
@@ -1400,6 +1510,9 @@ def trades_open():
     # --- map: my franchise id per league
     leagues = League.query.filter_by(user_id=current_user.id, year=year).all()
     my_fid_by_league = {lg.mfl_id: _pad(lg.franchise_id) for lg in leagues}
+
+    if trace:
+        current_app.logger.info("trades: my_fid_by_league=%s", {k: (v or "None") for k, v in my_fid_by_league.items()})
 
     # --- build team_names {league_id: {fid: team_name}}
     team_names: dict[str, dict[str, str]] = {}
@@ -1506,7 +1619,7 @@ def mfl_trades_sync():
     # read/refresh cache
     cached, _age = _cache_get(current_user.id, year)
     if not cached or force:
-        data = _gather_open_trades(year)
+        data = _gather_open_trades(year, trace=(request.args.get("trace") in {"1", "true", "yes"}))
         _cache_set(current_user.id, year, data)
         cached = data
 

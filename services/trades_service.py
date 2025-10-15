@@ -11,7 +11,7 @@ from flask import current_app
 from app import db
 from models import League, Team
 from services.mfl_client import MFLClient
-from services.mfl_parsers import parse_league_info  # returns (meta_map, roster_text, base_url)
+from services.mfl_parsers import parse_league_info  # returns (meta_map, roster_text, base_url, ir_slots_max)
 from services.mfl_trades_parsers import (
     parse_pending_trades,
     normalize_trades_for_template,
@@ -120,7 +120,7 @@ def fetch_open_trades_for_user(
         base_url = None
         try:
             info_xml = api_client.get_league_info(lid, cookie)
-            _, _, base_url = parse_league_info(info_xml)
+            _, _, base_url, _ = parse_league_info(info_xml)
         except Exception as e:
             league_errors.append(f"league_info failed: {e}")
 

@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  :root{
+    --tile-pad:14px;
+    --tile-radius:14px;
+  }
+
+  /* page + header */
+  .page{display:flex;flex-direction:column;gap:14px;}
+  .hdr{background:var(--tile-dark);border:1px solid var(--border);border-radius:var(--tile-radius);padding:var(--tile-pad);}
+  .hdr-top{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+  .hdr h2{margin:0;font-size:22px;}
+  .meta{font-size:12px;opacity:.8;}
+
+  /* chips */
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+  .chip{cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);font-size:12px;text-transform:uppercase;letter-spacing:.2px;}
+  .chip.active{outline:2px solid rgba(255,255,255,.25);}
+
+  /* sections */
+  .section{display:flex;flex-direction:column;gap:10px;}
+  .section h3{margin:10px 0 4px 2px;font-size:14px;font-weight:700;opacity:.9;letter-spacing:.3px;text-transform:uppercase;}
+
+  /* GRID: 3 -> 2 -> 1 columns */
+  .grid{
+    display:grid;gap:12px;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    align-items:stretch;
+  }
+  @media (max-width:1280px){.grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+  @media (max-width:860px){.grid{grid-template-columns:1fr;}}
+
+  /* cards */
+  .card{
+    background:var(--tile-bg);
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:var(--tile-radius);
+    padding:var(--tile-pad);
+    display:flex;flex-direction:column;gap:10px;
+    position:relative;
+    overflow:hidden;            /* stop shadows/filters from spilling */
+    contain:layout paint;       /* containment for perf + visuals */
+  }
+
+  /* top rows */
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;}
+  .league{font-weight:700;font-size:15px;}
+  .match{font-size:12px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:56vw;}
+  .scores{display:flex;align-items:flex-end;justify-content:space-between;}
+  .you{font-size:26px;font-weight:800;color:#22c55e;}
+  .opp{font-size:26px;font-weight:800;color:#ef4444;}
+  .prob{font-size:12px;display:flex;align-items:center;gap:8px;white-space:nowrap;}
+  .prob strong{font-size:18px;}
+  .note{font-size:12px;opacity:.9;}
+
+  /* FORCE the remaining blocks to stack vertically */
+  .two-cols{
+    display:flex !important;
+    flex-direction:column !important;
+    gap:8px;
+  }
+
+  /* blocks + player lines */
+  .blk{
+    background:rgba(255,255,255,.05);
+    border:1px solid rgba(255,255,255,.1);
+    border-radius:10px;
+    padding:10px;
+    min-width:0;
+  }
+  .blk h4{margin:0 0 6px 0;font-size:13px;font-weight:700;}
+  .plist{display:flex;flex-direction:column;gap:6px;min-width:0;}
+  .prow{
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:6px 8px;border-radius:8px;background:rgba(15,23,42,.55);
+    font-size:12px;
+  }
+  .pinfo{display:flex;align-items:center;gap:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
+  .pinfo .pos{font-weight:700;opacity:.9;}
+  .pinfo .name{font-weight:600;}
+  .pinfo .team{opacity:.8;}
+  .pproj{font-variant-numeric:tabular-nums;}
+  .alert{background:rgba(248,113,113,.12);border:1px solid rgba(239,68,68,.4);border-radius:12px;padding:14px;font-size:14px;}
+</style>
+
+<div class="page">
+  <div class="hdr">
+    <div class="hdr-top">
+      <h2>Monday Night Needs</h2>
+      {% if available %}
+        <div class="meta">Snapshot from {% if fetched_at %}{{ fetched_at }}{% else %}latest live call{% endif %}. Fixed for Monday night setups.</div>
+      {% else %}
+        <div class="meta">{{ reason or "Unavailable" }}</div>
+      {% endif %}
+    </div>
+
+    {% if available and tiles %}
+      {% set total = tiles|length %}
+      {% set inb = tiles|selectattr('category','equalto','in_balance')|list|length %}
+      {% set lw  = tiles|selectattr('category','equalto','likely_win')|list|length %}
+      {% set ll  = tiles|selectattr('category','equalto','likely_loss')|list|length %}
+      {% set w   = tiles|selectattr('category','equalto','decided_win')|list|length %}
+      {% set l   = tiles|selectattr('category','equalto','decided_loss')|list|length %}
+      <div class="chips" id="chips">
+        <span class="chip active" data-filter="all">All • {{ total }}</span>
+        <span class="chip" data-filter="inb">In the Balance • {{ inb }}</span>
+        <span class="chip" data-filter="lw">Likely Wins • {{ lw }}</span>
+        <span class="chip" data-filter="ll">Likely Losses • {{ ll }}</span>
+        <span class="chip" data-filter="w">Wins • {{ w }}</span>
+        <span class="chip" data-filter="l">Losses • {{ l }}</span>
+      </div>
+    {% endif %}
+  </div>
+
+  {% if not available %}
+    <div class="alert">{{ reason or "Monday Night Needs is only available on Mondays." }}</div>
+  {% elif not tiles %}
+    <div class="alert">No live matchups were found for your leagues.</div>
+  {% else %}
+
+    {% macro players_block(title, plist) -%}
+      <div class="blk">
+        <h4>{{ title }}</h4>
+        {% if plist %}
+          <div class="plist">
+            {% for p in plist %}
+              <div class="prow">
+                <div class="pinfo">
+                  <span class="pos">{{ p.pos or '' }}</span>
+                  <span class="name">{{ p.name }}</span>
+                  {% if p.team %}<span class="team">— {{ p.team }}</span>{% endif %}
+                </div>
+                <div class="pproj">
+                  {% if p.projected_total is not none %}Proj {{ p.projected_total|round(1) }}{% else %}Proj —{% endif %}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="plist"><div class="prow" style="opacity:.7;">No players remaining.</div></div>
+        {% endif %}
+      </div>
+    {%- endmacro %}
+
+    {% macro matchup_card(t) -%}
+      {% set mine_left = t.mine_left or 0 %}
+      {% set opp_left  = t.opp_left  or 0 %}
+      <article class="card" data-kind="{{ t.category }}">
+        <div class="row">
+          <div>
+            <div class="league">{{ t.league_name }}</div>
+            <div class="match">{{ t.my_team }} vs {{ t.opp_team }}</div>
+          </div>
+          <div class="prob"><span>Win Probability</span><strong>{{ t.win_percent_display }}</strong></div>
+        </div>
+
+        <div class="scores">
+          <div class="you">{{ t.my_score|round(1) }}</div>
+          <div class="opp">{{ t.opp_score|round(1) }}</div>
+        </div>
+
+        <div class="note">
+          {% if t.decided %}
+            Final / decided (trailing side has no players left).
+          {% else %}
+            {% if mine_left > 0 and opp_left > 0 %}
+              {% if (t.lead or (t.my_score - t.opp_score)) < 0 %}
+                You need to outscore your opponent’s {{ opp_left }} by {{ t.need_for_me|round(1) }} with your {{ mine_left }}.
+              {% elif (t.lead or (t.my_score - t.opp_score)) > 0 %}
+                Opponent needs to outscore your {{ mine_left }} by {{ t.need_for_opp|round(1) }} with their {{ opp_left }}.
+              {% else %}
+                You need to outscore your opponent’s {{ opp_left }} by 0.1 with your {{ mine_left }}.
+              {% endif %}
+            {% elif mine_left > 0 %}
+              You need {{ t.need_for_me|round(1) }} pts from {{ mine_left }} remaining.
+            {% elif opp_left > 0 %}
+              Opponent needs {{ t.need_for_opp|round(1) }} pts from {{ opp_left }} remaining.
+            {% else %}
+              All scoring appears final for this matchup.
+            {% endif %}
+          {% endif %}
+        </div>
+
+        <div class="two-cols">
+          {{ players_block('Your Remaining', t.remaining.mine.players) }}
+          {{ players_block('Opponent Remaining', t.remaining.opp.players) }}
+        </div>
+      </article>
+    {%- endmacro %}
+
+    <!-- Order: In-Balance -> Likely Wins -> Likely Losses -> Decided Wins -> Decided Losses -->
+    <section class="section" data-section="inb">
+      <h3>In the Balance (33–66%)</h3>
+      <div class="grid">
+        {% for t in tiles if t.category == 'in_balance' %}{{ matchup_card(t) }}{% endfor %}
+      </div>
+    </section>
+
+    <section class="section" data-section="lw">
+      <h3>Likely Wins (&gt; 67%)</h3>
+      <div class="grid">
+        {% for t in tiles if t.category == 'likely_win' %}{{ matchup_card(t) }}{% endfor %}
+      </div>
+    </section>
+
+    <section class="section" data-section="ll">
+      <h3>Likely Losses (&lt; 33%)</h3>
+      <div class="grid">
+        {% for t in tiles if t.category == 'likely_loss' %}{{ matchup_card(t) }}{% endfor %}
+      </div>
+    </section>
+
+    <section class="section" data-section="w">
+      <h3>Decided — Wins</h3>
+      <div class="grid">
+        {% for t in tiles if t.category == 'decided_win' %}{{ matchup_card(t) }}{% endfor %}
+      </div>
+    </section>
+
+    <section class="section" data-section="l">
+      <h3>Decided — Losses</h3>
+      <div class="grid">
+        {% for t in tiles if t.category == 'decided_loss' %}{{ matchup_card(t) }}{% endfor %}
+      </div>
+    </section>
+
+  {% endif %}
+</div>
+
+<script>
+  (function(){
+    const chips = document.querySelectorAll('#chips .chip');
+    const sections = document.querySelectorAll('[data-section]');
+    function setFilter(key){
+      chips.forEach(c => c.classList.toggle('active', c.dataset.filter===key));
+      sections.forEach(s => { s.style.display = (key==='all' || s.dataset.section===key) ? '' : 'none'; });
+    }
+    chips.forEach(c => c.addEventListener('click', () => setFilter(c.dataset.filter)));
+  })();
+</script>
+{% endblock %}
