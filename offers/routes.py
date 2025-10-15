@@ -9,6 +9,7 @@ from flask_login import login_required, current_user
 
 from app import db
 from models import League, Team, Roster, DraftPick, Player
+from services.mfl_trade import send_trade_proposal, parse_mfl_import_response
 
 # Entitlements & mass-offer guard
 try:
@@ -115,6 +116,21 @@ def _team_for_player_in_league(lg: League, player_id: int) -> Team | None:
     )
 
 
+def _resolve_host_and_cookie(league: League) -> Tuple[str, Optional[str]]:
+    host = (league.league_host or "").strip() or "api.myfantasyleague.com"
+    cookie = None
+    get_host_cookies = getattr(current_user, "get_mfl_host_cookies", None)
+    if callable(get_host_cookies):
+        try:
+            host_cookies = get_host_cookies() or {}
+            cookie = host_cookies.get(host)
+        except Exception:
+            cookie = None
+    if not cookie:
+        cookie = getattr(current_user, "mfl_cookie_api", None) or getattr(current_user, "session_key", None)
+    return host, cookie
+
+
 def _pick_counts_by_round(team: Team) -> Dict[int, int]:
     rows = DraftPick.query.filter(DraftPick.team_id == team.id).all()
     out: Dict[int, int] = {}
@@ -178,6 +194,119 @@ def _clear_sent_contexts():
     for k in list(session.keys()):
         if str(k).startswith("tb_sent::"):
             session.pop(k, None)
+
+
+def _league_franchise_maps(league: League) -> Tuple[Dict[str, str], Dict[str, str]]:
+    names: Dict[str, str] = {}
+    records: Dict[str, str] = {}
+    teams = Team.query.filter(Team.league_id == league.id).all()
+    for t in teams:
+        fid = str(t.mfl_id).zfill(4)
+        names[fid] = t.name or fid
+        if t.record:
+            records[fid] = t.record
+    return names, records
+
+
+def _draft_pick_to_token(pick: DraftPick) -> Optional[str]:
+    try:
+        orig = str(pick.original_team or "").zfill(4)
+        return f"FP_{orig}_{int(pick.season)}_{int(pick.round)}"
+    except Exception:
+        return None
+
+
+def _format_pick_label(pick: DraftPick, names: Dict[str, str], records: Dict[str, str]) -> str:
+    base = f"{pick.season} R{pick.round}"
+    orig = str(pick.original_team or "").zfill(4)
+    if orig.strip("0"):
+        label = names.get(orig, orig)
+        rec = records.get(orig)
+        if rec:
+            return f"{base} (orig {label} — {rec})"
+        return f"{base} (orig {label})"
+    return base
+
+
+def _player_assets_for_team(team: Team) -> List[Dict[str, Any]]:
+    rows = (
+        db.session.query(Player)
+        .join(Roster, Roster.player_id == Player.id)
+        .filter(Roster.team_id == team.id)
+        .order_by(Player.position.asc(), Player.name.asc())
+        .all()
+    )
+    out: List[Dict[str, Any]] = []
+    for pl in rows:
+        out.append(
+            {
+                "id": pl.id,
+                "name": pl.name or "(unknown)",
+                "position": pl.position or "--",
+                "nfl_team": pl.team or "FA",
+            }
+        )
+    return out
+
+
+def _pick_assets_for_team(team: Team, names: Dict[str, str], records: Dict[str, str]) -> List[Dict[str, Any]]:
+    picks = (
+        DraftPick.query.filter(DraftPick.team_id == team.id)
+        .order_by(DraftPick.season.asc(), DraftPick.round.asc(), DraftPick.pick_number.asc())
+        .all()
+    )
+    out: List[Dict[str, Any]] = []
+    for pick in picks:
+        token = _draft_pick_to_token(pick)
+        out.append(
+            {
+                "id": pick.id,
+                "label": _format_pick_label(pick, names, records),
+                "token": token,
+                "usable": token is not None,
+            }
+        )
+    return out
+
+
+def _validate_player_ids(team: Team, player_ids: List[int]) -> List[int]:
+    if not player_ids:
+        return []
+    rows = (
+        db.session.query(Roster.player_id)
+        .filter(Roster.team_id == team.id, Roster.player_id.in_(player_ids))
+        .all()
+    )
+    valid = {int(pid) for (pid,) in rows}
+    return [pid for pid in player_ids if pid in valid]
+
+
+def _pick_tokens_for_team(team: Team, pick_ids: List[int]) -> List[str]:
+    if not pick_ids:
+        return []
+    picks = DraftPick.query.filter(
+        DraftPick.team_id == team.id, DraftPick.id.in_(pick_ids)
+    ).all()
+    by_id = {int(p.id): p for p in picks}
+    tokens: List[str] = []
+    for pid in pick_ids:
+        pick = by_id.get(pid)
+        if not pick:
+            continue
+        token = _draft_pick_to_token(pick)
+        if token:
+            tokens.append(token)
+    return tokens
+
+
+def _validate_pick_ids(team: Team, pick_ids: List[int]) -> List[int]:
+    if not pick_ids:
+        return []
+    picks = DraftPick.query.filter(
+        DraftPick.team_id == team.id, DraftPick.id.in_(pick_ids)
+    ).all()
+    valid = {int(p.id) for p in picks}
+    return [pid for pid in pick_ids if pid in valid]
 
 
 # ------------------------------- routes --------------------------------------
@@ -653,6 +782,603 @@ def send_offers():
         template_code=template_code,
         player_id=player_id,
         offers_log=offers_log,
+    )
+
+
+@offers_bp.route("/rapid", methods=["GET", "POST"])
+@login_required
+def rapid_start():
+    gate = _require_recent_sync_or_gate()
+    if gate:
+        return gate
+
+    if request.method == "POST":
+        session.pop("rapid_trade", None)
+        mode = (request.form.get("mode") or "buy").lower()
+
+        if mode == "buy":
+            try:
+                player_id = int(request.form.get("player_id", "0"))
+            except Exception:
+                player_id = 0
+
+            player = Player.query.get(player_id)
+            if not player:
+                flash("Pick a player to start the buy flow.", "warning")
+                return redirect(url_for("offers.rapid_start"))
+
+            leagues = (
+                League.query.filter_by(user_id=current_user.id)
+                .order_by(League.name.asc())
+                .all()
+            )
+
+            league_ids: List[str] = []
+            for lg in leagues:
+                my_team = _get_my_team_in_league(lg)
+                if not my_team:
+                    continue
+                owner_team = _team_for_player_in_league(lg, player.id)
+                if not owner_team or owner_team.id == my_team.id:
+                    continue
+                league_ids.append(str(lg.mfl_id))
+
+            if not league_ids:
+                flash("No MFL leagues found where you can buy this player right now.", "info")
+                return redirect(url_for("offers.rapid_start", q=player.name))
+
+            session["rapid_trade"] = {
+                "mode": "buy",
+                "player_id": player.id,
+                "player_name": player.name,
+                "player_position": player.position,
+                "player_team": player.team,
+                "league_ids": league_ids,
+                "total": len(league_ids),
+                "summary": [],
+                "started": int(_now_utc().timestamp()),
+            }
+            session.modified = True
+            return redirect(url_for("offers.rapid_run"))
+
+        # SELL FLOW START
+        sell_league_id = (request.form.get("sell_league_id") or "").strip()
+        if not sell_league_id:
+            flash("Choose a league to start the sell flow.", "warning")
+            return redirect(url_for("offers.rapid_start"))
+
+        league = League.query.filter_by(user_id=current_user.id, mfl_id=sell_league_id).first()
+        if not league:
+            flash("League not found for your account.", "warning")
+            return redirect(url_for("offers.rapid_start"))
+
+        my_team = _get_my_team_in_league(league)
+        if not my_team:
+            flash("We could not locate your franchise in that league.", "warning")
+            return redirect(url_for("offers.rapid_start", sell_league_id=sell_league_id))
+
+        buyers = (
+            Team.query.filter(Team.league_id == league.id, Team.id != my_team.id)
+            .order_by(Team.name.asc())
+            .all()
+        )
+        if not buyers:
+            flash("No other teams found in that league.", "info")
+            return redirect(url_for("offers.rapid_start", sell_league_id=sell_league_id))
+
+        preset_mode = (request.form.get("preset_mode") or "custom").lower()
+        default_player_ids: List[int] = []
+        default_pick_ids: List[int] = []
+
+        if preset_mode == "preset":
+            for raw in request.form.getlist("default_player"):
+                try:
+                    default_player_ids.append(int(raw))
+                except Exception:
+                    continue
+            for raw in request.form.getlist("default_pick"):
+                try:
+                    default_pick_ids.append(int(raw))
+                except Exception:
+                    continue
+
+            default_player_ids = _validate_player_ids(my_team, default_player_ids)
+            default_pick_ids = _validate_pick_ids(my_team, default_pick_ids)
+        else:
+            preset_mode = "custom"
+
+        team_queue = [str(t.id) for t in buyers]
+
+        session["rapid_trade"] = {
+            "mode": "sell",
+            "league_id": str(league.mfl_id),
+            "league_name": league.name,
+            "team_queue": team_queue,
+            "total": len(team_queue),
+            "summary": [],
+            "preset_mode": preset_mode,
+            "preset_players": default_player_ids,
+            "preset_picks": default_pick_ids,
+            "my_team_id": my_team.id,
+            "my_team_name": my_team.name,
+            "started": int(_now_utc().timestamp()),
+        }
+        session.modified = True
+        return redirect(url_for("offers.rapid_run"))
+
+    q = (request.args.get("q") or "").strip()
+    players: List[Player] = []
+    if q:
+        like = f"%{q}%"
+        players = (
+            Player.query.filter(Player.name.ilike(like))
+            .order_by(Player.name.asc())
+            .limit(50)
+            .all()
+        )
+
+    leagues = (
+        League.query.filter_by(user_id=current_user.id)
+        .order_by(League.name.asc())
+        .all()
+    )
+
+    sell_league_id = (request.args.get("sell_league_id") or "").strip()
+    selected_league = None
+    sell_assets: Optional[Dict[str, Any]] = None
+    if sell_league_id:
+        selected_league = League.query.filter_by(user_id=current_user.id, mfl_id=sell_league_id).first()
+        if selected_league:
+            my_team = _get_my_team_in_league(selected_league)
+            if my_team:
+                names, records = _league_franchise_maps(selected_league)
+                sell_assets = {
+                    "players": _player_assets_for_team(my_team),
+                    "picks": _pick_assets_for_team(my_team, names, records),
+                }
+
+    return render_template(
+        "offers/rapid_start.html",
+        q=q,
+        players=players,
+        leagues=leagues,
+        sell_league_id=sell_league_id,
+        selected_league=selected_league,
+        sell_assets=sell_assets,
+    )
+
+
+@offers_bp.route("/rapid/run", methods=["GET", "POST"])
+@login_required
+def rapid_run():
+    gate = _require_recent_sync_or_gate()
+    if gate:
+        return gate
+
+    context = session.get("rapid_trade") or {}
+    mode = context.get("mode")
+    if mode not in {"buy", "sell"}:
+        session.pop("rapid_trade", None)
+        flash("Start a rapid trade session to continue.", "warning")
+        return redirect(url_for("offers.rapid_start"))
+
+    queue_key = "league_ids" if mode == "buy" else "team_queue"
+    queue: List[Any] = list(context.get(queue_key) or [])
+
+    if request.method == "POST":
+        action = (request.form.get("action") or "submit").lower()
+
+        if not queue:
+            return redirect(url_for("offers.rapid_summary"))
+
+        summary: List[Dict[str, Any]] = context.get("summary", [])
+
+        if mode == "buy":
+            league_mfl_id = str(queue[0])
+            league = League.query.filter_by(user_id=current_user.id, mfl_id=league_mfl_id).first()
+            player_id = int(context.get("player_id") or 0)
+            my_team = _get_my_team_in_league(league) if league else None
+            owner_team = _team_for_player_in_league(league, player_id) if league else None
+
+            if not league or not my_team or not owner_team:
+                queue.pop(0)
+                summary.append(
+                    {
+                        "status": "error",
+                        "league": league.name if league else f"League {league_mfl_id}",
+                        "target": owner_team.name if owner_team else "Unknown",
+                        "message": "Missing league or roster data.",
+                    }
+                )
+                context[queue_key] = queue
+                context["summary"] = summary
+                session["rapid_trade"] = context
+                session.modified = True
+                flash("Missing league or roster data. Skipping.", "warning")
+                return redirect(url_for("offers.rapid_run"))
+
+            if action == "skip":
+                queue.pop(0)
+                summary.append(
+                    {
+                        "status": "skipped",
+                        "league": league.name,
+                        "target": owner_team.name,
+                        "message": "Skipped",
+                    }
+                )
+                flash(f"Skipped {league.name} — {owner_team.name}.", "info")
+            else:
+                give_players_raw = request.form.getlist("give_player")
+                give_picks_raw = request.form.getlist("give_pick")
+                recv_players_raw = request.form.getlist("receive_player")
+                recv_picks_raw = request.form.getlist("receive_pick")
+
+                give_player_ids: List[int] = []
+                give_pick_ids: List[int] = []
+                recv_player_ids: List[int] = []
+                recv_pick_ids: List[int] = []
+
+                for raw in give_players_raw:
+                    try:
+                        give_player_ids.append(int(raw))
+                    except Exception:
+                        continue
+                for raw in give_picks_raw:
+                    try:
+                        give_pick_ids.append(int(raw))
+                    except Exception:
+                        continue
+                for raw in recv_players_raw:
+                    try:
+                        recv_player_ids.append(int(raw))
+                    except Exception:
+                        continue
+                for raw in recv_picks_raw:
+                    try:
+                        recv_pick_ids.append(int(raw))
+                    except Exception:
+                        continue
+
+                give_player_ids = _validate_player_ids(my_team, give_player_ids)
+                give_pick_ids = _validate_pick_ids(my_team, give_pick_ids)
+                recv_player_ids = _validate_player_ids(owner_team, recv_player_ids)
+                recv_pick_ids = _validate_pick_ids(owner_team, recv_pick_ids)
+
+                if not give_player_ids and not give_pick_ids:
+                    flash("Select at least one of your assets to include in the offer.", "warning")
+                    context["summary"] = summary
+                    context[queue_key] = queue
+                    session["rapid_trade"] = context
+                    session.modified = True
+                    return redirect(url_for("offers.rapid_run"))
+
+                will_give = [str(pid) for pid in give_player_ids]
+                will_give.extend(_pick_tokens_for_team(my_team, give_pick_ids))
+
+                will_receive: List[str] = []
+                core_pid = str(player_id)
+                will_receive.append(core_pid)
+                for pid in recv_player_ids:
+                    spid = str(pid)
+                    if spid != core_pid:
+                        will_receive.append(spid)
+                will_receive.extend(_pick_tokens_for_team(owner_team, recv_pick_ids))
+
+                comments = (request.form.get("comments") or "").strip()
+
+                host, cookie = _resolve_host_and_cookie(league)
+                apikey = current_app.config.get("MFL_APIKEY") if current_app else None
+
+                status = "error"
+                message = ""
+                try:
+                    res = send_trade_proposal(
+                        host=host,
+                        year=league.year,
+                        league_id=league.mfl_id,
+                        offered_to=str(owner_team.mfl_id).zfill(4),
+                        will_give_up=will_give,
+                        will_receive=will_receive,
+                        comments=comments,
+                        apikey=apikey,
+                        cookie=cookie,
+                    )
+                    parsed_ok, parsed_msg = parse_mfl_import_response(res.get("text") or "")
+                    http_ok = bool(res.get("ok"))
+                    status_ok = http_ok and parsed_ok
+                    status = "sent" if status_ok else "error"
+                    message = parsed_msg or (res.get("text") or "").strip() or f"HTTP {res.get('status_code')}"
+                    flash(f"{league.name}: {message or 'Offer submitted.'}", "success" if status_ok else "danger")
+                except Exception as exc:
+                    message = str(exc)
+                    flash(f"{league.name}: {message}", "danger")
+
+                queue.pop(0)
+                summary.append(
+                    {
+                        "status": status,
+                        "league": league.name,
+                        "target": owner_team.name,
+                        "message": message or ("Offer submitted." if status == "sent" else ""),
+                    }
+                )
+
+            context[queue_key] = queue
+            context["summary"] = summary
+            session["rapid_trade"] = context
+            session.modified = True
+            return redirect(url_for("offers.rapid_run"))
+
+        league_mfl_id = str(context.get("league_id") or "")
+        league = League.query.filter_by(user_id=current_user.id, mfl_id=league_mfl_id).first()
+        my_team_id = context.get("my_team_id")
+        my_team = Team.query.get(my_team_id) if my_team_id else None
+
+        if not queue or not league or not my_team:
+            session.pop("rapid_trade", None)
+            flash("Sell session data was missing. Start over.", "warning")
+            return redirect(url_for("offers.rapid_start"))
+
+        target_team_id = int(queue[0])
+        target_team = Team.query.get(target_team_id)
+        if not target_team or target_team.league_id != league.id:
+            queue.pop(0)
+            summary.append(
+                {
+                    "status": "error",
+                    "league": league.name,
+                    "target": "Unknown",
+                    "message": "Target team missing.",
+                }
+            )
+            context[queue_key] = queue
+            context["summary"] = summary
+            session["rapid_trade"] = context
+            session.modified = True
+            flash("Missing target team data. Skipping.", "warning")
+            return redirect(url_for("offers.rapid_run"))
+
+        if action == "skip":
+            queue.pop(0)
+            summary.append(
+                {
+                    "status": "skipped",
+                    "league": league.name,
+                    "target": target_team.name,
+                    "message": "Skipped",
+                }
+            )
+            flash(f"Skipped {league.name} — {target_team.name}.", "info")
+            context[queue_key] = queue
+            context["summary"] = summary
+            session["rapid_trade"] = context
+            session.modified = True
+            return redirect(url_for("offers.rapid_run"))
+
+        give_players_raw = request.form.getlist("give_player")
+        give_picks_raw = request.form.getlist("give_pick")
+        recv_players_raw = request.form.getlist("receive_player")
+        recv_picks_raw = request.form.getlist("receive_pick")
+
+        give_player_ids: List[int] = []
+        give_pick_ids: List[int] = []
+        recv_player_ids: List[int] = []
+        recv_pick_ids: List[int] = []
+
+        for raw in give_players_raw:
+            try:
+                give_player_ids.append(int(raw))
+            except Exception:
+                continue
+        for raw in give_picks_raw:
+            try:
+                give_pick_ids.append(int(raw))
+            except Exception:
+                continue
+        for raw in recv_players_raw:
+            try:
+                recv_player_ids.append(int(raw))
+            except Exception:
+                continue
+        for raw in recv_picks_raw:
+            try:
+                recv_pick_ids.append(int(raw))
+            except Exception:
+                continue
+
+        give_player_ids = _validate_player_ids(my_team, give_player_ids)
+        give_pick_ids = _validate_pick_ids(my_team, give_pick_ids)
+        recv_player_ids = _validate_player_ids(target_team, recv_player_ids)
+        recv_pick_ids = _validate_pick_ids(target_team, recv_pick_ids)
+
+        if not give_player_ids and not give_pick_ids:
+            flash("Select at least one asset from your side to send.", "warning")
+            context[queue_key] = queue
+            context["summary"] = summary
+            session["rapid_trade"] = context
+            session.modified = True
+            return redirect(url_for("offers.rapid_run"))
+
+        will_give = [str(pid) for pid in give_player_ids]
+        will_give.extend(_pick_tokens_for_team(my_team, give_pick_ids))
+
+        will_receive: List[str] = [str(pid) for pid in recv_player_ids]
+        will_receive.extend(_pick_tokens_for_team(target_team, recv_pick_ids))
+
+        comments = (request.form.get("comments") or "").strip()
+
+        host, cookie = _resolve_host_and_cookie(league)
+        apikey = current_app.config.get("MFL_APIKEY") if current_app else None
+
+        status = "error"
+        message = ""
+        try:
+            res = send_trade_proposal(
+                host=host,
+                year=league.year,
+                league_id=league.mfl_id,
+                offered_to=str(target_team.mfl_id).zfill(4),
+                will_give_up=will_give,
+                will_receive=will_receive,
+                comments=comments,
+                apikey=apikey,
+                cookie=cookie,
+            )
+            parsed_ok, parsed_msg = parse_mfl_import_response(res.get("text") or "")
+            http_ok = bool(res.get("ok"))
+            status_ok = http_ok and parsed_ok
+            status = "sent" if status_ok else "error"
+            message = parsed_msg or (res.get("text") or "").strip() or f"HTTP {res.get('status_code')}"
+            flash(f"{league.name}: {message or 'Offer submitted.'}", "success" if status_ok else "danger")
+        except Exception as exc:
+            message = str(exc)
+            flash(f"{league.name}: {message}", "danger")
+
+        queue.pop(0)
+        summary.append(
+            {
+                "status": status,
+                "league": league.name,
+                "target": target_team.name,
+                "message": message or ("Offer submitted." if status == "sent" else ""),
+            }
+        )
+
+        context[queue_key] = queue
+        context["summary"] = summary
+        session["rapid_trade"] = context
+        session.modified = True
+        return redirect(url_for("offers.rapid_run"))
+
+    while queue:
+        if mode == "buy":
+            league_mfl_id = str(queue[0])
+            league = League.query.filter_by(user_id=current_user.id, mfl_id=league_mfl_id).first()
+            player_id = int(context.get("player_id") or 0)
+            my_team = _get_my_team_in_league(league) if league else None
+            owner_team = _team_for_player_in_league(league, player_id) if league else None
+
+            if not league or not my_team or not owner_team:
+                queue.pop(0)
+                context["summary"] = context.get("summary", []) + [
+                    {
+                        "status": "error",
+                        "league": league.name if league else f"League {league_mfl_id}",
+                        "target": owner_team.name if owner_team else "Unknown",
+                        "message": "Missing league or roster data.",
+                    }
+                ]
+                context[queue_key] = queue
+                session["rapid_trade"] = context
+                session.modified = True
+                continue
+
+            names, records = _league_franchise_maps(league)
+            my_players = _player_assets_for_team(my_team)
+            my_picks = [p for p in _pick_assets_for_team(my_team, names, records) if p.get("usable")]
+            their_players = []
+            for asset in _player_assets_for_team(owner_team):
+                asset_copy = dict(asset)
+                asset_copy["is_core"] = asset["id"] == player_id
+                their_players.append(asset_copy)
+            their_picks = [p for p in _pick_assets_for_team(owner_team, names, records) if p.get("usable")]
+
+            step_number = context.get("total", len(queue)) - len(queue) + 1
+            return render_template(
+                "offers/rapid_step.html",
+                mode="buy",
+                player_id=player_id,
+                context=context,
+                league=league,
+                my_team=my_team,
+                counter_team=owner_team,
+                my_players=my_players,
+                my_picks=my_picks,
+                their_players=their_players,
+                their_picks=their_picks,
+                step=step_number,
+                remaining=len(queue) - 1,
+            )
+
+        league_mfl_id = str(context.get("league_id") or "")
+        league = League.query.filter_by(user_id=current_user.id, mfl_id=league_mfl_id).first()
+        my_team_id = context.get("my_team_id")
+        my_team = Team.query.get(my_team_id) if my_team_id else None
+
+        if not league or not my_team:
+            session.pop("rapid_trade", None)
+            flash("Sell session expired. Start over.", "warning")
+            return redirect(url_for("offers.rapid_start"))
+
+        target_team_id = int(queue[0])
+        target_team = Team.query.get(target_team_id)
+        if not target_team or target_team.league_id != league.id:
+            queue.pop(0)
+            context["summary"] = context.get("summary", []) + [
+                {
+                    "status": "error",
+                    "league": league.name,
+                    "target": "Unknown",
+                    "message": "Missing target team data.",
+                }
+            ]
+            context[queue_key] = queue
+            session["rapid_trade"] = context
+            session.modified = True
+            continue
+
+        names, records = _league_franchise_maps(league)
+        my_players = _player_assets_for_team(my_team)
+        my_picks = [p for p in _pick_assets_for_team(my_team, names, records) if p.get("usable")]
+        their_players = _player_assets_for_team(target_team)
+        their_picks = [p for p in _pick_assets_for_team(target_team, names, records) if p.get("usable")]
+
+        preset_mode = context.get("preset_mode")
+        preset_players = set(context.get("preset_players") or [])
+        preset_picks = set(context.get("preset_picks") or [])
+
+        step_number = context.get("total", len(queue)) - len(queue) + 1
+
+        return render_template(
+            "offers/rapid_step.html",
+            mode="sell",
+            context=context,
+            league=league,
+            my_team=my_team,
+            counter_team=target_team,
+            my_players=my_players,
+            my_picks=my_picks,
+            their_players=their_players,
+            their_picks=their_picks,
+            preset_mode=preset_mode,
+            preset_players=preset_players,
+            preset_picks=preset_picks,
+            step=step_number,
+            remaining=len(queue) - 1,
+        )
+
+    return redirect(url_for("offers.rapid_summary"))
+
+
+@offers_bp.route("/rapid/summary")
+@login_required
+def rapid_summary():
+    context = session.get("rapid_trade") or {}
+    summary = context.get("summary", [])
+    mode = context.get("mode")
+    player = None
+    if mode == "buy":
+        player_id = context.get("player_id")
+        if player_id:
+            player = Player.query.get(int(player_id))
+
+    session.pop("rapid_trade", None)
+    return render_template(
+        "offers/rapid_summary.html",
+        summary=summary,
+        mode=mode,
+        player=player,
     )
 
 

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-wrap" style="max-width:1100px;">
+  <div class="tile pad" style="margin-bottom:18px;display:flex;justify-content:space-between;gap:12px;align-items:center;">
+    <div>
+      <div style="font-size:13px;letter-spacing:0.08em;text-transform:uppercase;color:rgba(226,232,240,.7);">Rapid Trade Offers &middot; {{ mode|title }} flow</div>
+      <h2 style="margin:4px 0 0 0;">{{ league.name }}</h2>
+      {% if mode == 'buy' %}
+        <div class="muted" style="font-size:14px;">Target: {{ counter_team.name }} (FID {{ counter_team.mfl_id }}) &bull; Core player {{ context.player_name or player_id }}</div>
+      {% else %}
+        <div class="muted" style="font-size:14px;">Offering from {{ my_team.name }} to {{ counter_team.name }} (FID {{ counter_team.mfl_id }})</div>
+      {% endif %}
+    </div>
+    <div class="tile pad" style="background:rgba(12,18,30,.65);border:1px solid rgba(255,255,255,.1);min-width:170px;text-align:center;">
+      <div style="font-weight:600;font-size:20px;">Step {{ step }} of {{ context.total }}</div>
+      <div class="muted" style="font-size:13px;">{{ remaining }} {{ 'leagues' if remaining != 1 else 'league' }} remaining</div>
+    </div>
+  </div>
+
+  <form method="POST" action="{{ url_for('offers.rapid_run') }}" class="tile pad" style="display:flex;flex-direction:column;gap:18px;">
+    <div style="display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));">
+      <div>
+        <h3 style="margin-top:0;">Your assets ({{ my_team.name }})</h3>
+        <div class="muted" style="font-size:13px;margin-bottom:8px;">Select the players and picks you are willing to send.</div>
+        <div>
+          <div style="font-weight:600;margin-bottom:6px;">Players</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;">
+            {% for pl in my_players %}
+              {% set checked = False %}
+              {% if mode == 'sell' and preset_mode == 'preset' and pl.id in preset_players %}
+                {% set checked = True %}
+              {% endif %}
+              <label style="background:rgba(15,23,42,.65);border:1px solid rgba(255,255,255,.1);padding:8px 10px;border-radius:10px;display:flex;align-items:center;gap:6px;font-size:14px;">
+                <input type="checkbox" name="give_player" value="{{ pl.id }}" {% if checked %}checked{% endif %}>
+                {{ pl.position or '–' }} {{ pl.name }}
+              </label>
+            {% endfor %}
+            {% if my_players|length == 0 %}
+              <div class="muted" style="font-style:italic;">No rostered players found.</div>
+            {% endif %}
+          </div>
+        </div>
+
+        <div style="margin-top:14px;">
+          <div style="font-weight:600;margin-bottom:6px;">Draft picks</div>
+          <div style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow:auto;padding-right:4px;">
+            {% for pk in my_picks %}
+              {% if pk.usable %}
+                {% set checked_pick = False %}
+                {% if mode == 'sell' and preset_mode == 'preset' and pk.id in preset_picks %}
+                  {% set checked_pick = True %}
+                {% endif %}
+                <label style="background:rgba(15,23,42,.65);border:1px solid rgba(255,255,255,.1);padding:8px 10px;border-radius:10px;display:flex;align-items:center;gap:6px;font-size:14px;">
+                  <input type="checkbox" name="give_pick" value="{{ pk.id }}" {% if checked_pick %}checked{% endif %}>
+                  {{ pk.label }}
+                </label>
+              {% else %}
+                <div class="muted" style="font-size:13px;opacity:.7;">{{ pk.label }} (unavailable)</div>
+              {% endif %}
+            {% endfor %}
+            {% if my_picks|length == 0 %}
+              <div class="muted" style="font-style:italic;">No picks available.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3 style="margin-top:0;">{{ counter_team.name }} assets</h3>
+        {% if mode == 'buy' %}
+          <div class="tile pad" style="background:rgba(12,18,30,.65);border:1px solid rgba(34,197,94,.45);margin-bottom:12px;">
+            <div style="font-weight:600;">Core player (auto-included)</div>
+            {% for pl in their_players %}
+              {% if pl.is_core %}
+                <div class="muted" style="font-size:14px;margin-top:6px;">{{ pl.position or '–' }} {{ pl.name }} &bull; NFL {{ pl.nfl_team or 'FA' }} &bull; ID {{ pl.id }}</div>
+              {% endif %}
+            {% endfor %}
+            <div class="muted" style="font-size:12px;margin-top:6px;">We automatically request this player in every offer for this flow.</div>
+          </div>
+        {% endif %}
+
+        <div>
+          <div style="font-weight:600;margin-bottom:6px;">Additional players</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;">
+            {% set extras = 0 %}
+            {% for pl in their_players %}
+              {% if mode == 'buy' and pl.is_core %}
+                {% continue %}
+              {% endif %}
+              {% set extras = extras + 1 %}
+              <label style="background:rgba(15,23,42,.65);border:1px solid rgba(255,255,255,.1);padding:8px 10px;border-radius:10px;display:flex;align-items:center;gap:6px;font-size:14px;">
+                <input type="checkbox" name="receive_player" value="{{ pl.id }}">
+                {{ pl.position or '–' }} {{ pl.name }}
+              </label>
+            {% endfor %}
+            {% if extras == 0 %}
+              <div class="muted" style="font-style:italic;">No additional players available.</div>
+            {% endif %}
+          </div>
+        </div>
+
+        <div style="margin-top:14px;">
+          <div style="font-weight:600;margin-bottom:6px;">Draft picks</div>
+          <div style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow:auto;padding-right:4px;">
+            {% for pk in their_picks %}
+              {% if pk.usable %}
+                <label style="background:rgba(15,23,42,.65);border:1px solid rgba(255,255,255,.1);padding:8px 10px;border-radius:10px;display:flex;align-items:center;gap:6px;font-size:14px;">
+                  <input type="checkbox" name="receive_pick" value="{{ pk.id }}">
+                  {{ pk.label }}
+                </label>
+              {% else %}
+                <div class="muted" style="font-size:13px;opacity:.7;">{{ pk.label }} (unavailable)</div>
+              {% endif %}
+            {% endfor %}
+            {% if their_picks|length == 0 %}
+              <div class="muted" style="font-style:italic;">No picks on record.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <label for="comments" style="font-weight:600;margin-bottom:6px;display:block;">Optional message</label>
+      <textarea id="comments" name="comments" rows="3" placeholder="Add context or a friendly note" style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(12,18,30,.65);color:#f8fafc;"></textarea>
+    </div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button type="submit" name="action" value="skip" class="btn-ghost" style="min-width:120px;">Skip</button>
+      <button type="submit" name="action" value="submit" class="btn" style="min-width:160px;">Submit Offer</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

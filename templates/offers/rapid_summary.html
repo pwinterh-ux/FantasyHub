@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-wrap" style="max-width:900px;">
+  <div class="tile pad" style="margin-bottom:18px;">
+    <h2 style="margin:0 0 6px 0;">Rapid Trade Summary</h2>
+    <p class="muted" style="margin:0;">Here&rsquo;s how your rapid {{ mode or 'trade' }} session wrapped up.</p>
+  </div>
+
+  <div class="tile pad" style="margin-bottom:18px;">
+    {% if mode == 'buy' and player %}
+      <div style="font-weight:600;">Core player</div>
+      <div class="muted" style="font-size:14px;">{{ player.name }} &bull; {{ player.position or '–' }} &bull; {{ player.team or 'FA' }} (ID {{ player.id }})</div>
+    {% elif mode == 'sell' %}
+      <div class="muted" style="font-size:14px;">Sell flow complete.</div>
+    {% endif %}
+  </div>
+
+  <div class="tile pad">
+    {% if summary %}
+      <div style="font-weight:600;margin-bottom:10px;">Offer log</div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        {% for item in summary %}
+          {% set status = item.status or item['status'] %}
+          {% set css = 'rgba(34,197,94,.35)' if status == 'sent' else ('rgba(59,130,246,.35)' if status == 'skipped' else 'rgba(248,113,113,.35)') %}
+          <div class="tile pad" style="background:rgba(12,18,30,.65);border:1px solid {{ css }};">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+              <div>
+                <div style="font-weight:600;">{{ item.league }}</div>
+                <div class="muted" style="font-size:13px;">Counterparty: {{ item.target or 'Unknown' }}</div>
+              </div>
+              <div style="font-weight:700;text-transform:uppercase;letter-spacing:0.08em;font-size:13px;color:{{ 'rgba(34,197,94,.9)' if status == 'sent' else ('rgba(59,130,246,.9)' if status == 'skipped' else 'rgba(248,113,113,.9)') }};">{{ status }}</div>
+            </div>
+            {% if item.message %}
+              <div class="muted" style="font-size:13px;margin-top:6px;">{{ item.message }}</div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="muted" style="font-style:italic;">No offers were sent or logged this session.</div>
+    {% endif %}
+  </div>
+
+  <div style="margin-top:18px;display:flex;justify-content:flex-end;">
+    <a href="{{ url_for('offers.rapid_start') }}" class="btn">Start another session</a>
+  </div>
+</div>
+{% endblock %}
