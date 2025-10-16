@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .hud-wrap { max-width: 1100px; margin: 24px auto; }
+  .tile {
+    background: radial-gradient(120% 120% at 10% 0%, rgba(18,22,32,.92), rgba(8,12,20,.95));
+    border: 1px solid rgba(148,163,184,.18);
+    border-radius: 14px;
+    box-shadow: 0 12px 28px rgba(2,6,23,.55);
+    color: #e2e8f0;
+  }
+  .tile.pad { padding: 18px; }
+  .tile.dark { background: radial-gradient(120% 120% at 10% 0%, rgba(10,12,18,.92), rgba(4,6,12,.96)); }
+  .hdr { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .hdr h2 { margin:0; font-size:26px; font-weight:800; letter-spacing:.4px; }
+  .muted { opacity:.85; }
+  .btn { background: linear-gradient(180deg,#38bdf8,#0ea5e9); color:#0b1120; font-weight:700; border:none; border-radius:10px; padding:10px 18px; box-shadow:0 8px 24px rgba(14,165,233,.45); }
+  .btn:disabled { opacity:.55; box-shadow:none; cursor:not-allowed; }
+  .btn-ghost { background:transparent; border:1px solid rgba(148,163,184,.32); border-radius:10px; padding:10px 16px; color:#e2e8f0; text-decoration:none; }
+  .field { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .field label.lbl { font-weight:700; min-width:90px; text-transform:uppercase; font-size:12px; letter-spacing:.08em; opacity:.8; }
+  input.input, select.input { background:#0b1220; border:1px solid rgba(148,163,184,.35); border-radius:10px; padding:10px 12px; color:#e2e8f0; min-width:220px; }
+  input.input::placeholder { color:#94a3b8; }
+  .pill { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; letter-spacing:.08em; background:rgba(15,118,110,.18); border:1px solid rgba(45,212,191,.45); color:#5eead4; }
+  .info-card { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; padding:14px; border-radius:12px; background:rgba(12,20,36,.72); border:1px solid rgba(148,163,184,.25); }
+  .info-card strong { display:block; font-size:15px; }
+  .section { margin-top:16px; padding:14px; border-radius:12px; background:rgba(10,14,24,.8); border:1px solid rgba(148,163,184,.22); }
+  .section h3 { margin:0 0 8px 0; font-size:15px; text-transform:uppercase; letter-spacing:.1em; opacity:.78; }
+  .preset-grid { display:flex; flex-wrap:wrap; gap:10px; }
+  .preset-grid label { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:10px; border:1px solid rgba(148,163,184,.35); background:rgba(11,18,32,.82); font-size:14px; }
+  .preset-grid label input { accent-color:#38bdf8; }
+  .preset-note { font-size:13px; opacity:.75; margin-bottom:6px; }
+  .stats { display:flex; gap:12px; flex-wrap:wrap; margin-top:10px; }
+  .stat { padding:6px 10px; border-radius:999px; border:1px solid rgba(148,163,184,.28); font-size:12px; letter-spacing:.06em; text-transform:uppercase; }
+  .actions { display:flex; justify-content:flex-end; gap:10px; margin-top:18px; }
+  @media (max-width:720px){ .field { flex-direction:column; align-items:flex-start; } input.input, select.input { width:100%; } }
+</style>
+
+<div class="hud-wrap">
+  <div class="tile pad" style="margin-bottom:16px;">
+    <div class="hdr">
+      <div>
+        <h2>Rapid Trade Offers</h2>
+        <div class="muted" style="margin-top:4px;">Search for a player, choose Buy or Sell, then build rapid-fire offers across your synced MFL leagues.</div>
+      </div>
+      <a href="{{ url_for('offers.rapid_start') }}" class="btn-ghost">Reset</a>
+    </div>
+  </div>
+
+  <div class="tile pad dark" style="margin-bottom:16px;">
+    <form method="GET" action="{{ url_for('offers.rapid_start') }}" style="margin:0;">
+      <div class="field">
+        <label class="lbl" for="q">Player</label>
+        <input class="input" id="q" name="q" type="text" value="{{ q or '' }}" placeholder="Search player by name…" autocomplete="off">
+        <button type="submit" class="btn">Search</button>
+      </div>
+      <div class="muted" style="font-size:13px;margin-top:6px;">Type a few letters (max 50 results). Choose a player after searching.</div>
+    </form>
+  </div>
+
+  {% if players %}
+    <form id="rapid-build" method="POST" action="{{ url_for('offers.rapid_start') }}" class="tile pad" style="margin-bottom:18px;">
+      <div class="field" style="margin-bottom:12px;">
+        <label class="lbl" for="player_id">Choose</label>
+        <select id="player_id" name="player_id" class="input" style="flex:1;">
+          {% for p in players %}
+            <option value="{{ p.id }}" {% if selected_player_id and p.id == selected_player_id %}selected{% endif %}>{{ p.name }} — {{ p.position or '–' }} / {{ p.team or 'FA' }}</option>
+          {% endfor %}
+        </select>
+        {% if selected_player %}
+          <span class="pill">ID {{ selected_player.id }}</span>
+        {% endif %}
+      </div>
+
+      <div class="field" style="margin-bottom:10px;">
+        <label class="lbl">Mode</label>
+        <label style="display:inline-flex;align-items:center;gap:6px;">
+          <input type="radio" name="mode" value="buy" {% if mode == 'buy' %}checked{% endif %}> Buy
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:6px;">
+          <input type="radio" name="mode" value="sell" {% if mode == 'sell' %}checked{% endif %}> Sell
+        </label>
+      </div>
+
+      {% if selected_player %}
+        <div class="info-card">
+          <div>
+            <strong>{{ selected_player.name }}</strong>
+            <span class="muted">{{ selected_player.position or '–' }} • {{ selected_player.team or 'FA' }}</span>
+          </div>
+          <div class="stats">
+            <span class="stat">Buy leagues: {{ buy_count }}</span>
+            <span class="stat">Sell leagues: {{ sell_leagues|length }}</span>
+          </div>
+        </div>
+      {% endif %}
+
+      <div id="buy-hint" class="section" style="display:{% if mode == 'buy' %}block{% else %}none{% endif %};">
+        <h3>Rapid buy flow</h3>
+        {% if buy_count %}
+          <div class="muted">We will iterate through {{ buy_count }} league{{ 's' if buy_count != 1 else '' }} where you do not roster this player. No additional setup is required.</div>
+        {% else %}
+          <div class="muted" style="color:#fca5a5;">We didn’t find a league where you can buy this player right now. Try another player or sync your leagues.</div>
+        {% endif %}
+      </div>
+
+      <div id="sell-config" class="section" style="display:{% if mode == 'sell' %}block{% else %}none{% endif %};">
+        <h3>Rapid sell setup</h3>
+        {% if sell_leagues %}
+          <div class="field" style="margin-bottom:10px; align-items:flex-start;">
+            <label class="lbl" for="sell_league_id">League</label>
+            <div style="flex:1;">
+              <select id="sell_league_id" name="sell_league_id" class="input" style="width:100%;">
+                <option value="">Select a league…</option>
+                {% for lg in sell_leagues %}
+                  <option value="{{ lg.mfl_id }}" {% if sell_league_id and sell_league_id == lg.mfl_id %}selected{% endif %}>{{ lg.name }} ({{ lg.team_name }})</option>
+                {% endfor %}
+              </select>
+              <div class="muted" style="font-size:13px;margin-top:6px;">Only leagues where you roster {{ selected_player.name if selected_player else 'this player' }} appear here.</div>
+            </div>
+          </div>
+
+          {% if sell_league_id and sell_assets %}
+            <div style="margin-top:12px;">
+              <div class="field" style="margin-bottom:12px;">
+                <label class="lbl">Defaults</label>
+                <label style="display:inline-flex;align-items:center;gap:6px;">
+                  <input type="radio" name="preset_mode" value="custom" checked> Custom each offer
+                </label>
+                <label style="display:inline-flex;align-items:center;gap:6px;">
+                  <input type="radio" name="preset_mode" value="preset" {% if not sell_assets or (sell_assets.players|length == 0 and sell_assets.picks|length == 0) %}disabled{% endif %}> Use my preset assets
+                </label>
+              </div>
+
+              <div class="section" style="background:rgba(9,14,24,.88); margin-top:10px;">
+                <h3>Preset players</h3>
+                <div class="preset-note">These players will be pre-selected in every outbound offer when “Use my preset assets” is chosen. You can still adjust per team.</div>
+                <div class="preset-grid">
+                  {% for pl in sell_assets.players %}
+                    <label>
+                      <input type="checkbox" name="default_player" value="{{ pl.id }}">
+                      {{ pl.position or '–' }} {{ pl.name }}
+                    </label>
+                  {% endfor %}
+                  {% if sell_assets.players|length == 0 %}
+                    <div class="muted" style="font-style:italic;">No rostered players found.</div>
+                  {% endif %}
+                </div>
+              </div>
+
+              <div class="section" style="background:rgba(9,14,24,.88); margin-top:14px;">
+                <h3>Preset draft picks</h3>
+                <div class="preset-note">Available when preset assets are enabled.</div>
+                <div class="preset-grid" style="flex-direction:column; align-items:flex-start;">
+                  {% for pk in sell_assets.picks %}
+                    {% if pk.usable %}
+                      <label>
+                        <input type="checkbox" name="default_pick" value="{{ pk.id }}">
+                        {{ pk.label }}
+                      </label>
+                    {% else %}
+                      <div class="muted" style="opacity:.6;">{{ pk.label }} (unavailable)</div>
+                    {% endif %}
+                  {% endfor %}
+                  {% if sell_assets.picks|length == 0 %}
+                    <div class="muted" style="font-style:italic;">No picks on record.</div>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          {% elif sell_league_id %}
+            <div class="muted" style="color:#fca5a5;">We couldn’t load your assets for this league. Make sure it’s synced.</div>
+          {% endif %}
+        {% else %}
+          <div class="muted" style="color:#fca5a5;">You don’t roster this player in any synced MFL league. Choose another player or sync again.</div>
+        {% endif %}
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="btn" id="buildOffersBtn" data-buy-count="{{ buy_count }}" {% if (mode == 'buy' and buy_count == 0) or (mode == 'sell' and (not sell_leagues or not sell_league_id)) %}disabled{% endif %}>Build Offers</button>
+      </div>
+    </form>
+  {% elif q %}
+    <div class="tile pad">
+      <div class="muted" style="font-style:italic;">No players matched “{{ q }}”. Try another search.</div>
+    </div>
+  {% else %}
+    <div class="tile pad">
+      <div class="muted" style="font-style:italic;">Search for a player above to begin.</div>
+    </div>
+  {% endif %}
+</div>
+
+<script>
+(function(){
+  const playerSel = document.getElementById('player_id');
+  const modeRadios = Array.from(document.querySelectorAll('input[name="mode"]'));
+  const sellWrap = document.getElementById('sell-config');
+  const buyWrap = document.getElementById('buy-hint');
+  const leagueSel = document.getElementById('sell_league_id');
+  const buildBtn = document.getElementById('buildOffersBtn');
+
+  function currentMode(){
+    const checked = modeRadios.find(r => r.checked);
+    return checked ? checked.value : 'buy';
+  }
+
+  function toggleSections(){
+    const mode = currentMode();
+    if (buyWrap) buyWrap.style.display = mode === 'buy' ? 'block' : 'none';
+    if (sellWrap) sellWrap.style.display = mode === 'sell' ? 'block' : 'none';
+    if (buildBtn){
+      const buyDisabled = mode === 'buy' && Number(buildBtn.getAttribute('data-buy-count') || '0') === 0;
+      const sellDisabled = mode === 'sell' && (!leagueSel || !leagueSel.value);
+      buildBtn.disabled = buyDisabled || sellDisabled;
+    }
+  }
+
+  function updateCounts(){
+    if (!buildBtn) return;
+    buildBtn.setAttribute('data-buy-count', '{{ buy_count }}');
+  }
+
+  function updateQuery(param, value){
+    const params = new URLSearchParams(window.location.search);
+    if (value){
+      params.set(param, value);
+    } else {
+      params.delete(param);
+    }
+    if (param === 'player_id'){
+      params.delete('sell_league_id');
+    }
+    const mode = currentMode();
+    params.set('mode', mode);
+    const playerValue = playerSel ? playerSel.value : '';
+    if (playerValue){
+      params.set('player_id', playerValue);
+    }
+    if (!value && param === 'sell_league_id'){
+      params.delete('sell_league_id');
+    }
+    if (mode === 'buy'){
+      params.delete('sell_league_id');
+    }
+    const query = params.toString();
+    window.location = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+  }
+
+  if (playerSel){
+    playerSel.addEventListener('change', () => {
+      updateQuery('player_id', playerSel.value);
+    });
+  }
+
+  modeRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+      const mode = currentMode();
+      if (mode === 'buy'){
+        updateQuery('mode', 'buy');
+      } else {
+        updateQuery('mode', 'sell');
+      }
+    });
+  });
+
+  if (leagueSel){
+    leagueSel.addEventListener('change', () => {
+      updateQuery('sell_league_id', leagueSel.value);
+    });
+  }
+
+  updateCounts();
+  toggleSections();
+})();
+</script>
+{% endblock %}

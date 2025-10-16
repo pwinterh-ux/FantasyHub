@@ -1,0 +1,335 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  /* ===== Page-scoped overrides to counter base.html spacing ===== */
+  main.content > .page-wrap{ max-width:1100px; padding:12px 16px; } /* was 32/24 */
+  .site-header + main.content { padding-top: 6px; }                  /* less gap under nav */
+
+  /* ===== Ultra-compact, lineup-like ===== */
+  .hdr{display:flex;justify-content:space-between;gap:10px;align-items:flex-end;margin-bottom:8px}
+  .lead{font-size:11px;letter-spacing:.1em;text-transform:uppercase;opacity:.75}
+  .title{margin:0;font-size:22px;font-weight:800;line-height:1.15}
+  .mode-callout{font-size:12.5px;opacity:.95;margin-top:2px;line-height:1.25}
+  .pill{padding:2px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);font-size:12px}
+  .stepbox{background:rgba(12,18,30,.65);border:1px solid rgba(255,255,255,.1);min-width:160px;text-align:center;padding:6px 8px;border-radius:10px}
+
+  .panel{background:var(--tile-dark);border:1px solid var(--border);border-radius:12px;padding:10px}
+  .grid{display:grid;gap:8px;grid-template-columns:repeat(2,minmax(0,1fr))}
+  @media (max-width:980px){ .grid{grid-template-columns:1fr} }
+
+  /* Flat tables; extra tight */
+  table.flat{width:100%;border-collapse:collapse;line-height:1.2}
+  table.flat thead th{
+    font-size:10px;text-transform:uppercase;letter-spacing:.08em;text-align:left;
+    padding:3px 6px;opacity:.75;border-bottom:1px solid rgba(255,255,255,.12)
+  }
+  table.flat td{
+    padding:4px 6px;border-bottom:1px solid rgba(255,255,255,.08);background:transparent !important
+  }
+  table.flat tr:last-child td{border-bottom:0}
+  td.chk{width:26px;text-align:center}
+  td.pos{width:36px;font-weight:700;opacity:.95}
+  td.team{width:50px;opacity:.9}
+  td.name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .group{margin-top:4px}
+  .group h4{margin:2px 0;font-size:11px;opacity:.9;font-weight:800}
+
+  /* Action bar (shorter) */
+  .action{position:sticky;bottom:0;z-index:5;margin-top:8px;
+    background:linear-gradient(180deg, rgba(8,12,20,0), rgba(8,12,20,.9) 24%, rgba(8,12,20,.95) 100%);backdrop-filter:saturate(120%) blur(2px)}
+  .action-inner{max-width:1100px;margin:0 auto;padding:8px 0;display:flex;align-items:center;gap:8px;justify-content:flex-end}
+  .action-left{margin-right:auto;display:flex;gap:6px;align-items:center;font-size:12px}
+  .badge{display:inline-flex;gap:6px;align-items:center;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);font-size:12px}
+
+  /* Confirm modal */
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+  .modal{width:min(560px,92vw);background:rgba(12,18,30,.95);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:12px}
+  .modal h3{margin:0 0 6px 0;font-size:15px}
+  .two{display:grid;gap:10px;grid-template-columns:1fr 1fr}
+  .modal ul{margin:6px 0;padding-left:18px;max-height:200px;overflow:auto}
+  .modal .btns{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+</style>
+
+<div>
+  <!-- Header -->
+  <div class="hdr">
+    <div>
+      <div class="lead">Rapid Trade Offers</div>
+      <h1 class="title">
+        {% if mode == 'buy' %}Buy: {{ (context.player_name or player_id)|e }}
+        {% else %}Trade Offer{% endif %}
+      </h1>
+      {% set my_rec = my_team.record if my_team is defined and my_team.record is defined else (my_team_record if my_team_record is defined else None) %}
+      {% set opp_rec = counter_team.record if counter_team is defined and counter_team.record is defined else (counter_team_record if counter_team_record is defined else None) %}
+      <div class="mode-callout">
+        {{ my_team.name|striptags }} {% if my_rec %}<span class="pill">Record: {{ my_rec }}</span>{% endif %}
+        → {{ counter_team.name|striptags }} {% if opp_rec %}<span class="pill">Record: {{ opp_rec }}</span>{% endif %}
+        · <span class="pill" style="opacity:.85">{{ league.name }}</span>
+        {% if mode == 'buy' %} · <span class="pill">Core included</span>{% endif %}
+      </div>
+    </div>
+    <div class="stepbox">
+      <div style="font-weight:700;font-size:15px;">Step {{ step }} / {{ context.total }}</div>
+      <div class="muted" style="font-size:12px">{{ remaining }} {{ 'leagues' if remaining != 1 else 'league' }} left</div>
+    </div>
+  </div>
+
+  {% set pos_order = ['QB','RB','WR','TE'] %}
+
+  <form id="rapidForm" method="POST" action="{{ url_for('offers.rapid_run') }}" class="panel">
+    <div class="grid">
+      <!-- ===== YOUR SIDE ===== -->
+      <div>
+        <h3 style="margin:0 0 2px 0;font-size:13px;">Your assets ({{ my_team.name|striptags }})</h3>
+
+        {% for P in pos_order %}
+          {% set group = (my_players|selectattr('position','equalto',P)|list) %}
+          {% if group|length %}
+          <div class="group">
+            <h4>{{ P }}</h4>
+            <table class="flat">
+              <thead><tr><th style="width:26px"></th><th style="width:36px">Pos</th><th>Player</th><th style="width:50px">Team</th></tr></thead>
+              <tbody>
+                {% for pl in group %}
+                  {% set checked = (mode == 'sell' and preset_mode == 'preset' and pl.id in preset_players) %}
+                  <tr>
+                    <td class="chk"><input type="checkbox" name="give_player" value="{{ pl.id }}" {% if checked %}checked{% endif %}></td>
+                    <td class="pos">{{ pl.position or '–' }}</td>
+                    <td class="name">{{ pl.name }}</td>
+                    <td class="team">{{ pl.nfl_team or 'FA' }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
+        {% endfor %}
+
+        {% set others = (my_players|rejectattr('position','in',pos_order)|list) %}
+        {% if others|length %}
+        <div class="group">
+          <h4>Other</h4>
+          <table class="flat">
+            <thead><tr><th></th><th>Pos</th><th>Player</th><th>Team</th></tr></thead>
+            <tbody>
+              {% for pl in others %}
+                {% set checked = (mode == 'sell' and preset_mode == 'preset' and pl.id in preset_players) %}
+                <tr>
+                  <td class="chk"><input type="checkbox" name="give_player" value="{{ pl.id }}" {% if checked %}checked{% endif %}></td>
+                  <td class="pos">{{ pl.position or '–' }}</td>
+                  <td class="name">{{ pl.name }}</td>
+                  <td class="team">{{ pl.nfl_team or 'FA' }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+
+        {% if my_picks|length %}
+        <div class="group">
+          <h4>Draft picks</h4>
+          <table class="flat">
+            <thead><tr><th></th><th colspan="3">Pick</th></tr></thead>
+            <tbody>
+              {% for pk in my_picks if pk.usable %}
+                {% set checked_pick = (mode == 'sell' and preset_mode == 'preset' and pk.id in preset_picks) %}
+                <tr>
+                  <td class="chk"><input type="checkbox" name="give_pick" value="{{ pk.id }}" {% if checked_pick %}checked{% endif %}></td>
+                  <td colspan="3">{{ pk.label }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- ===== THEIR SIDE ===== -->
+      <div>
+        <h3 style="margin:0 0 2px 0;font-size:13px;">{{ counter_team.name|striptags }} assets</h3>
+
+        {% for P in pos_order %}
+          {% set tgroup = (their_players|selectattr('position','equalto',P)|list) %}
+          {% if tgroup|length %}
+          <div class="group">
+            <h4>{{ P }}</h4>
+            <table class="flat">
+              <thead><tr><th></th><th>Pos</th><th>Player</th><th>Team</th></tr></thead>
+              <tbody>
+                {% for pl in tgroup %}
+                  {% if mode == 'buy' and pl.is_core %}
+                    <tr>
+                      <td class="chk">🔒</td>
+                      <td class="pos">{{ pl.position or '–' }}</td>
+                      <td class="name">{{ pl.name }} <span class="pill" style="margin-left:6px">Core</span></td>
+                      <td class="team">{{ pl.nfl_team or 'FA' }}</td>
+                    </tr>
+                  {% else %}
+                    <tr>
+                      <td class="chk"><input type="checkbox" name="receive_player" value="{{ pl.id }}"></td>
+                      <td class="pos">{{ pl.position or '–' }}</td>
+                      <td class="name">{{ pl.name }}</td>
+                      <td class="team">{{ pl.nfl_team or 'FA' }}</td>
+                    </tr>
+                  {% endif %}
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
+        {% endfor %}
+
+        {% set tothers = (their_players|rejectattr('position','in',pos_order)|list) %}
+        {% if tothers|length %}
+        <div class="group">
+          <h4>Other</h4>
+          <table class="flat">
+            <thead><tr><th></th><th>Pos</th><th>Player</th><th>Team</th></tr></thead>
+            <tbody>
+              {% for pl in tothers %}
+                {% if mode == 'buy' and pl.is_core %}
+                  <tr>
+                    <td class="chk">🔒</td>
+                    <td class="pos">{{ pl.position or '–' }}</td>
+                    <td class="name">{{ pl.name }} <span class="pill" style="margin-left:6px">Core</span></td>
+                    <td class="team">{{ pl.nfl_team or 'FA' }}</td>
+                  </tr>
+                {% else %}
+                  <tr>
+                    <td class="chk"><input type="checkbox" name="receive_player" value="{{ pl.id }}"></td>
+                    <td class="pos">{{ pl.position or '–' }}</td>
+                    <td class="name">{{ pl.name }}</td>
+                    <td class="team">{{ pl.nfl_team or 'FA' }}</td>
+                  </tr>
+                {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+
+        {% if their_picks|length %}
+        <div class="group">
+          <h4>Draft picks</h4>
+          <table class="flat">
+            <thead><tr><th></th><th colspan="3">Pick</th></tr></thead>
+            <tbody>
+              {% for pk in their_picks if pk.usable %}
+                <tr>
+                  <td class="chk"><input type="checkbox" name="receive_pick" value="{{ pk.id }}"></td>
+                  <td colspan="3">{{ pk.label }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Optional note (tight) -->
+    <div style="margin-top:6px">
+      <label for="comments" style="font-weight:700;margin-bottom:2px;display:block;font-size:12px;">Optional message</label>
+      <textarea id="comments" name="comments" rows="2" placeholder="Add context or a friendly note"
+        style="width:100%;padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(12,18,30,.65);color:#f8fafc;font-size:13px;"></textarea>
+    </div>
+
+    <!-- Sticky action bar -->
+    <div class="action">
+      <div class="action-inner">
+        <div class="action-left">
+          <span class="badge">Step {{ step }} / {{ context.total }}</span>
+          <span class="badge">{{ remaining }} {{ 'leagues' if remaining != 1 else 'league' }} left</span>
+        </div>
+        <button type="button" id="skipBtn" class="btn-ghost" style="min-width:100px;">Skip</button>
+        <button type="button" id="openConfirm" class="btn" style="min-width:140px;">Submit Offer</button>
+        <a href="/mfl/trades" class="btn-ghost" style="min-width:90px;">Exit</a>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Confirm Modal -->
+<div id="confirmBack" class="modal-backdrop" aria-hidden="true">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <h3 id="confirmTitle">Confirm Offer</h3>
+    <div class="two">
+      <div>
+        <div class="pill" style="margin:6px 0 4px 0">You give</div>
+        <ul id="youGive"></ul>
+      </div>
+      <div>
+        <div class="pill" style="margin:6px 0 4px 0">You receive</div>
+        <ul id="youGet"></ul>
+      </div>
+    </div>
+    <div class="btns">
+      <button type="button" id="cancelConfirm" class="btn-ghost">Back</button>
+      <button type="button" id="submitReal" class="btn">Confirm & Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const form = document.getElementById('rapidForm');
+  const openBtn = document.getElementById('openConfirm');
+  const submitReal = document.getElementById('submitReal');
+  const cancelConfirm = document.getElementById('cancelConfirm');
+  const back = document.getElementById('confirmBack');
+  const youGive = document.getElementById('youGive');
+  const youGet = document.getElementById('youGet');
+  const skipBtn = document.getElementById('skipBtn');
+
+  // Skip => post with action=skip
+  skipBtn.addEventListener('click', () => {
+    const hidden = document.createElement('input');
+    hidden.type = 'hidden'; hidden.name = 'action'; hidden.value = 'skip';
+    form.appendChild(hidden);
+    form.submit();
+  });
+
+  function collect(selectorPlayers, selectorPicks){
+    const out = [];
+    form.querySelectorAll(selectorPlayers).forEach(cb=>{
+      if(cb.checked){
+        const tr = cb.closest('tr'); if(!tr) return;
+        const pos = tr.querySelector('.pos')?.textContent?.trim() || '';
+        const name = tr.querySelector('.name')?.textContent?.trim() || '';
+        const team = tr.querySelector('.team')?.textContent?.trim() || '';
+        out.push(`${pos} ${name} (${team})`);
+      }
+    });
+    form.querySelectorAll(selectorPicks).forEach(cb=>{
+      if(cb.checked){
+        const tr = cb.closest('tr');
+        const label = tr.querySelector('td[colspan]')?.textContent?.trim() || 'Pick';
+        out.push(label);
+      }
+    });
+    return out;
+  }
+
+  openBtn.addEventListener('click', ()=>{
+    const give = collect("input[name='give_player']", "input[name='give_pick']");
+    const get  = collect("input[name='receive_player']", "input[name='receive_pick']");
+    youGive.innerHTML = (give.length?give:['None']).map(x=>`<li>${x}</li>`).join('');
+    youGet.innerHTML  = (get.length?get:['None']).map(x=>`<li>${x}</li>`).join('');
+    back.style.display='flex'; back.setAttribute('aria-hidden','false');
+  });
+
+  cancelConfirm.addEventListener('click', ()=>{
+    back.style.display='none'; back.setAttribute('aria-hidden','true');
+  });
+
+  submitReal.addEventListener('click', ()=>{
+    const hidden = document.createElement('input');
+    hidden.type = 'hidden'; hidden.name = 'action'; hidden.value = 'submit';
+    form.appendChild(hidden);
+    form.submit();
+  });
+})();
+</script>
+{% endblock %}
