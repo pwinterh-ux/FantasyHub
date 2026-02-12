@@ -68,6 +68,9 @@ PRICE_TEMPLATES = [
 PRICE_INDEX = {code: req for code, _label, req in PRICE_TEMPLATES}
 PRICE_LABEL = {code: label for code, label, _ in PRICE_TEMPLATES}
 
+def _default_mfl_year() -> int:
+    # Flip to 2026 when MFL year rolls
+    return 2025
 
 def _now_utc():
     return datetime.now(timezone.utc)
@@ -296,7 +299,7 @@ def build():
         return redirect(url_for("offers.search"))
 
     req = PRICE_INDEX.get(template_code, {})  # empty for 'upgrade'
-    year_now = datetime.utcnow().year
+    year_now = _default_mfl_year()
 
     # All leagues for this user/year
     leagues = League.query.filter_by(user_id=current_user.id, year=year_now).all()

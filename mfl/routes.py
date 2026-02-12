@@ -41,6 +41,9 @@ _PLACEHOLDER_HOSTS = {"", "api.myfantasyleague.com", "www.myfantasyleague.com"}
 _TRADES_CACHE: dict[tuple[int, int], dict] = {}
 _TRADES_CACHE_TTL_SEC = 15 * 60
 
+def _default_mfl_year() -> int:
+    # Flip to 2026 when MFL year rolls
+    return 2025
 
 def _cache_get(user_id: int, year: int) -> tuple[dict | None, float]:
     key = (user_id, year)
@@ -239,7 +242,7 @@ def offers_entry():
 @mfl_bp.route("/login", methods=["GET", "POST"])
 @login_required
 def mfl_login():
-    default_year = datetime.utcnow().year
+    default_year = _default_mfl_year()
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
@@ -312,9 +315,9 @@ def mfl_config():
         return miss
 
     try:
-        year = int(request.args.get("year", datetime.utcnow().year))
+        year = int(request.args.get("year", _default_mfl_year()))
     except ValueError:
-        year = datetime.utcnow().year
+        year = _default_mfl_year()
 
     api_client = MFLClient(year=year)  # API host
     api_cookie = getattr(current_user, "mfl_cookie_api", None) or getattr(current_user, "session_key", None)
@@ -483,9 +486,9 @@ def mfl_config_submit():
     wants_json = _wants_json_response()
 
     try:
-        year = int(request.form.get("year", datetime.utcnow().year))
+        year = int(request.form.get("year", _default_mfl_year()))
     except ValueError:
-        year = datetime.utcnow().year
+        year = _default_mfl_year()
 
     # Plan league cap (entitlements)
     ent = get_entitlements(current_user)
@@ -1445,9 +1448,9 @@ def trades_home():
         return miss
 
     try:
-        year = int(request.args.get("year", datetime.utcnow().year))
+        year = int(request.args.get("year", _default_mfl_year()))
     except ValueError:
-        year = datetime.utcnow().year
+        year = _default_mfl_year()
 
     # check cache age for Open Trades box
     cached, age_sec = _cache_get(current_user.id, year)
@@ -1477,9 +1480,9 @@ def trades_open():
     trace = request.args.get("trace") in {"1", "true", "yes"}
 
     try:
-        year = int(request.args.get("year", datetime.utcnow().year))
+        year = int(request.args.get("year", _default_mfl_year()))
     except ValueError:
-        year = datetime.utcnow().year
+        year = _default_mfl_year()
 
     force = request.args.get("force") in {"1", "true", "yes"}
 
@@ -1610,9 +1613,9 @@ def mfl_trades_sync():
 
     # Year param
     try:
-        year = int(request.args.get("year", datetime.utcnow().year))
+        year = int(request.args.get("year", _default_mfl_year()))
     except ValueError:
-        year = datetime.utcnow().year
+        year = _default_mfl_year()
 
     force = request.args.get("force") in {"1", "true", "yes"}
 
