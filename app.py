@@ -69,7 +69,6 @@ def _nonfatal_db_warmup(app: Flask) -> None:
     """
     try:
         with app.app_context():
-            # one quick round-trip; if MySQL is briefly down, this will just log a warning
             db.session.execute(text("SELECT 1"))
             db.session.commit()
         app.logger.info("DB warmup ping: OK")
@@ -111,7 +110,7 @@ def create_app():
     _configure_logging(app)
 
     # Import models after db is ready to avoid circulars
-    from models import User, League, SleeperLeague  # <-- includes SleeperLeague
+    from models import User, League, SleeperLeague
 
     @login_manager.user_loader
     def load_user(user_id: str):
@@ -123,14 +122,12 @@ def create_app():
     # ---- tiny helper: does this user have ANY leagues (MFL or Sleeper)? ----
     def _user_has_any_leagues(user_id: int) -> bool:
         try:
-            # Count is fine here; exists() is also OK if you prefer.
             mfl_ct = League.query.filter_by(user_id=user_id).count()
             if mfl_ct > 0:
                 return True
             slp_ct = SleeperLeague.query.filter_by(user_id=user_id).count()
             return slp_ct > 0
         except Exception:
-            # Be permissive on errors (avoid trapping legit users)
             return False
 
     # ---- helper: does this user have MFL leagues? (for MFL-only gate) ----
@@ -163,11 +160,14 @@ def create_app():
     from offers.routes import offers_bp
     from live.routes import live_bp
     from lineups.routes import lineups_bp
+    from ir.routes import ir_bp
     from admin import bp as admin_bp
     from billing.routes import billing_bp
     from injuries.routes import injuries_bp
     from sleeper.routes import sleeper_bp
     from exposure.routes import exposure_bp
+    from sos import sos_bp
+    from tools.routes import bp as tools_bp   # <-- NEW: Tools hub
 
     app.register_blueprint(offers_bp)
     app.register_blueprint(mfl_bp)
@@ -175,11 +175,14 @@ def create_app():
     app.register_blueprint(leagues_bp)
     app.register_blueprint(live_bp)
     app.register_blueprint(lineups_bp)
+    app.register_blueprint(ir_bp)
     app.register_blueprint(injuries_bp)
     app.register_blueprint(admin_bp)  # hidden: /_admin/*
     app.register_blueprint(billing_bp)
     app.register_blueprint(sleeper_bp)
     app.register_blueprint(exposure_bp)
+    app.register_blueprint(sos_bp)
+    app.register_blueprint(tools_bp)  # <-- NEW: mounted at /tools
 
     # ----- Routes -----
     @app.route("/")
@@ -200,7 +203,6 @@ def create_app():
         if _user_has_any_leagues(current_user.id):
             return redirect(url_for("leagues.my_leagues"))
 
-        # Show a simple provider chooser (you can send straight to Sleeper config if preferred)
         return redirect(url_for("link_providers"))
 
     @app.route("/link")

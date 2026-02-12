@@ -147,6 +147,9 @@ class League(db.Model):
     league_host = db.Column(db.String(64), nullable=True)
     home_url = db.Column(db.String(255), nullable=True)
 
+    # IR configuration (nullable: treat None as zero slots)
+    ir_slots_max = db.Column(db.Integer, nullable=True)
+
     # relationships
     user = db.relationship("User", back_populates="leagues")
     teams = db.relationship(
@@ -285,6 +288,7 @@ class Roster(db.Model):
         index=True,
     )
     is_starter = db.Column(db.Boolean, nullable=False, default=False)
+    in_ir = db.Column(db.Boolean, nullable=True)
 
     team = db.relationship("Team", back_populates="rosters")
     player = db.relationship("Player", back_populates="rosters")

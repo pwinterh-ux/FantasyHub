@@ -11,6 +11,13 @@
   .toolbar h2{ margin:0; font-size: 22px; }
   .toolbar .sub{ font-size:12px; opacity:.9; }
   .btn { cursor:pointer; }
+  .toolbar-actions{ display:flex; gap:10px; align-items:center; }
+  .toolbar a.btn{
+    display:inline-flex; align-items:center; gap:6px;
+    background: rgba(255,255,255,.08); color:#e5e7eb;
+    border:1px solid var(--border);
+    border-radius:8px; padding:6px 12px; text-decoration:none;
+  }
 
   /* ---- Full-width Roster Showdown ---- */
   details.showdown{
@@ -112,9 +119,13 @@
       {% if next_refresh_in is not none %} • Next refresh in ~{{ (next_refresh_in // 60)|int }}m {{ (next_refresh_in % 60)|int }}s{% endif %}
     </div>
   </div>
-  <button id="refreshBtn" class="btn">Refresh Now</button>
+  <div class="toolbar-actions">
+    {% if monday_available %}
+      <a class="btn" href="{{ url_for('live.monday_needs') }}">Monday Night Needs</a>
+    {% endif %}
+    <button id="refreshBtn" class="btn">Refresh Now</button>
+  </div>
 </div>
-
 {% set _can_expand = can_expand_aggregate|default(False) %}
 
 <!-- Full-width Roster Showdown (collapsed on load) -->
@@ -325,7 +336,7 @@
     <h3 id="upsellTitle" style="margin:0 0 6px;">Know where you stand at a glance</h3>
     <p class="muted" style="margin:8px 0 0;">
       Scan every matchup’s starters side-by-side and spot opponents’ starter exposure fast.
-      Live view with sorting by points, minutes left, position, or league. 
+      Live view with sorting by points, minutes left, position, or league.
       Starters only. Included in Manager 5+.
     </p>
     <ul class="muted" style="margin:8px 0 0 18px;">
@@ -540,11 +551,28 @@
   }
 
   // --- Tile expand handlers (allow All-Play tiles even if they carry a note) ---
+  function parseTileData(tile){
+    if (!tile) return null;
+    const dataStr = tile.dataset ? tile.dataset.tile : tile.getAttribute('data-tile');
+    if (!dataStr) return null;
+    try {
+      const parsed = JSON.parse(dataStr);
+      if (!parsed || typeof parsed !== 'object') return null;
+      const hasMatchupFields = (
+        Object.prototype.hasOwnProperty.call(parsed, 'my_score') ||
+        Object.prototype.hasOwnProperty.call(parsed, 'opp_score') ||
+        Array.isArray(parsed.my_starters) ||
+        Array.isArray(parsed.opp_starters)
+      );
+      return hasMatchupFields ? parsed : null;
+    } catch(_) {
+      return null;
+    }
+  }
+
   document.querySelectorAll('.tile').forEach(tile => {
     tile.addEventListener('click', (e) => {
-      const dataStr = tile.getAttribute('data-tile') || '{}';
-      let data = {};
-      try{ data = JSON.parse(dataStr); } catch(_){}
+      const data = parseTileData(tile);
       if (data && (data.mode === 'ALL_PLAY' || !data.note)) openLeagueDetail(data);
     });
   });
@@ -552,11 +580,8 @@
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const tile = e.target.closest('.tile');
-      if (!tile) return;
-      try {
-        const data = JSON.parse(tile.getAttribute('data-tile') || '{}');
-        if (data && (data.mode === 'ALL_PLAY' || !data.note)) openLeagueDetail(data);
-      } catch(_){}
+      const data = parseTileData(tile);
+      if (data && (data.mode === 'ALL_PLAY' || !data.note)) openLeagueDetail(data);
     });
   });
 

@@ -1,74 +1,150 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="tile pad" style="max-width:1100px;margin:24px auto;">
-  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px;">
-    <h2 class="hdr" style="margin:0;">Lineup Submission Summary</h2>
-    <div class="mini" style="opacity:.85;">Week {{ week }}</div>
+<div class="tile pad" style="max-width:1200px;margin:24px auto;">
+  {% set heading = "Auto Lineup Submission Summary" if auto_mode else "Lineup Submission Summary" %}
+  <div class="hdrbar">
+    <h2 class="hdr">{{ heading }}</h2>
+    <div class="mini">Week {{ week }}</div>
   </div>
 
-  <div class="results-grid" style="display:grid; grid-template-columns: 1fr; gap:16px;">
-    {% for r in results %}
+  {# Failures first, then successes #}
+  {% set ordered = results|sort(attribute='ok') %}
+
+  <div class="cards">
+    {% for r in ordered %}
       {% set lg = r.league %}
-      <div class="tile pad dark" style="border-radius:12px; border:1px solid rgba(255,255,255,.12);">
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
-          <div>
-            <h3 style="margin:0 0 4px;">{{ lg.name }}</h3>
-            <div class="mini" style="opacity:.85;">
-              MFL {{ lg.mfl_id }} • Season {{ lg.year }}
-            </div>
+      {% set submit_href = lg.submit_url
+          or url_for('lineups.lineups_rapid_league', league_id=lg.id, week=week) %}
+
+      <div class="card">
+        <!-- Header -->
+        <div class="card-head">
+          <div class="lh">
+            <div class="ttl">{{ lg.name }}</div>
+            <div class="mini">MFL {{ lg.mfl_id }} • Season {{ lg.year }}</div>
+          </div>
+          <div class="rh">
+            {% if r.ok %}<span class="pill ok">Success</span>{% else %}<span class="pill err">Failed</span>{% endif %}
+            <a href="{{ submit_href }}" class="btn-ghost btn-compact">Submit Lineup</a>
+          </div>
+        </div>
+
+        {# Show response only if meaningful; display HTML safely when present #}
+        {% if not r.ok or (r.message and r.message|trim and r.message|upper != 'OK') %}
+          <div class="resp">{{ r.message|safe if r.message else '—' }}</div>
+        {% endif %}
+
+        {% if r.lineup %}
+          {# --- Build grouped lists without dict comprehension --- #}
+          {% set order = ['QB','RB','WR','TE','FLEX','SF','K','DEF','BENCH'] %}
+          {% set g = namespace(QB=[], RB=[], WR=[], TE=[], FLEX=[], SF=[], K=[], DEF=[], BENCH=[]) %}
+
+          {% for p in r.lineup %}
+            {% set pos = (p.position or '—')|upper %}
+            {% if pos in ['QB','RB','WR','TE','FLEX','SF','K'] %}
+              {% set _ = g[pos].append(p) %}
+            {% elif pos in ['DEF','DST'] %}
+              {% set _ = g.DEF.append(p) %}
+            {% elif pos in ['BN','BENCH'] %}
+              {% set _ = g.BENCH.append(p) %}
+            {% else %}
+              {% set _ = g.FLEX.append(p) %}
+            {% endif %}
+          {% endfor %}
+
+          {# Make an indexable dict of groups so we can iterate order cleanly #}
+          {% set groups = {'QB': g.QB, 'RB': g.RB, 'WR': g.WR, 'TE': g.TE, 'FLEX': g.FLEX, 'SF': g.SF, 'K': g.K, 'DEF': g.DEF, 'BENCH': g.BENCH} %}
+
+          <div class="mini tot">
+            Submitted lineup{% if r.projected_total is not none %} • Total projection: {{ r.projected_total|round(1) }}{% endif %}
           </div>
 
-          {% if r.ok %}
-            <span class="pill ok">Success</span>
-          {% else %}
-            <span class="pill err">Failed</span>
-          {% endif %}
-        </div>
+          <!-- Compact single-column list -->
+          <div class="table">
+            <div class="thead">
+              <div class="col pos">POS</div>
+              <div class="col player">PLAYER</div>
+              <div class="col nfl">NFL</div>
+              <div class="col proj">PROJ</div>
+            </div>
 
-        <div class="mini" style="opacity:.9; margin-bottom:8px;">
-          Response:
-        </div>
-        <pre class="resp">{{ r.message or (r.ok and 'Lineup submitted successfully') or '—' }}</pre>
+            {% for label in order %}
+              {% set plist = groups[label] %}
+              {% if plist and plist|length %}
+                <div class="group-divider">{{ label }}</div>
+                {% set sorted_players = (plist|sort(attribute='name'))|sort(attribute='projected', reverse=True) %}
+                {% for p in sorted_players %}
+                  <div class="trow">
+                    <div class="col pos">{{ label }}</div>
+                    <div class="col player">{{ p.name }}</div>
+                    <div class="col nfl">{{ (p.team or '')|upper }}</div>
+                    <div class="col proj">
+                      {% if p.projected is not none %}{{ p.projected|round(2) }}{% else %}—{% endif %}
+                    </div>
+                  </div>
+                {% endfor %}
+              {% endif %}
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="mini" style="opacity:.82;">No lineup details returned.</div>
+        {% endif %}
       </div>
     {% endfor %}
   </div>
 
-  <div style="display:flex; align-items:center; justify-content:flex-end; gap:10px; margin-top:16px;">
+  <div class="foot-actions">
     <form method="POST" action="{{ url_for('lineups.lineups_review') }}">
       <input type="hidden" name="week" value="{{ week }}"/>
-      <button type="submit" class="btn-ghost" style="padding:10px 14px; border-radius:10px;">Back to Review</button>
+      <button type="submit" class="btn-ghost btn-compact">Back to Review</button>
     </form>
-    <a class="btn-ghost" href="{{ url_for('lineups.lineups_index') }}" style="padding:10px 14px; border-radius:10px;">
-      Lineups Home
-    </a>
+    <a class="btn-ghost btn-compact" href="{{ url_for('lineups.lineups_index') }}">Lineups Home</a>
   </div>
 </div>
 
 <style>
-  .mini { font-size:12px; }
-  .pill {
-    display:inline-block;
-    padding:6px 10px;
-    border-radius:999px;
-    font-size:12px;
-    border:1px solid rgba(255,255,255,.18);
-    background:#0b1220;
+  .mini{font-size:12px}
+  .btn-compact{padding:6px 10px; font-size:12px; border-radius:10px}
+  .pill{display:inline-block;padding:4px 8px;border-radius:999px;font-size:11px;border:1px solid rgba(255,255,255,.18);background:#0b1220;line-height:1}
+  .pill.ok{border-color:rgba(16,185,129,.5);color:#86f3c0}
+  .pill.err{border-color:rgba(239,68,68,.5);color:#ffb4b4}
+
+  .hdrbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+  .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+  @media (max-width:1100px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media (max-width:720px){.cards{grid-template-columns:1fr}}
+
+  .card{background:var(--tile-bg);border:1px solid var(--border);border-radius:14px;padding:14px}
+  .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+  .ttl{font-size:18px;font-weight:700;margin:0}
+  .rh{display:flex;align-items:center;gap:8px}
+
+  .resp{
+    white-space:pre-wrap;word-break:break-word;background:rgba(255,255,255,.05);
+    border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px;margin:0 0 10px 0;
+    color:#eaf1f7;font-size:12px;max-height:160px;overflow:auto
   }
-  .pill.ok { border-color: rgba(16,185,129,.5); color:#86f3c0; }
-  .pill.err { border-color: rgba(239,68,68,.5); color:#ffb4b4; }
-  .resp {
-    white-space: pre-wrap;
-    word-break: break-word;
-    background: rgba(255,255,255,.05);
-    border: 1px solid rgba(255,255,255,.12);
-    border-radius: 10px;
-    padding: 10px;
-    margin: 0;
-    color: #eaf1f7;
-    font-size: 12px;
-    max-height: 240px;
-    overflow:auto;
+  .tot{opacity:.9;margin:8px 0 8px}
+
+  /* Compact table style (single column list) */
+  .table{width:100%;border:1px solid rgba(255,255,255,.10);border-radius:12px;overflow:hidden;background:rgba(11,18,32,.45)}
+  .thead,.trow{display:grid;grid-template-columns:64px 1fr 70px 72px;align-items:center}
+  .thead{background:rgba(255,255,255,.04);font-weight:700;border-bottom:1px solid rgba(255,255,255,.08)}
+  .trow{border-top:1px solid rgba(255,255,255,.06)}
+  .trow:first-of-type{border-top:none}
+  .col{padding:8px 10px}
+  .pos{letter-spacing:.4px}
+  .player{font-weight:600}
+  .nfl{opacity:.9}
+  .proj{text-align:right;white-space:nowrap;opacity:.95}
+
+  .group-divider{
+    padding:8px 10px;
+    font-size:11px;letter-spacing:.6px;text-transform:uppercase;opacity:.85;
+    background:rgba(255,255,255,.02);border-top:1px dashed rgba(255,255,255,.10);
   }
+
+  .foot-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:16px}
 </style>
 {% endblock %}

@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import time
+import math
 from datetime import datetime, timezone, date, timedelta
 from typing import Dict, Any, List, Optional, Tuple, Set
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock, Semaphore
+
+from zoneinfo import ZoneInfo
 
 from flask import Blueprint, render_template, current_app, session, redirect, url_for
 from flask_login import login_required, current_user
@@ -15,6 +18,7 @@ from app import db
 from models import League, Team, Player, SleeperPlayer  # SleeperPlayer for S:<sid> fallback
 from services.mfl_client import MFLClient
 from services.mfl_live import parse_live_scoring, LiveMatchup  # type: ignore
+from services.lineups_service import fetch_projected_scores
 from services.guards import can_view_aggregate_detail
 
 # Sleeper live integration
@@ -482,6 +486,68 @@ def _norm_team(code: Optional[str]) -> Optional[str]:
     return _TEAM_NORM.get(str(code).strip().upper(), str(code).strip().upper())
 
 
+_CENTRAL_TZ = ZoneInfo("America/Chicago")
+
+
+def _central_now() -> datetime:
+    return datetime.now(_CENTRAL_TZ)
+
+
+def _player_sigma(projected_total: Optional[float], actual: float = 0.0) -> float:
+    base = projected_total if projected_total and projected_total > 0 else None
+    if base is None:
+        base = max(actual, 8.0)
+    else:
+        base = max(base, actual, 8.0)
+    return max(6.0, 0.65 * base)
+
+
+def _win_probability(
+    my_score: float,
+    opp_score: float,
+    my_expected_left: float,
+    opp_expected_left: float,
+    my_sigma_sq: float,
+    opp_sigma_sq: float,
+) -> float:
+    lead = my_score - opp_score
+    expected_shift = my_expected_left - opp_expected_left
+    total_sigma = math.sqrt(max(0.0, my_sigma_sq + opp_sigma_sq))
+    if total_sigma <= 1e-6:
+        if lead > 0:
+            return 0.999
+        if lead < 0:
+            return 0.001
+        return 0.5
+
+    z = (lead + expected_shift) / total_sigma
+    prob = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+    if prob < 0.001:
+        return 0.001
+    if prob > 0.999:
+        return 0.999
+    return prob
+
+
+def _as_int_player_id(raw: Any) -> Optional[int]:
+    if raw is None:
+        return None
+    if isinstance(raw, int):
+        return raw
+    s = str(raw)
+    if not s or not s.strip():
+        return None
+    if s.startswith("TEAM:") or s.startswith("S:"):
+        return None
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        try:
+            return int(s.lstrip("0") or "0")
+        except Exception:
+            return None
+
+
 # =============================================================================
 # Week selection logic (calendar-based Wednesday cutover)
 # =============================================================================
@@ -563,6 +629,7 @@ def live_index():
     player_lookup = cache.get("player_lookup", {})
     team_lookup = cache.get("team_lookup", {})
     next_in = max(0, STALE_SECONDS - int(_now_ts() - float(cache.get("ts", 0)))) if cache else 0
+    monday_available = _central_now().weekday() == 0
 
     return render_template(
         "live/index.html",
@@ -573,6 +640,267 @@ def live_index():
         fetched_at=datetime.fromtimestamp(cache.get("ts", _now_ts()), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC") if cache else None,
         next_refresh_in=next_in,
         can_expand_aggregate=can_view_aggregate_detail(current_user),
+        monday_available=monday_available,
+    )
+
+
+@login_required
+@live_bp.route("/monday", methods=["GET"])
+def monday_needs():
+    if not current_user.is_authenticated:
+        return redirect(url_for("auth.login"))
+
+    now_ct = _central_now()
+    if now_ct.weekday() != 0:
+        return (
+            render_template(
+                "live/monday.html",
+                available=False,
+                reason="Monday Night Needs is only available on Mondays.",
+            ),
+            404,
+        )
+
+    cache = _get_live_cache(current_user.id)
+    reuse_cache = False
+    if cache and cache.get("ts"):
+        try:
+            cached_dt = datetime.fromtimestamp(float(cache["ts"]), tz=timezone.utc).astimezone(_CENTRAL_TZ)
+            if cached_dt.date() == now_ct.date() and cached_dt.hour >= 12:
+                reuse_cache = True
+        except Exception:
+            reuse_cache = False
+
+    if not reuse_cache:
+        cache = _refresh_all_live()
+        _set_live_cache(current_user.id, cache)
+
+    tiles = cache.get("tiles", []) if cache else []
+    player_lookup = cache.get("player_lookup", {}) if cache else {}
+    fetched_at = (
+        datetime.fromtimestamp(cache.get("ts", _now_ts()), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        if cache
+        else None
+    )
+
+    # Map of league_id -> League row for metadata (host/year)
+    today_utc = datetime.now(timezone.utc).date()
+    leagues = (
+        db.session.query(League)
+        .filter(League.user_id == current_user.id, League.year == today_utc.year)
+        .all()
+    )
+    league_by_mfl: Dict[str, League] = {str(lg.mfl_id): lg for lg in leagues if lg.mfl_id}
+
+    projection_requests: Dict[Tuple[str, str, int], Set[int]] = defaultdict(set)
+
+    def _collect_remaining(starters: List[Dict[str, Any]], key: Tuple[str, str, int]) -> None:
+        for starter in starters:
+            seconds_left = int(starter.get("seconds_remaining", 0) or 0)
+            if seconds_left <= 0:
+                continue
+            pid_int = _as_int_player_id(starter.get("player_id"))
+            if pid_int is None:
+                continue
+            projection_requests[key].add(pid_int)
+
+    for tile in tiles:
+        host = tile.get("host")
+        league_id = tile.get("league_id")
+        week = tile.get("week")
+        if not host or not league_id:
+            continue
+        try:
+            week_int = int(week)
+        except Exception:
+            continue
+        key = (str(host), str(league_id), week_int)
+        _collect_remaining(tile.get("my_starters", []) or [], key)
+        _collect_remaining(tile.get("opp_starters", []) or [], key)
+
+    projections_cache: Dict[Tuple[str, str, int], Dict[int, Optional[float]]] = {}
+    for key, player_ids in projection_requests.items():
+        if not player_ids:
+            continue
+        host, league_id, week = key
+        lg_row = league_by_mfl.get(str(league_id))
+        year = lg_row.year if lg_row else today_utc.year
+        cookie = _cookie_for_host(host)
+        try:
+            result = fetch_projected_scores(
+                host=host,
+                league_mfl_id=league_id,
+                year=year,
+                week=week,
+                player_ids=list(player_ids),
+                cookie=cookie,
+            )
+            projections_cache[key] = {pid: proj.projected for pid, proj in result.items()}
+        except Exception as exc:
+            current_app.logger.info("Projected scores unavailable for %s/%s: %s", host, league_id, exc)
+            projections_cache[key] = {}
+
+    monday_tiles: List[Dict[str, Any]] = []
+
+    for tile in tiles:
+        host = tile.get("host")
+        league_id = tile.get("league_id")
+        week = tile.get("week")
+        my_score = float(tile.get("my_score") or 0.0)
+        opp_score = float(tile.get("opp_score") or 0.0)
+        my_team = tile.get("my_team_name") or "You"
+        opp_team = tile.get("opp_team_name") or "Opponent"
+        league_name = tile.get("league_name") or "League"
+
+        try:
+            week_int = int(week)
+        except Exception:
+            week_int = None
+
+        proj_map: Dict[int, Optional[float]] = {}
+        if host and league_id and week_int is not None:
+            proj_map = projections_cache.get((str(host), str(league_id), week_int), {})
+
+        def build_side(starters: List[Dict[str, Any]]) -> Dict[str, Any]:
+            players: List[Dict[str, Any]] = []
+            total_remaining = 0.0
+            sigma_sq = 0.0
+            for starter in starters or []:
+                seconds_left = int(starter.get("seconds_remaining", 0) or 0)
+                if seconds_left <= 0:
+                    continue
+                pid_raw = starter.get("player_id")
+                lookup_key = str(pid_raw) if pid_raw is not None else None
+                info = player_lookup.get(lookup_key or "") if lookup_key else None
+                name = None
+                pos = None
+                team = None
+                if info:
+                    name = info.get("name")
+                    pos = info.get("pos")
+                    team = info.get("team")
+                if not name:
+                    name = starter.get("display_name") or (lookup_key or "Player")
+                score = float(starter.get("score") or 0.0)
+                pid_int = _as_int_player_id(pid_raw)
+                projected_total = proj_map.get(pid_int) if pid_int is not None else None
+                projected_remaining = max(0.0, (projected_total or 0.0) - score)
+                sigma = _player_sigma(projected_total, actual=score)
+                total_remaining += projected_remaining
+                sigma_sq += sigma ** 2
+                players.append(
+                    {
+                        "id": lookup_key,
+                        "name": name,
+                        "pos": pos,
+                        "team": team,
+                        "score": score,
+                        "minutes_remaining": int((seconds_left + 59) // 60),
+                        "projected_total": projected_total,
+                        "projected_remaining": projected_remaining,
+                    }
+                )
+
+            players.sort(key=lambda p: (-p.get("minutes_remaining", 0), -(p.get("projected_remaining") or 0)))
+            return {
+                "players": players,
+                "count": len(players),
+                "total_remaining": total_remaining,
+                "sigma_sq": sigma_sq,
+            }
+
+        my_side = build_side(tile.get("my_starters", []) or [])
+        opp_side = build_side(tile.get("opp_starters", []) or [])
+
+        need_for_me = max(0.0, opp_score - my_score + 0.01)
+        need_for_opp = max(0.0, my_score - opp_score + 0.01)
+
+        win_prob = _win_probability(
+            my_score,
+            opp_score,
+            my_side["total_remaining"],
+            opp_side["total_remaining"],
+            my_side["sigma_sq"],
+            opp_side["sigma_sq"],
+        )
+
+        swing = min(win_prob, 1 - win_prob)
+        if need_for_me <= 0 and my_side["count"] == 0 and opp_side["count"] == 0:
+            swing = 0.0
+
+        if win_prob >= 0.8:
+            status = "On Track"
+        elif win_prob <= 0.2:
+            status = "Long Shot"
+        else:
+            status = "In the Balance"
+
+        # --- classify + annotate ---
+
+        mine_left = my_side["count"]
+        opp_left  = opp_side["count"]
+        lead = my_score - opp_score
+
+        # A matchup is decided if:
+        #  - both sides have 0 remaining, OR
+        #  - the trailing side (by current score) has 0 remaining
+        both_done = (mine_left == 0 and opp_left == 0)
+        trailing_me  = (lead < 0)
+        trailing_opp = (lead > 0)
+
+        decided = (
+            both_done
+            or (mine_left == 0 and trailing_me)
+            or (opp_left == 0 and trailing_opp)
+        )
+
+        if decided:
+            category = "decided_win" if lead >= 0 else "decided_loss"
+        else:
+            if win_prob >= 0.67:
+                category = "likely_win"
+            elif win_prob <= 0.33:
+                category = "likely_loss"
+            else:
+                category = "in_balance"
+
+        # Precompute values the template uses for the summary line
+        # Points each side needs if the other scores 0 more (pure deficit/lead).
+        need_me_raw  = max(0.0, (opp_score - my_score) + 0.01)
+        need_opp_raw = max(0.0, (my_score - opp_score) + 0.01)
+
+        monday_tiles.append(
+            {
+                "league_name": league_name,
+                "my_team": my_team,
+                "opp_team": opp_team,
+                "my_score": my_score,
+                "opp_score": opp_score,
+                "need_for_me": need_me_raw,
+                "need_for_opp": need_opp_raw,
+                "win_probability": win_prob,
+                "win_percent_display": f"{win_prob * 100:.1f}%",
+                "status": status,
+                "remaining": {"mine": my_side, "opp": opp_side},
+                "swing": min(win_prob, 1 - win_prob) if not decided else 0.0,
+                "chance_to_flip": (0.1 < win_prob < 0.9) and not decided,
+                "mode": tile.get("mode", "H2H"),
+                # new fields used in the template
+                "mine_left": mine_left,
+                "opp_left": opp_left,
+                "decided": decided,
+                "category": category,
+                "lead": lead,
+            }
+        )
+
+    monday_tiles.sort(key=lambda t: (-t["swing"], abs(t["my_score"] - t["opp_score"])))
+
+    return render_template(
+        "live/monday.html",
+        available=True,
+        fetched_at=fetched_at,
+        tiles=monday_tiles,
     )
 
 
