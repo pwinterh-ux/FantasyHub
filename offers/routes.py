@@ -70,7 +70,7 @@ PRICE_LABEL = {code: label for code, label, _ in PRICE_TEMPLATES}
 
 def _default_mfl_year() -> int:
     # Flip to 2026 when MFL year rolls
-    return 2025
+    return 2026
 
 def _now_utc():
     return datetime.now(timezone.utc)

@@ -43,7 +43,7 @@ _TRADES_CACHE_TTL_SEC = 15 * 60
 
 def _default_mfl_year() -> int:
     # Flip to 2026 when MFL year rolls
-    return 2025
+    return 2026
 
 def _cache_get(user_id: int, year: int) -> tuple[dict | None, float]:
     key = (user_id, year)
