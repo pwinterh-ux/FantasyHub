@@ -30,17 +30,29 @@ try:
 except Exception:
     class _NoStore:
         @staticmethod
-        def get_today_mass_offer_count(user_id: int, d: date) -> int: return 0
+        def get_today_mass_offer_count(user_id: int, d: date) -> int:
+            return 0
+
         @staticmethod
-        def increment_today_mass_offer_count(user_id: int, d: date) -> None: return None
+        def increment_today_mass_offer_count(user_id: int, d: date) -> None:
+            return None
+
         @staticmethod
-        def get_bonus_balance(user_id: int) -> int: return 0
+        def get_bonus_balance(user_id: int) -> int:
+            return 0
+
         @staticmethod
-        def use_one_bonus(user_id: int) -> int: return 0
+        def use_one_bonus(user_id: int) -> int:
+            return 0
+
         @staticmethod
-        def get_weekly_free_used(user_id: int, monday: date) -> bool: return False
+        def get_weekly_free_used(user_id: int, monday: date) -> bool:
+            return False
+
         @staticmethod
-        def mark_weekly_free_used(user_id: int, monday: date) -> None: return None
+        def mark_weekly_free_used(user_id: int, monday: date) -> None:
+            return None
+
     store = _NoStore()
 
 offers_bp = Blueprint("offers", __name__, url_prefix="/offers")
@@ -54,8 +66,14 @@ PRICE_TEMPLATES = [
     ("2x1st", "Two 1sts", {1: 2}),
     ("1st+2nd", "1st + 2nd", {1: 1, 2: 1}),
     ("1st", "1st", {1: 1}),
+    ("early1st", "Early 1st", {1: 1}),
+    ("mid1st", "Mid 1st", {1: 1}),
+    ("late1st", "Late 1st", {1: 1}),
     ("2x2nd", "Two 2nds", {2: 2}),
     ("2nd", "2nd", {2: 1}),
+    ("early2nd", "Early 2nd", {2: 1}),
+    ("mid2nd", "Mid 2nd", {2: 1}),
+    ("late2nd", "Late 2nd", {2: 1}),
     ("2nd+3rd", "2nd + 3rd", {2: 1, 3: 1}),
     ("2x3rd", "Two 3rds", {3: 2}),
     ("3rd", "3rd", {3: 1}),
@@ -68,9 +86,20 @@ PRICE_TEMPLATES = [
 PRICE_INDEX = {code: req for code, _label, req in PRICE_TEMPLATES}
 PRICE_LABEL = {code: label for code, label, _ in PRICE_TEMPLATES}
 
+PICK_RANGE_BY_TEMPLATE: Dict[str, Tuple[int, str]] = {
+    "early1st": (1, "early"),
+    "mid1st": (1, "mid"),
+    "late1st": (1, "late"),
+    "early2nd": (2, "early"),
+    "mid2nd": (2, "mid"),
+    "late2nd": (2, "late"),
+}
+
+
 def _default_mfl_year() -> int:
     # Flip to 2026 when MFL year rolls
     return 2026
+
 
 def _now_utc():
     return datetime.now(timezone.utc)
@@ -149,6 +178,45 @@ def _meets_requirements(counts: Dict[int, int], req: Dict[int, int]) -> bool:
     return True
 
 
+def _pick_range_bounds(team_count: int, tier: str) -> Tuple[int, int]:
+    third = max(1, team_count // 3)
+    early_end = third
+    mid_end = max(early_end + 1, min(team_count, third * 2))
+
+    if tier == "early":
+        return 1, early_end
+    if tier == "mid":
+        return early_end + 1, mid_end
+    return mid_end + 1, team_count
+
+
+def _filter_picks_for_template(
+    picks_by_round: Dict[int, List[DraftPick]],
+    team_count: int,
+    template_code: str,
+    current_year: int
+) -> Dict[int, List[DraftPick]]:
+    pick_range = PICK_RANGE_BY_TEMPLATE.get(template_code)
+    if not pick_range:
+        return picks_by_round
+
+    target_round, tier = pick_range
+    start_pick, end_pick = _pick_range_bounds(max(1, team_count), tier)
+
+    filtered = dict(picks_by_round)
+    candidates = []
+    for dp in picks_by_round.get(target_round, []):
+        if dp.pick_number is None:
+            continue
+        if int(dp.season or 0) != int(current_year):
+            continue
+        if start_pick <= int(dp.pick_number) <= end_pick:
+            candidates.append(dp)
+
+    filtered[target_round] = candidates
+    return filtered
+
+
 def _session_key(mode: str, player_id: int, template_code: str) -> str:
     return f"tb_sent::{mode}::{player_id}::{template_code}"
 
@@ -181,6 +249,60 @@ def _clear_sent_contexts():
     for k in list(session.keys()):
         if str(k).startswith("tb_sent::"):
             session.pop(k, None)
+
+
+def _format_pick_label(dp: DraftPick, franchise_names: dict[str, str] | None = None) -> str:
+    """
+    Formats draft picks with pick_number when available.
+
+    Examples:
+      - '2026 1.05 (orig: Frank)'
+      - '2026 R1 (orig: 0003)'
+      - '— Pick (orig: —)'
+    """
+    if not dp:
+        return "Pick(?)"
+
+    season = dp.season if dp.season not in (None, "") else "—"
+
+    # round
+    rnd: Optional[int]
+    try:
+        rnd = int(dp.round) if dp.round not in (None, "") else None
+    except Exception:
+        rnd = None
+
+    # pick number (within round)
+    pn: Optional[int]
+    try:
+        pn = int(dp.pick_number) if dp.pick_number not in (None, "") else None
+    except Exception:
+        pn = None
+
+    # original team
+    orig_raw = (dp.original_team or "").strip() if hasattr(dp, "original_team") else ""
+    orig_key = orig_raw.zfill(4) if orig_raw.isdigit() else orig_raw
+    orig_name = None
+    if franchise_names and orig_key:
+        orig_name = franchise_names.get(orig_key)
+
+    # pick part
+    if rnd is not None and pn is not None:
+        pick_part = f"{rnd}.{str(pn).zfill(2)}"
+    elif rnd is not None:
+        pick_part = f"R{rnd}"
+    else:
+        pick_part = "Pick"
+
+    # origin part
+    if orig_name:
+        origin_part = f"(orig: {orig_name})"
+    elif orig_raw:
+        origin_part = f"(orig: {orig_raw})"
+    else:
+        origin_part = "(orig: —)"
+
+    return f"{season} {pick_part} {origin_part}"
 
 
 # ------------------------------- routes --------------------------------------
@@ -304,14 +426,30 @@ def build():
     # All leagues for this user/year
     leagues = League.query.filter_by(user_id=current_user.id, year=year_now).all()
 
+    # ---- Precompute team counts per league (fixes lg.franchises_count)
+    league_team_counts: Dict[int, int] = {}
     # ---- Global franchise_names map (franchise_id -> name) as a fallback for templates
     franchise_names: Dict[str, str] = {}
+
     if leagues:
         league_ids = [lg.id for lg in leagues]
         teams_all = Team.query.filter(Team.league_id.in_(league_ids)).all()
+
         for t in teams_all:
+            league_team_counts[t.league_id] = league_team_counts.get(t.league_id, 0) + 1
             if t.mfl_id:
                 franchise_names[str(t.mfl_id).zfill(4)] = t.name or str(t.mfl_id)
+
+    def _league_team_count(lg: League) -> int:
+        # Primary: precomputed count
+        cnt = league_team_counts.get(lg.id)
+        if cnt is not None and cnt > 0:
+            return cnt
+        # Fallback (should be rare)
+        try:
+            return int(Team.query.filter(Team.league_id == lg.id).count())
+        except Exception:
+            return 0
 
     sent_hide = _get_sent_set(mode, player_id, template_code)
 
@@ -347,6 +485,15 @@ def build():
 
             # Exact picks available (for UI)
             picks_by_round = _pick_objects_by_round(my_team)
+            picks_by_round = _filter_picks_for_template(
+                picks_by_round,
+                _league_team_count(lg),
+                template_code,
+                year_now
+            )
+            filtered_counts = {rnd: len(lst) for rnd, lst in picks_by_round.items()}
+            if not _meets_requirements(filtered_counts, req):
+                continue
 
             # collect years
             for lst in picks_by_round.values():
@@ -391,7 +538,15 @@ def build():
                 teams = Team.query.filter(Team.league_id == lg.id, Team.id != my_team.id).all()
                 eligible_buyers: List[Team] = []
                 for t in teams:
-                    if _meets_requirements(_pick_counts_by_round(t), req):
+                    pbr = _pick_objects_by_round(t)
+                    pbr = _filter_picks_for_template(
+                        pbr,
+                        _league_team_count(lg),
+                        template_code,
+                        year_now
+                    )
+                    filtered_counts = {rnd: len(lst) for rnd, lst in pbr.items()}
+                    if _meets_requirements(filtered_counts, req):
                         eligible_buyers.append(t)
 
                 if not eligible_buyers:
@@ -404,6 +559,12 @@ def build():
                 league_years: Set[int] = set()
                 for t in eligible_buyers:
                     pbr = _pick_objects_by_round(t)
+                    pbr = _filter_picks_for_template(
+                        pbr,
+                        _league_team_count(lg),
+                        template_code,
+                        year_now
+                    )
                     for lst in pbr.values():
                         for dp in lst:
                             if dp.season:
@@ -566,10 +727,11 @@ def send_offers():
         ok, msg = consume_mass_offer(
             current_user,
             recipients_count=len(league_ids),
-            get_today_count=store.get_today_count,                # <— change to this
-            increment_today_count=store.increment_today_count,    # <— and this
-            get_bonus_balance=store.get_bonus_balance,
-            use_one_bonus=store.use_one_bonus,
+            # Support both naming conventions (wired store vs fallback)
+            get_today_count=getattr(store, "get_today_count", None) or getattr(store, "get_today_mass_offer_count", None),
+            increment_today_count=getattr(store, "increment_today_count", None) or getattr(store, "increment_today_mass_offer_count", None),
+            get_bonus_balance=getattr(store, "get_bonus_balance", None),
+            use_one_bonus=getattr(store, "use_one_bonus", None),
             get_weekly_free_used=getattr(store, "get_weekly_free_used", None),
             mark_weekly_free_used=getattr(store, "mark_weekly_free_used", None),
         )
@@ -589,6 +751,12 @@ def send_offers():
         my_team = _get_my_team_in_league(lg)
         if not my_team:
             continue
+
+        # per-league franchise id -> name map for pick labels
+        league_fnames: Dict[str, str] = {}
+        for t in Team.query.filter(Team.league_id == lg.id).all():
+            if t.mfl_id:
+                league_fnames[str(t.mfl_id).zfill(4)] = t.name or str(t.mfl_id)
 
         if mode == "buy":
             # counterparty: current owner of the player
@@ -612,7 +780,7 @@ def send_offers():
                 "league_id": lg.mfl_id,
                 "offered_by_fid": offered_by.mfl_id,
                 "offered_to_fid": offered_to.mfl_id,
-                "giving": [f"Pick({p.season} R{p.round} from {p.original_team})" for p in chosen_picks],
+                "giving": [_format_pick_label(p, league_fnames) for p in chosen_picks],
                 "getting": [f"Player({player_id})"],
             }
             current_app.logger.info("[MOCK PROPOSE] %s", payload)
@@ -635,14 +803,15 @@ def send_offers():
                     if pick_ids:
                         found = DraftPick.query.filter(DraftPick.id.in_(pick_ids)).all()
                         id_to_obj = {str(p.id): p for p in found}
-                        chosen_picks.extend([id_to_obj.get(pid) for pid in id_to_obj])
+                        # preserve user-chosen ordering from pick_ids
+                        chosen_picks.extend([id_to_obj.get(pid) for pid in pick_ids if pid in id_to_obj])
 
                 payload = {
                     "league_id": lg.mfl_id,
                     "offered_by_fid": offered_by.mfl_id,
                     "offered_to_fid": offered_to.mfl_id if offered_to else None,
                     "giving": [f"Player({player_id})"],
-                    "getting": [f"Pick({p.season} R{p.round} from {p.original_team})" for p in chosen_picks],
+                    "getting": [_format_pick_label(p, league_fnames) for p in chosen_picks],
                 }
                 current_app.logger.info("[MOCK PROPOSE] %s", payload)
                 offers_log.append({"league": lg, "status": "ok", "detail": payload})

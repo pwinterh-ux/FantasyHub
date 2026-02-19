@@ -60,6 +60,26 @@
   .league-card.disabled { opacity: .6; filter: grayscale(10%); }
 </style>
 
+{# -------------------- Pick label helper --------------------
+   - If pick_number exists => "YYYY R.PP" style as "2026 1.11"
+   - Else => "YYYY R{round}" like "2027 R1"
+   - Only show "(orig ... (record))" when original_team exists
+   This preserves your 2027+ behavior (orig + record still shown when data exists),
+   while removing "(orig —)" for picks missing original_team.
+#}
+{% macro pick_label(dp, franchise_names, franchise_records) -%}
+  {%- set has_picknum = (dp.pick_number is not none) and (dp.pick_number|string|trim != '') -%}
+  {%- if has_picknum -%}
+    {{ dp.season }} {{ dp.round }}.{{ '%02d'|format(dp.pick_number|int) }}
+  {%- else -%}
+    {{ dp.season }} R{{ dp.round }}
+  {%- endif -%}
+  {%- if dp.original_team -%}
+    {%- set fid = '%04d'|format(dp.original_team|int) -%}
+    (orig {{ franchise_names.get(fid, fid) }}{% if franchise_records.get(fid) %} ({{ franchise_records.get(fid) }}){% endif %})
+  {%- endif -%}
+{%- endmacro %}
+
 <div class="hud-wrap">
   <div class="rowline" style="margin-bottom:10px;">
     <h2 class="hdr">Build Offers — {{ template_label }}</h2>
@@ -120,14 +140,13 @@
                   <div class="small" style="font-weight:700; margin-bottom:4px;">Round {{ rnd }}</div>
                   <div class="fr-line">
                     {% for dp in picks %}
-                      {% set fid = '%04d'|format((dp.original_team|int)) %}
                       <label class="fr-pick">
                         <input type="checkbox"
                                name="pick_{{ row.league.mfl_id }}_{{ rnd }}"
                                value="{{ dp.id }}"
                                data-year="{{ dp.season }}"
                                data-round="{{ dp.round }}">
-                        {{ dp.season }} R{{ dp.round }} (orig {{ row.franchise_names.get(fid, fid) }}{% if row.franchise_records.get(fid) %} ({{ row.franchise_records.get(fid) }}){% endif %})
+                        {{ pick_label(dp, row.franchise_names, row.franchise_records) }}
                       </label>
                     {% endfor %}
                   </div>
@@ -155,14 +174,13 @@
                         <div class="small" style="font-weight:700; margin-bottom:4px;">Round {{ rnd }}</div>
                         <div class="fr-line">
                           {% for dp in picks %}
-                            {% set fid = '%04d'|format((dp.original_team|int)) %}
                             <label class="fr-pick">
                               <input type="checkbox"
                                      name="pick_{{ row.league.mfl_id }}_{{ bd.team.id }}_{{ rnd }}"
                                      value="{{ dp.id }}"
                                      data-year="{{ dp.season }}"
                                      data-round="{{ dp.round }}">
-                              {{ dp.season }} R{{ dp.round }} (orig {{ row.franchise_names.get(fid, fid) }}{% if row.franchise_records.get(fid) %} ({{ row.franchise_records.get(fid) }}){% endif %})
+                              {{ pick_label(dp, row.franchise_names, row.franchise_records) }}
                             </label>
                           {% endfor %}
                         </div>
@@ -199,14 +217,13 @@
               <div class="small" style="font-weight:700; margin-bottom:4px;">Your pick to include (Round {{ upgrade_give_round }})</div>
               <div class="fr-line">
                 {% for dp in row.my_give_picks %}
-                  {% set fid = '%04d'|format((dp.original_team|int)) %}
                   <label class="fr-pick">
                     <input type="radio"
                            name="upgrade_my_pick_{{ lid }}"
                            value="{{ dp.id }}"
                            data-year="{{ dp.season }}"
                            data-round="{{ dp.round }}">
-                    {{ dp.season }} R{{ dp.round }} (orig {{ row.franchise_names.get(fid, fid) }}{% if row.franchise_records.get(fid) %} ({{ row.franchise_records.get(fid) }}){% endif %})
+                    {{ pick_label(dp, row.franchise_names, row.franchise_records) }}
                   </label>
                 {% endfor %}
               </div>
@@ -232,7 +249,6 @@
                   <div class="small" style="font-weight:700; margin-bottom:4px;">Select their Round {{ upgrade_recv_round }} pick (one)</div>
                   <div class="fr-line">
                     {% for dp in bd.recv_picks %}
-                      {% set fid = '%04d'|format((dp.original_team|int)) %}
                       <label class="fr-pick">
                         <input type="checkbox"
                                class="recv-pick"
@@ -240,7 +256,7 @@
                                value="{{ dp.id }}"
                                data-year="{{ dp.season }}"
                                data-round="{{ dp.round }}">
-                        {{ dp.season }} R{{ dp.round }} (orig {{ row.franchise_names.get(fid, fid) }}{% if row.franchise_records.get(fid) %} ({{ row.franchise_records.get(fid) }}){% endif %})
+                        {{ pick_label(dp, row.franchise_names, row.franchise_records) }}
                       </label>
                     {% endfor %}
                   </div>

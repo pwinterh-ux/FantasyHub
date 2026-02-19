@@ -155,6 +155,33 @@ def _wants_json_response() -> bool:
     return False
 
 
+def _delete_leagues_with_children(leagues: list[League]) -> int:
+    """
+    Delete league rows and dependent team/roster/pick records.
+
+    Returns the number of leagues successfully removed.
+    """
+    removed = 0
+    for lg in leagues:
+        # 1) collect team ids for this league (avoid JOIN deletes)
+        team_ids = [
+            tid for (tid,) in db.session.query(Team.id)
+            .filter(Team.league_id == lg.id).all()
+        ]
+
+        # 2) delete rows that depend on teams
+        if team_ids:
+            Roster.query.filter(Roster.team_id.in_(team_ids)).delete(synchronize_session=False)
+            DraftPick.query.filter(DraftPick.team_id.in_(team_ids)).delete(synchronize_session=False)
+            Team.query.filter(Team.id.in_(team_ids)).delete(synchronize_session=False)
+
+        # 3) finally delete the league
+        db.session.delete(lg)
+        db.session.flush()
+        removed += 1
+    return removed
+
+
 def _fetch_league_assets(
     league_id: str,
     *,
@@ -546,24 +573,41 @@ def mfl_config_submit():
     # Delete children first (safe across MySQL/SQLite/Postgres)
     for lg in to_delete:
         try:
-            # 1) collect team ids for this league (avoid JOIN deletes)
-            team_ids = [tid for (tid,) in db.session.query(Team.id)
-                        .filter(Team.league_id == lg.id).all()]
-
-            # 2) delete rows that depend on teams
-            if team_ids:
-                Roster.query.filter(Roster.team_id.in_(team_ids)).delete(synchronize_session=False)
-                DraftPick.query.filter(DraftPick.team_id.in_(team_ids)).delete(synchronize_session=False)
-                Team.query.filter(Team.id.in_(team_ids)).delete(synchronize_session=False)
-
-            # 3) finally delete the league
-            db.session.delete(lg)
-            db.session.flush()
+            _delete_leagues_with_children([lg])
         except Exception as e:
             db.session.rollback()
             current_app.logger.exception("Failed deleting league %s: %s", lg.mfl_id, e)
             flash(f"Failed deleting league {lg.mfl_id}: {e}", "danger")
             continue
+
+    if year == 2026 and selected_ids:
+        prior_year_leagues = (
+            League.query
+            .filter(
+                League.user_id == current_user.id,
+                League.year == 2025,
+                League.mfl_id.in_(selected_ids),
+            )
+            .all()
+        )
+        if prior_year_leagues:
+            try:
+                purged_count = _delete_leagues_with_children(prior_year_leagues)
+                current_app.logger.info(
+                    "purged prior-year leagues during 2026 sync user=%s count=%s league_ids=%s",
+                    current_user.id,
+                    purged_count,
+                    sorted(selected_ids),
+                )
+            except Exception as e:
+                db.session.rollback()
+                current_app.logger.exception(
+                    "Failed purging 2025 leagues before 2026 sync for user=%s: %s",
+                    current_user.id,
+                    e,
+                )
+                flash("Failed clearing prior-season league data. Please retry sync.", "danger")
+                return redirect(url_for("mfl.mfl_config", year=year))
 
     db.session.commit()
 
@@ -1349,20 +1393,48 @@ def _gather_open_trades(year: int, trace: bool = False) -> dict:
                             snippet = str(snippet)
                     logger.info("trades: xml root=%s host=%s lid=%s snippet=%r", root_tag, host_key, lid, snippet)
 
-                trades = parse_pending_trades(xml)
+                trades = parse_pending_trades(xml, default_year=year)
 
                 if trace:
                     logger.info("trades: parsed count=%d host=%s lid=%s", len(trades), host_key, lid)
 
                 def _side_to_dict(side):
+                    # draft_picks tuples: (season, round, pick_number, original_team)
+                    picks = []
+                    for tup in (getattr(side, "draft_picks", None) or []):
+                        try:
+                            if len(tup) == 4:
+                                s, r, pn, o = tup
+                                picks.append(
+                                    {
+                                        "season": int(s),
+                                        "round": int(r),
+                                        "pick_number": (int(pn) if pn is not None else None),
+                                        "original_team": (str(o).zfill(4) if o is not None and str(o).isdigit() else o),
+                                    }
+                                )
+                            elif len(tup) == 3:
+                                # legacy fallback: (season, round, original_team)
+                                s, r, o = tup
+                                picks.append(
+                                    {
+                                        "season": int(s),
+                                        "round": int(r),
+                                        "pick_number": None,
+                                        "original_team": (str(o).zfill(4) if o is not None and str(o).isdigit() else o),
+                                    }
+                                )
+                        except Exception:
+                            continue
+
                     return {
                         "franchise_id": side.franchise_id,
                         "player_ids": side.player_ids,
-                        "future_picks": [
-                            {"season": s, "round": r, "original_team": o} for (s, r, o) in side.future_picks
-                        ],
+                        "draft_picks": picks,
+                        "future_picks": picks,   # legacy alias (safe to remove later)
                         "faab": side.faab,
                     }
+
 
                 t_list = []
                 for t in trades:
@@ -1517,8 +1589,10 @@ def trades_open():
     if trace:
         current_app.logger.info("trades: my_fid_by_league=%s", {k: (v or "None") for k, v in my_fid_by_league.items()})
 
-    # --- build team_names {league_id: {fid: team_name}}
+    # --- build team_names + team_records {league_id: {fid: ...}}
     team_names: dict[str, dict[str, str]] = {}
+    team_records: dict[str, dict[str, str]] = {}
+
     rows = (
         db.session.query(Team, League)
         .join(League, Team.league_id == League.id)
@@ -1526,8 +1600,13 @@ def trades_open():
         .all()
     )
     for team, lg in rows:
-        inner = team_names.setdefault(str(lg.mfl_id), {})
-        inner[_pad(team.mfl_id)] = team.name
+        lid = str(lg.mfl_id)
+        fid = _pad(team.mfl_id)
+        if not fid:
+            continue
+        team_names.setdefault(lid, {})[fid] = team.name or fid
+        team_records.setdefault(lid, {})[fid] = team.record or ""
+
 
     # --- split trades + collect player ids for lookup
     to_you, from_you = [], []
@@ -1546,9 +1625,53 @@ def trades_open():
             return "to_you"
         return "to_you"
 
+    def _fmt_trade_pick(lid: str, p: dict) -> str:
+        """
+        Current-year picks:  '2026 1.03'
+        Future-year picks:   '2027 R1 (original: TeamName (0-0-0))'
+        """
+        # season/round
+        try:
+            season = int(p.get("season") or 0)
+        except Exception:
+            season = 0
+        try:
+            rnd = int(p.get("round") or 0)
+        except Exception:
+            rnd = 0
+
+        # pick_number (typically 0-based in pendingTrades)
+        pn = p.get("pick_number")
+        try:
+            pn_int = int(pn) if pn is not None else None
+        except Exception:
+            pn_int = None
+
+        # Current season: show as Year r.pp (no origin)
+        if season == int(year) and season and rnd:
+            if pn_int is None:
+                return f"{season} R{rnd}"
+            pick_in_round = pn_int + 1  # display 1-based
+            return f"{season} {rnd}.{pick_in_round:02d}"
+
+        # Future seasons: show origin team + record
+        orig = p.get("original_team")
+        orig_fid = _pad(orig) if orig is not None else None
+        orig_name = (team_names.get(lid, {}) or {}).get(orig_fid, f"@{orig_fid or orig}")
+        orig_rec = (team_records.get(lid, {}) or {}).get(orig_fid, "")
+        rec_txt = f" ({orig_rec})" if orig_rec else ""
+
+        if season and rnd:
+            return f"{season} R{rnd} (original: {orig_name}{rec_txt})"
+        if season:
+            return f"{season} (original: {orig_name}{rec_txt})"
+        return str(p)
+
     # enrich + split
     for tr in (cached.get("trades_flat") or []):
-        # gather players for lookup
+        lid = str(tr.get("league_id") or "")
+
+        # gather players for lookup + enrich pick display text
         for s in (tr.get("sides") or []):
             for pid in (s.get("player_ids") or []):
                 try:
@@ -1556,13 +1679,19 @@ def trades_open():
                 except Exception:
                     pass
 
+            picks = s.get("future_picks") or s.get("draft_picks") or []
+            for p in picks:
+                if isinstance(p, dict):
+                    p["display_text"] = _fmt_trade_pick(lid, p)
+
         enriched = {
             **tr,
-            "my_franchise_id": my_fid_by_league.get(tr["league_id"]),
+            "my_franchise_id": my_fid_by_league.get(lid),
             "created_dt": _ts_to_dt(tr.get("created_ts")),
             "expires_dt": _ts_to_dt(tr.get("expires_ts")),
         }
         (to_you if classify(tr) == "to_you" else from_you).append(enriched)
+
 
     # newest first
     def _sort_key(x):

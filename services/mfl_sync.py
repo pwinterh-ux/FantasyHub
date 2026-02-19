@@ -75,35 +75,58 @@ def _iter_player_ids(fr: Any) -> Iterable[int]:
         except (TypeError, ValueError):
             continue
 
-def _parse_pick_code(code: str) -> Optional[Tuple[int, int, Optional[str]]]:
+
+# ------------------------- Draft pick extractors ----------------------------
+
+# CHANGED: now supports both FP and DP-style normalized tuples with pick_number
+# New canonical yield shape: (season, round, pick_number, original_team)
+
+def _parse_pick_code(code: str) -> Optional[Tuple[int, int, Optional[int], Optional[str]]]:
     """
-    'FP_<orig>_<season>_<round>' -> (season, round, original_team)
+    FP: 'FP_<orig>_<season>_<round>' -> (season, round, None, original_team)
+    DP cannot be parsed from token alone (needs description), so we ignore DP tokens here.
     """
     parts = str(code).strip().split("_")
-    if len(parts) >= 4:
+    if len(parts) >= 4 and parts[0].upper() == "FP":
         try:
             season = int(parts[2])
             rnd = int(parts[3])
             orig = parts[1]
-            return (season, rnd, _fid(orig))
+            return (season, rnd, None, _fid(orig))
         except Exception:
             return None
     return None
 
-def _iter_picks(fr: Any) -> Iterable[Tuple[int, int, Optional[str]]]:
+def _iter_picks(fr: Any) -> Iterable[Tuple[int, int, Optional[int], Optional[str]]]:
     """
     Accepts variants:
-      - fr.future_picks -> [(2026, 1, "0002"), ...]  (dataclass shape)
-      - fr.picks        -> ["FP_0002_2026_1", ...]   (MFL string codes) or CSV string
-      - fr.picks        -> [{"season":2026,"round":1,"original_team":"0002"}, ...]
-    Yields (season, round, original_team) with pick_number=None (unknown).
+      - fr.draft_picks  -> [(2026, 1, 3, None), (2027, 1, None, "0002"), ...]  (NEW dataclass shape)
+      - fr.future_picks -> [(2027, 1, "0002"), ...]  (legacy dataclass shape)
+      - fr.picks        -> ["FP_0002_2027_1", ...]   (MFL string codes) or CSV string
+      - fr.picks        -> [{"season":2026,"round":1,"pick_number":3,"original_team":None}, ...]
+    Yields (season, round, pick_number, original_team).
     """
-    # Preferred shape from dataclass
+    # Preferred NEW shape from dataclass
+    dp = _get(fr, "draft_picks")
+    if isinstance(dp, list) and dp and isinstance(dp[0], tuple):
+        for tup in dp:
+            try:
+                # tolerate older tuple lengths defensively
+                if len(tup) == 4:
+                    season, rnd, pick_no, orig = tup
+                    yield int(season), int(rnd), (int(pick_no) if pick_no is not None else None), (_fid(orig) if orig else None)
+                elif len(tup) == 3:
+                    season, rnd, orig = tup
+                    yield int(season), int(rnd), None, (_fid(orig) if orig else None)
+            except Exception:
+                continue
+
+    # Legacy shape from dataclass (future picks only): [(season, round, original_team), ...]
     fp = _get(fr, "future_picks")
     if isinstance(fp, list) and fp and isinstance(fp[0], tuple):
         for season, rnd, orig in fp:
             try:
-                yield int(season), int(rnd), (_fid(orig) if orig is not None else None)
+                yield int(season), int(rnd), None, (_fid(orig) if orig is not None else None)
             except Exception:
                 continue
 
@@ -116,15 +139,17 @@ def _iter_picks(fr: Any) -> Iterable[Tuple[int, int, Optional[str]]]:
             try:
                 season = int(item.get("season"))
                 rnd = int(item.get("round"))
+                pick_no = item.get("pick_number") or item.get("pickNumber")
+                pick_no = int(pick_no) if pick_no not in (None, "") else None
                 original = item.get("original_team") or item.get("originalTeam")
-                original = _fid(original) if original is not None else None
-                yield season, rnd, original
+                original = _fid(original) if original not in (None, "") else None
+                yield season, rnd, pick_no, original
             except Exception:
                 continue
         else:
             parsed = _parse_pick_code(str(item))
             if parsed:
-                yield parsed  # already normalized original team
+                yield parsed  # already normalized
 
 
 # ------------------------- League metadata sync ------------------------------
@@ -214,7 +239,7 @@ def sync_league_assets(
     Idempotent write of league-wide assets:
       - For each franchise (team), delete existing Roster & DraftPick rows
       - Re-insert rosters from player_ids / players / roster (csv)
-      - Re-insert future draft picks from future_picks / picks (list/dict/csv)
+      - Re-insert draft picks from draft_picks / future_picks / picks (list/dict/csv)
 
     Accepts either our FranchiseAssets dataclass OR a dict with similar keys.
 
@@ -237,7 +262,7 @@ def sync_league_assets(
         franchise_id = _fid(franchise_id_raw)
 
         player_ids = list(_iter_player_ids(fr))
-        pick_items = list(_iter_picks(fr))
+        pick_items = list(_iter_picks(fr))  # CHANGED: yields (season, round, pick_number, original_team)
         name_hint = _get(fr, "name") or _get(fr, "team_name")
 
         normalized_franchises.append(
@@ -295,21 +320,22 @@ def sync_league_assets(
             roster_rows.append(Roster(team_id=team.id, player_id=pid, is_starter=False))
             inserted_rosters += 1
 
-        # Rebuild future picks
-        for season, rnd, original in pick_items:
+        # Rebuild draft picks (current year + future year)
+        for season, rnd, pick_no, original in pick_items:
             pick_rows.append(
                 DraftPick(
                     team_id=team.id,
                     season=int(season),
                     round=int(rnd),
-                    pick_number=None,
-                    original_team=(original if original is None else _fid(original)),
+                    pick_number=(int(pick_no) if pick_no is not None else None),
+                    original_team=(_fid(original) if original not in (None, "") else None),
                 )
             )
             inserted_picks += 1
 
     unique_team_ids = list({tid for tid in touched_team_ids if tid is not None})
     if unique_team_ids:
+        # delete existing BEFORE insert (keeps behavior idempotent)
         Roster.query.filter(Roster.team_id.in_(unique_team_ids)).delete(synchronize_session=False)
         DraftPick.query.filter(DraftPick.team_id.in_(unique_team_ids)).delete(synchronize_session=False)
 

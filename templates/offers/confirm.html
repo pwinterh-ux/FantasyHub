@@ -98,6 +98,17 @@
     return span;
   }
 
+  // Defensive cleanup:
+  // - Removes useless "(orig 0000)" or "(orig —)" suffixes from pick labels
+  // - Leaves real team names/records alone (your 2027+ should still show orig team + record when present)
+  function cleanLabel(s) {
+    s = String(s || '');
+    s = s.replace(/\s*\(orig\s*(?:0000|0+|—|-\s*)\)\s*$/i, '');
+    s = s.replace(/\s*\(orig\s*(?:0000|0+)\s*\)\s*$/i, '');
+    s = s.replace(/\s*\(orig\s*—\s*\)\s*$/i, '');
+    return s.trim();
+  }
+
   items.forEach(it => {
     const tr = document.createElement('tr');
 
@@ -115,14 +126,14 @@
     const give = Array.isArray(it.will_give_up) ? it.will_give_up : [];
     give.forEach(tok => {
       const name = (it.will_give_up_names && it.will_give_up_names[tok]) || null;
-      tdGive.appendChild(pill(name || tok, "pill-give"));
+      tdGive.appendChild(pill(cleanLabel(name || tok), "pill-give"));
     });
 
     const tdRecv = document.createElement('td');
     const recv = Array.isArray(it.will_receive) ? it.will_receive : [];
     recv.forEach(tok => {
       const name = (it.will_receive_names && it.will_receive_names[tok]) || null;
-      tdRecv.appendChild(pill(name || tok, "pill-recv"));
+      tdRecv.appendChild(pill(cleanLabel(name || tok), "pill-recv"));
     });
 
     const tdExp = document.createElement('td');

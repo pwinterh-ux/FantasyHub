@@ -4,8 +4,8 @@
 <style>
   /* ---- page-level overrides to force stacked layout & improve contrast ---- */
   .page-wrap { max-width: 1100px; margin: 18px auto; padding: 0 10px; }
-  .toolbar { 
-    display:flex; align-items:center; justify-content:space-between; gap:12px; 
+  .toolbar {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
     flex-wrap: wrap;
     background: rgba(15,23,42,0.55);
     border: 1px solid rgba(255,255,255,.12);
@@ -28,7 +28,7 @@
 
   /* section shells */
   .section {
-    margin-top: 16px; 
+    margin-top: 16px;
     background: rgba(15,23,42,0.52);
     border: 1px solid rgba(255,255,255,.12);
     border-radius: 14px; padding: 16px;
@@ -69,23 +69,23 @@
     border-radius: 10px; padding: 10px;
     background: rgba(255,255,255,0.04);
   }
-  .side h4 { 
-    margin: 0 0 6px 0; font-size: 14px; font-weight: 800; 
-    display:flex; align-items:center; gap:8px; 
+  .side h4 {
+    margin: 0 0 6px 0; font-size: 14px; font-weight: 800;
+    display:flex; align-items:center; gap:8px;
   }
 
-  .pill { 
-    font-size: 10px; padding: 2px 7px; border-radius: 999px; 
+  .pill {
+    font-size: 10px; padding: 2px 7px; border-radius: 999px;
     letter-spacing:.2px; text-transform: uppercase; font-weight: 800;
   }
-  .you { 
+  .you {
     background:#22c55e; color:#06251a;
     box-shadow: 0 0 0 2px rgba(34,197,94,.35);
   }
   .give { background:#0b1220; color:#fff; }
 
-  .items { 
-    margin: 4px 0 0 0; padding-left: 16px; 
+  .items {
+    margin: 4px 0 0 0; padding-left: 16px;
     font-size: 13px; line-height: 1.35;
   }
   .items li { margin: 2px 0; }
@@ -105,6 +105,30 @@
     padding:6px 10px; border-radius:8px; text-decoration:none; font-weight:700; font-size:12px;
   }
   .btn-ghost-small:hover { background:#0b1220; }
+
+  /* inline comments block under the asset tiles */
+  .comments-inline{
+    margin-top:10px;
+    padding:10px 12px;
+    border-radius:12px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,.10);
+    font-size:12px;
+    color:#cbd5e1;
+  }
+  .comments-inline .label{
+    font-weight:800;
+    color:#e5e7eb;
+    margin-bottom:4px;
+  }
+  .comments-inline ul{
+    margin:6px 0 0;
+    padding-left:16px;
+  }
+  .comments-inline li{
+    margin:2px 0;
+    line-height:1.35;
+  }
 </style>
 
 <div class="page-wrap">
@@ -178,10 +202,42 @@
                             <li>Player #{{ pid }}</li>
                           {% endif %}
                         {% endfor %}
-                        {% for p in picks %}
-                          {% set orig = (team_names.get(t.league_id, {}) or {}).get(p.original_team, '@' ~ p.original_team) %}
-                          <li>{{ p.season }} R{{ p.round }} (original: {{ orig }})</li>
+
+                        {% for pk in picks %}
+                          {# If we have season/round/pick_number, render ourselves (don’t trust display_text) #}
+                          {% set season = (pk.season if pk.season is defined else (pk[0] if pk is sequence and pk|length>0 else none)) %}
+                          {% set rnd    = (pk.round  if pk.round  is defined else (pk[1] if pk is sequence and pk|length>1 else none)) %}
+
+                          {# pick_number may be None for future picks #}
+                          {% set pick_no = none %}
+                          {% if pk.pick_number is defined %}
+                            {% set pick_no = pk.pick_number %}
+                          {% elif pk.pickNumber is defined %}
+                            {% set pick_no = pk.pickNumber %}
+                          {% elif pk is sequence and pk|length >= 3 %}
+                            {# tuple shapes: (season, round, pick_no, orig) OR (season, round, orig) #}
+                            {# if len==3, third is orig not pick number, so keep none #}
+                            {% if pk|length >= 4 %}
+                              {% set pick_no = pk[2] %}
+                            {% endif %}
+                          {% endif %}
+
+                          {% if season and rnd and pick_no is not none %}
+                            {# NOTE: treating pick_no as already 1-based (per your report). If it’s 0, force 01. #}
+                            {% set shown = (1 if (pick_no|int) <= 0 else (pick_no|int)) %}
+                            <li>{{ season }} {{ rnd }}.{{ "%02d"|format(shown) }}</li>
+                          {% else %}
+                            {# fallback: use provided display_text if present, else "YYYY R#" #}
+                            {% if pk.display_text is defined and pk.display_text %}
+                              <li>{{ pk.display_text }}</li>
+                            {% elif season and rnd %}
+                              <li>{{ season }} R{{ rnd }}</li>
+                            {% else %}
+                              <li>Draft Pick</li>
+                            {% endif %}
+                          {% endif %}
                         {% endfor %}
+
                         {% if faab %}
                           <li>FAAB ${{ "%.0f"|format(faab) }}</li>
                         {% endif %}
@@ -192,11 +248,28 @@
                   </div>
                 {% endfor %}
               </div>
+
+              {# COMMENTS: show directly beneath the tiles #}
+              {% if t.comments and t.comments|length > 0 %}
+                <div class="comments-inline">
+                  <div class="label">Comments ({{ t.comments|length }})</div>
+                  <ul>
+                    {% for c in t.comments %}
+                      <li>
+                        {% if c.date %}<span class="muted">{{ c.date }}</span>{% endif %}
+                        {% if c.franchise %} — <strong>{{ c.franchise }}</strong>{% endif %}
+                        {% if c.text %}: {{ c.text }}{% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              {% endif %}
+
             {% else %}
               <div class="muted" style="font-size:12px;">(no side details from league API)</div>
             {% endif %}
 
-            {% if t.created_dt or t.expires_dt or t.comments %}
+            {% if t.created_dt or t.expires_dt %}
               <details class="more">
                 <summary>More</summary>
                 <div class="muted" style="margin-top:6px;">
@@ -204,16 +277,6 @@
                     <div style="font-size:12px;">
                       {% if t.created_dt %}Created: {{ t.created_dt.strftime('%Y-%m-%d %H:%M:%S %Z') }}{% endif %}
                       {% if t.expires_dt %} • Expires: {{ t.expires_dt.strftime('%Y-%m-%d %H:%M:%S %Z') }}{% endif %}
-                    </div>
-                  {% endif %}
-                  {% if t.comments and t.comments|length > 0 %}
-                    <div style="margin-top:6px; font-size:12px;">
-                      Comments ({{ t.comments|length }})
-                      <ul style="margin:4px 0 0; padding-left:16px;">
-                        {% for c in t.comments %}
-                          <li><span class="muted">{{ c.date }}</span> — <strong>{{ c.franchise }}</strong>: {{ c.text }}</li>
-                        {% endfor %}
-                      </ul>
                     </div>
                   {% endif %}
                 </div>
@@ -272,10 +335,36 @@
                             <li>Player #{{ pid }}</li>
                           {% endif %}
                         {% endfor %}
-                        {% for p in picks %}
-                          {% set orig = (team_names.get(t.league_id, {}) or {}).get(p.original_team, '@' ~ p.original_team) %}
-                          <li>{{ p.season }} R{{ p.round }} (original: {{ orig }})</li>
+
+                        {% for pk in picks %}
+                          {% set season = (pk.season if pk.season is defined else (pk[0] if pk is sequence and pk|length>0 else none)) %}
+                          {% set rnd    = (pk.round  if pk.round  is defined else (pk[1] if pk is sequence and pk|length>1 else none)) %}
+
+                          {% set pick_no = none %}
+                          {% if pk.pick_number is defined %}
+                            {% set pick_no = pk.pick_number %}
+                          {% elif pk.pickNumber is defined %}
+                            {% set pick_no = pk.pickNumber %}
+                          {% elif pk is sequence and pk|length >= 3 %}
+                            {% if pk|length >= 4 %}
+                              {% set pick_no = pk[2] %}
+                            {% endif %}
+                          {% endif %}
+
+                          {% if season and rnd and pick_no is not none %}
+                            {% set shown = (1 if (pick_no|int) <= 0 else (pick_no|int)) %}
+                            <li>{{ season }} {{ rnd }}.{{ "%02d"|format(shown) }}</li>
+                          {% else %}
+                            {% if pk.display_text is defined and pk.display_text %}
+                              <li>{{ pk.display_text }}</li>
+                            {% elif season and rnd %}
+                              <li>{{ season }} R{{ rnd }}</li>
+                            {% else %}
+                              <li>Draft Pick</li>
+                            {% endif %}
+                          {% endif %}
                         {% endfor %}
+
                         {% if faab %}
                           <li>FAAB ${{ "%.0f"|format(faab) }}</li>
                         {% endif %}
@@ -286,11 +375,27 @@
                   </div>
                 {% endfor %}
               </div>
+
+              {% if t.comments and t.comments|length > 0 %}
+                <div class="comments-inline">
+                  <div class="label">Comments ({{ t.comments|length }})</div>
+                  <ul>
+                    {% for c in t.comments %}
+                      <li>
+                        {% if c.date %}<span class="muted">{{ c.date }}</span>{% endif %}
+                        {% if c.franchise %} — <strong>{{ c.franchise }}</strong>{% endif %}
+                        {% if c.text %}: {{ c.text }}{% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              {% endif %}
+
             {% else %}
               <div class="muted" style="font-size:12px;">(no side details from league API)</div>
             {% endif %}
 
-            {% if t.created_dt or t.expires_dt or t.comments %}
+            {% if t.created_dt or t.expires_dt %}
               <details class="more">
                 <summary>More</summary>
                 <div class="muted" style="margin-top:6px;">
@@ -298,16 +403,6 @@
                     <div style="font-size:12px;">
                       {% if t.created_dt %}Created: {{ t.created_dt.strftime('%Y-%m-%d %H:%M:%S %Z') }}{% endif %}
                       {% if t.expires_dt %} • Expires: {{ t.expires_dt.strftime('%Y-%m-%d %H:%M:%S %Z') }}{% endif %}
-                    </div>
-                  {% endif %}
-                  {% if t.comments and t.comments|length > 0 %}
-                    <div style="margin-top:6px; font-size:12px;">
-                      Comments ({{ t.comments|length }})
-                      <ul style="margin:4px 0 0; padding-left:16px;">
-                        {% for c in t.comments %}
-                          <li><span class="muted">{{ c.date }}</span> — <strong>{{ c.franchise }}</strong>: {{ c.text }}</li>
-                        {% endfor %}
-                      </ul>
                     </div>
                   {% endif %}
                 </div>

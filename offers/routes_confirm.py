@@ -64,9 +64,7 @@ def _owner_team_for_player(league: League, player_id: int) -> Optional[Team]:
 
 
 def _league_maps(league: League) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """
-    Return (fid->name, fid->record) for a league.
-    """
+    """Return (fid->name, fid->record) for a league."""
     fnames: Dict[str, str] = {}
     frecords: Dict[str, str] = {}
     for t in Team.query.filter(Team.league_id == league.id).all():
@@ -76,29 +74,104 @@ def _league_maps(league: League) -> Tuple[Dict[str, str], Dict[str, str]]:
     return fnames, frecords
 
 
-def _fmt_pick(token: str, fnames: Dict[str, str], frecords: Dict[str, str]) -> str:
-    # FP_<origfid>_<year>_<round>
+def _safe_int(x: Any) -> Optional[int]:
     try:
-        _, orig, yr, rnd = token.split("_")
-        nm = fnames.get(orig, orig)
-        rc = frecords.get(orig)
-        return f"{yr} R{rnd} (orig {nm}{f' ({rc})' if rc else ''})"
-    except Exception:
-        return token
-
-
-def _draftpick_to_token(p: DraftPick) -> Optional[str]:
-    """Turn a DraftPick row into an MFL token FP_<origfid>_<year>_<round>."""
-    try:
-        return f"FP_{(p.original_team or '').zfill(4)}_{int(p.season)}_{int(p.round)}"
+        if x is None:
+            return None
+        s = str(x).strip()
+        if s == "":
+            return None
+        return int(s)
     except Exception:
         return None
 
 
-def _draftpick_tokens_from_ids(ids: List[str]) -> List[str]:
+def _pick_num_within_round(p: DraftPick) -> Optional[int]:
     """
-    Turn DraftPick DB ids into tokens, preserving the *input order* of ids.
+    For DP tokens, MFL expects a *pick index within the round*.
+    Based on your requirement:
+      round 1 => 0, pick 3 => 2  => DP_0_2
+
+    We assume your DB stores that as pick_number (1..N).
     """
+    pn = _safe_int(getattr(p, "pick_number", None))
+    if pn is not None and pn > 0:
+        return pn
+    # Some DBs might have overall_pick only; that won't map correctly without league size.
+    return None
+
+
+def _orig_fid_for_row(p: DraftPick, fallback_fid: Optional[str]) -> str:
+    """
+    Ensure a usable 4-digit orig fid.
+    If DB value is missing/0/0000, fall back to the provided fallback_fid.
+    """
+    raw = (p.original_team or "").strip() if hasattr(p, "original_team") else ""
+    if raw and raw not in {"0", "0000"}:
+        return str(raw).zfill(4)
+    if fallback_fid:
+        return str(fallback_fid).zfill(4)
+    return "0000"
+
+
+def _draftpick_to_token(
+    p: DraftPick,
+    league_year: Optional[int],
+    fallback_orig_fid: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Turn a DraftPick row into an MFL token.
+
+    RULE:
+    - If pick.season == league_year, use DP_<roundIndex>_<pickIndex> (current-year assets format)
+      roundIndex = round-1, pickIndex = pick_number-1
+    - Else use FP_<origfid>_<year>_<round>[_<picknum>] for future picks.
+
+    Examples:
+      2026 1.03 => DP_0_2
+      2026 4.12 => DP_3_11
+    """
+    try:
+        yr = _safe_int(getattr(p, "season", None))
+        rnd = _safe_int(getattr(p, "round", None))
+        if yr is None or rnd is None or rnd <= 0:
+            return None
+
+        lgyr = _safe_int(league_year)
+
+        # ----- CURRENT YEAR -> DP tokens -----
+        if lgyr is not None and yr == lgyr:
+            pn = _pick_num_within_round(p)
+            if pn is None:
+                # No pick number; DP token can't be built safely
+                # Fallback to FP, but this may still fail if MFL requires DP.
+                orig = _orig_fid_for_row(p, fallback_orig_fid)
+                return f"FP_{orig}_{yr}_{rnd}"
+
+            round_idx = rnd - 1
+            pick_idx = pn - 1
+            if round_idx < 0 or pick_idx < 0:
+                return None
+            return f"DP_{round_idx}_{pick_idx}"
+
+        # ----- FUTURE YEARS -> FP tokens -----
+        orig = _orig_fid_for_row(p, fallback_orig_fid)
+        # Include pick within round if you have it (optional, useful for display/logic)
+        pn = _pick_num_within_round(p)
+        if pn is not None:
+            return f"FP_{orig}_{yr}_{rnd}_{pn}"
+        return f"FP_{orig}_{yr}_{rnd}"
+
+    except Exception:
+        return None
+
+
+def _draftpick_tokens_from_ids(
+    ids: List[str],
+    league_year: Optional[int],
+    fallback_orig_fid: Optional[str] = None,
+) -> List[str]:
+    """Turn DraftPick DB ids into tokens, preserving the *input order*."""
     if not ids:
         return []
     found = DraftPick.query.filter(DraftPick.id.in_(ids)).all()
@@ -108,10 +181,67 @@ def _draftpick_tokens_from_ids(ids: List[str]) -> List[str]:
         p = by_id.get(str(pid))
         if not p:
             continue
-        tok = _draftpick_to_token(p)
+        tok = _draftpick_to_token(p, league_year=league_year, fallback_orig_fid=fallback_orig_fid)
         if tok:
             tokens.append(tok)
     return tokens
+
+
+def _pad2(n: Any) -> str:
+    s = str(n) if n is not None else ""
+    return s.zfill(2) if s.isdigit() else s
+
+
+def _fmt_pick(token: str, league_year: Optional[int], fnames: Dict[str, str], frecords: Dict[str, str]) -> str:
+    """
+    Human-friendly label for confirm.html pills.
+
+    - For DP_* tokens (current year): show "{league_year} {round}.{pick}" (e.g. 2026 1.03)
+    - For FP tokens:
+        - If year == league_year: show "{year} {round}.{pick}" if pick present else "{year} R{round}"
+        - If year > league_year: show "{year} R{round} (orig Team (record))"
+    """
+    try:
+        lgyr = _safe_int(league_year)
+
+        if token.startswith("DP_"):
+            # DP_<roundIndex>_<pickIndex>
+            parts = token.split("_")
+            if len(parts) >= 3 and lgyr is not None:
+                r_idx = _safe_int(parts[1])
+                p_idx = _safe_int(parts[2])
+                if r_idx is not None and p_idx is not None:
+                    rnd = r_idx + 1
+                    pn = p_idx + 1
+                    return f"{lgyr} {rnd}.{_pad2(pn)}"
+            return token
+
+        if token.startswith("FP_"):
+            parts = token.split("_")
+            # FP_orig_year_round[_pick]
+            if len(parts) < 4:
+                return token
+            orig = parts[1]
+            yr = _safe_int(parts[2])
+            rnd = _safe_int(parts[3])
+            pick = _safe_int(parts[4]) if len(parts) >= 5 else None
+
+            if yr is None or rnd is None:
+                return token
+
+            if lgyr is not None and yr == lgyr:
+                if pick is not None:
+                    return f"{yr} {rnd}.{_pad2(pick)}"
+                return f"{yr} R{rnd}"
+
+            # Future -> keep orig + record
+            nm = fnames.get(orig, orig)
+            rc = frecords.get(orig)
+            return f"{yr} R{rnd} (orig {nm}{f' ({rc})' if rc else ''})"
+
+        return token
+    except Exception:
+        return token
 
 
 def _extract_buy_picks_for_league(form: Dict[str, Any], lid: str) -> List[str]:
@@ -125,7 +255,6 @@ def _extract_buy_picks_for_league(form: Dict[str, Any], lid: str) -> List[str]:
     for key in form.keys():
         if key.startswith(prefix):
             picks.extend(form.getlist(key))
-    # de-dup preserve order
     seen = set()
     return [x for x in picks if not (x in seen or seen.add(x))]
 
@@ -158,7 +287,6 @@ def preview_offers():
     mode = (request.form.get("mode") or "buy").strip()
     template_code = (request.form.get("template_code") or "").strip()
 
-    # Player (if present in template)
     player_id_raw = request.form.get("player_id") or request.form.get("player")
     try:
         player_id = int(player_id_raw) if player_id_raw is not None else None
@@ -171,8 +299,8 @@ def preview_offers():
 
     if mode == "buy":
         skipped: List[str] = []
-
         league_ids = request.form.getlist("league_id")
+
         for lid in league_ids:
             lg = League.query.filter_by(user_id=current_user.id, mfl_id=str(lid)).first()
             if not lg:
@@ -186,7 +314,14 @@ def preview_offers():
 
             # STRICT: posted checkboxes only
             pick_ids = _extract_buy_picks_for_league(request.form, str(lid))
-            will_give = _draftpick_tokens_from_ids(pick_ids)
+
+            # For current-year picks with missing orig, fallback to *my* fid
+            my_fid = str(my_team.mfl_id).zfill(4) if my_team and my_team.mfl_id is not None else None
+            will_give = _draftpick_tokens_from_ids(
+                pick_ids,
+                league_year=lg.year,
+                fallback_orig_fid=my_fid,
+            )
 
             if not will_give:
                 skipped.append(f"{lg.name} (ID {lg.mfl_id})")
@@ -196,8 +331,8 @@ def preview_offers():
             host = (lg.league_host or "").strip() or "api.myfantasyleague.com"
             fnames, frecords = _league_maps(lg)
 
-            give_names = {tok: _fmt_pick(tok, fnames, frecords) for tok in will_give}
-            recv_names = {}
+            give_names = {tok: _fmt_pick(tok, lg.year, fnames, frecords) for tok in will_give}
+            recv_names: Dict[str, str] = {}
             if player:
                 recv_names[str(player_id)] = player.name
 
@@ -224,7 +359,6 @@ def preview_offers():
             flash(f"Skipped (no picks selected): {', '.join(skipped)}", "info")
 
     elif mode == "sell" and template_code != "upgrade":
-        # Enforce exactly one league selected via buyer_* keys
         lids: List[str] = []
         for key in request.form.keys():
             m = re.match(r"buyer_(\d+)$", key)
@@ -260,9 +394,15 @@ def preview_offers():
             if not buyer_team or buyer_team.league_id != lg.id:
                 continue
 
-            # STRICT: posted checkboxes only
             pick_ids = _extract_sell_picks_for_buyer(request.form, str(lid), str(buyer_team.id))
-            will_recv = _draftpick_tokens_from_ids(pick_ids)
+
+            # For current-year picks with missing orig, fallback to *buyer* fid
+            buyer_fid = str(buyer_team.mfl_id).zfill(4) if buyer_team.mfl_id is not None else None
+            will_recv = _draftpick_tokens_from_ids(
+                pick_ids,
+                league_year=lg.year,
+                fallback_orig_fid=buyer_fid,
+            )
 
             if not will_recv:
                 skipped_buyers.append(buyer_team.name or f"FID {buyer_team.mfl_id}")
@@ -270,7 +410,7 @@ def preview_offers():
 
             will_give = [str(player_id)] if player_id else []
             give_names = {str(player_id): player.name} if player else {}
-            recv_names = {tok: _fmt_pick(tok, fnames, frecords) for tok in will_recv}
+            recv_names = {tok: _fmt_pick(tok, lg.year, fnames, frecords) for tok in will_recv}
 
             pending.append({
                 "host": host,
@@ -295,7 +435,6 @@ def preview_offers():
             flash(f"Skipped buyer(s) with no picks selected: {', '.join(skipped_buyers)}", "info")
 
     elif mode == "sell" and template_code == "upgrade":
-        # --- SELL: Pick Upgrade (now also uses posted buyer pick checkboxes) ---
         try:
             recv_round = int(request.form.get("upgrade_recv_round") or "0")
             give_round = int(request.form.get("upgrade_give_round") or "0")
@@ -306,7 +445,6 @@ def preview_offers():
             flash("Pick Upgrade needs both Give and Receive rounds.", "warning")
             return redirect(url_for("offers.search"))
 
-        # Exactly one league via buyer_* keys (your flow requirement)
         lids: List[str] = []
         for key in request.form.keys():
             m = re.match(r"buyer_(\d+)$", key)
@@ -330,25 +468,20 @@ def preview_offers():
             return redirect(url_for("offers.build", player_id=player_id, mode="sell", template_code="upgrade",
                                     upgrade_give_round=give_round, upgrade_recv_round=recv_round))
 
-        # Your selected pick (radio required)
         my_pick_id = request.form.get(f"upgrade_my_pick_{lid}")
         if not my_pick_id:
             flash("Select one of your picks to include.", "warning")
             return redirect(url_for("offers.build", player_id=player_id, mode="sell", template_code="upgrade",
                                     upgrade_give_round=give_round, upgrade_recv_round=recv_round))
+
         my_pick_row = DraftPick.query.get(my_pick_id)
         if not my_pick_row or my_pick_row.team_id != my_team.id or int(my_pick_row.round) != int(give_round):
             flash("Invalid pick selection.", "warning")
             return redirect(url_for("offers.build", player_id=player_id, mode="sell", template_code="upgrade",
                                     upgrade_give_round=give_round, upgrade_recv_round=recv_round))
 
-        def _draftpick_to_token_local(p: DraftPick) -> Optional[str]:
-            try:
-                return f"FP_{(p.original_team or '').zfill(4)}_{int(p.season)}_{int(p.round)}"
-            except Exception:
-                return None
-
-        my_pick_token = _draftpick_to_token_local(my_pick_row)
+        my_fid = str(my_team.mfl_id).zfill(4) if my_team.mfl_id is not None else None
+        my_pick_token = _draftpick_to_token(my_pick_row, league_year=lg.year, fallback_orig_fid=my_fid)
         if not my_pick_token:
             flash("Could not encode your pick.", "warning")
             return redirect(url_for("offers.build", player_id=player_id, mode="sell", template_code="upgrade",
@@ -370,9 +503,14 @@ def preview_offers():
             if not buyer_team or buyer_team.league_id != lg.id:
                 continue
 
-            # STRICT: posted buyer-pick checkboxes only (no auto-choosing)
             pick_ids = _extract_sell_picks_for_buyer(request.form, str(lid), str(buyer_team.id))
-            will_recv = _draftpick_tokens_from_ids(pick_ids)
+
+            buyer_fid = str(buyer_team.mfl_id).zfill(4) if buyer_team.mfl_id is not None else None
+            will_recv = _draftpick_tokens_from_ids(
+                pick_ids,
+                league_year=lg.year,
+                fallback_orig_fid=buyer_fid,
+            )
 
             if not will_recv:
                 skipped_buyers.append(buyer_team.name or f"FID {buyer_team.mfl_id}")
@@ -381,11 +519,12 @@ def preview_offers():
             will_give = [str(player_id)] if player_id else []
             will_give.append(my_pick_token)
 
-            give_names = {}
+            give_names: Dict[str, str] = {}
             if player:
                 give_names[str(player_id)] = player.name
-            give_names[my_pick_token] = _fmt_pick(my_pick_token, fnames, frecords)
-            recv_names = {tok: _fmt_pick(tok, fnames, frecords) for tok in will_recv}
+            give_names[my_pick_token] = _fmt_pick(my_pick_token, lg.year, fnames, frecords)
+
+            recv_names = {tok: _fmt_pick(tok, lg.year, fnames, frecords) for tok in will_recv}
 
             pending.append({
                 "host": host,
@@ -429,7 +568,7 @@ def preview_offers():
 
 @offers_bp.route("/perform", methods=["POST"])
 @login_required
-@require_terms   # NEW: must accept ToS/Privacy/AUP before sending real proposals
+@require_terms
 def perform_offers():
     """
     Read `pending_json` from confirm.html and send real proposals via MFL import.
@@ -444,8 +583,7 @@ def perform_offers():
         flash("Malformed request. Please rebuild your offers.", "warning")
         return redirect(url_for("offers.search"))
 
-    # -------- Mass-offer gate: count this as ONE action regardless of N items --------
-    recipients_count = len(items)  # for messaging only; cap consumption is 1 per perform
+    recipients_count = len(items)
     ok, msg = consume_mass_offer(
         user=current_user,
         recipients_count=recipients_count,
@@ -460,7 +598,6 @@ def perform_offers():
         flash(msg or "Your plan doesn’t allow more mass offers today.", "warning")
         return redirect(url_for("offers.search"))
 
-    # ------------------------------------------------------------------------
     apikey = None
     try:
         apikey = current_app.config.get("MFL_APIKEY")
@@ -472,7 +609,8 @@ def perform_offers():
         lid = str(it.get("league_id") or "").strip()
         lg = League.query.filter_by(user_id=current_user.id, mfl_id=lid).first()
         if not lg:
-            offers_log.append({"league": {"name": "(unknown)", "mfl_id": lid}, "status": "error", "detail": "League not found for current user."})
+            offers_log.append({"league": {"name": "(unknown)", "mfl_id": lid}, "status": "error",
+                               "detail": "League not found for current user."})
             continue
 
         host, cookie = _resolve_host_and_cookie(lg)
