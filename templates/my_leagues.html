@@ -226,32 +226,6 @@
 
   // ---------- details view helpers ----------
   function pad4(x){ x = String(x || ''); return x.padStart(4, '0'); }
-  function pad2(x){ x = String(x ?? ''); return x.padStart(2, '0'); }
-
-  // Draft pick formatter:
-  // - Prefer overall_pick if present (future-proof), else pick_number
-  // - Show round.pick (e.g., 1.03) when both exist
-  // - If only round exists, show R1
-  // - If nothing exists, show —
-  function formatPickLabel(p){
-    if (!p) return '—';
-    const round = (p.round !== undefined && p.round !== null && String(p.round) !== '') ? String(p.round) : null;
-
-    let pick = null;
-    if (p.overall_pick !== undefined && p.overall_pick !== null && String(p.overall_pick) !== '') {
-      pick = String(p.overall_pick);
-    } else if (p.pick_number !== undefined && p.pick_number !== null && String(p.pick_number) !== '') {
-      pick = String(p.pick_number);
-    }
-
-    if (round && pick) {
-      // If pick is numeric, pad to 2 digits (03). If not numeric (e.g. "comp"), leave as-is.
-      const pickDisplay = /^\d+$/.test(pick) ? pad2(pick) : pick;
-      return `${round}.${pickDisplay}`;
-    }
-    if (round) return `R${round}`;
-    return pick ?? '—';
-  }
 
   async function fetchSleeperNames(missingIds) {
     if (!missingIds || !missingIds.length) return {};
@@ -343,28 +317,19 @@
     (teams || []).forEach(t => {
       const keyRaw = t.identifier ?? t.mfl_id ?? t.sleeper_roster_id ?? '';
       if (keyRaw === null || keyRaw === undefined || keyRaw === '') return;
-
-      // MFL uses 4-digit franchise IDs; Sleeper roster IDs are often not 4-digit.
-      // We still pad numeric-looking values for MFL; otherwise keep as-is.
-      const keyStr = String(keyRaw);
-      const key = /^\d+$/.test(keyStr) ? pad4(keyStr) : keyStr;
-
-      teamMap[key] = t.name || keyStr;
+      const key = pad4(keyRaw);
+      teamMap[key] = t.name || pad4(keyRaw);
     });
 
     const rows = (picks || []).map(p => {
-      const origRaw = (p && p.original_team !== undefined && p.original_team !== null) ? String(p.original_team) : '';
-      const origKey = /^\d+$/.test(origRaw) ? pad4(origRaw) : origRaw;
-      const orig = teamMap[origKey] || origRaw || '—';
-
-      const season = (p && p.season !== undefined && p.season !== null && String(p.season) !== '') ? p.season : '—';
-      const pickLabel = formatPickLabel(p);
-
+      const fid = pad4(p.original_team || '');
+      const orig = teamMap[fid] || fid;
       return `
         <tr>
-          <td style="width:80px;">${escapeHtml(season)}</td>
-          <td style="width:90px;">${escapeHtml(pickLabel)}</td>
-          <td>${escapeHtml(orig)}</td>
+          <td style="width:70px;">${p.season ?? '—'}</td>
+          <td style="width:70px;">R${p.round ?? '—'}</td>
+          <td style="width:90px;">${p.pick_number ?? '—'}</td>
+          <td>${escapeHtml(orig ?? '—')}</td>
         </tr>
       `;
     }).join('');
@@ -374,14 +339,10 @@
         <h4 style="margin: 8px 0 6px;">My Draft Picks</h4>
         <table class="picks-table">
           <thead>
-            <tr>
-              <th style="width:80px;">Season</th>
-              <th style="width:90px;">Pick</th>
-              <th>Original Team</th>
-            </tr>
+            <tr><th style="width:70px;">Season</th><th style="width:70px;">Round</th><th style="width:90px;">Pick</th><th>Original Team</th></tr>
           </thead>
           <tbody>
-            ${rows || '<tr><td colspan="3" style="padding:10px;">No draft picks loaded.</td></tr>'}
+            ${rows || '<tr><td colspan="4" style="padding:10px;">No draft picks loaded.</td></tr>'}
           </tbody>
         </table>
       </div>
