@@ -1,6 +1,7 @@
 # services/mfl_parsers.py
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional, Any
@@ -8,12 +9,18 @@ from urllib.parse import urlparse
 
 
 # ---------- Data containers returned by parsers -----------------------------
+# Picks are normalized to: (season, round, pick_number_1based_or_none, original_team_fid)
+# - round is ALWAYS 1-based (round 1 == 1)
+# - pick_number (when present) is ALWAYS 1-based (pick 1 == 1, pick 3 == 3)
+# - future picks often have no pick_number => None
+DraftPickT = Tuple[int, int, Optional[int], Optional[str]]
+
 
 @dataclass
 class FranchiseAssets:
     franchise_id: str
     player_ids: List[int]
-    future_picks: List[Tuple[int, int, str]]  # (season, round, original_team)
+    draft_picks: List[DraftPickT]
 
 
 @dataclass
@@ -38,7 +45,7 @@ class FranchiseMeta:
 class TradeSide:
     franchise_id: str
     player_ids: List[int]
-    future_picks: List[Tuple[int, int, str]]
+    draft_picks: List[DraftPickT]
     faab: Optional[float]
 
 
@@ -82,6 +89,132 @@ def _host_only(url: str | None) -> str | None:
         return url.replace("https://", "").replace("http://", "").split("/", 1)[0]
     except Exception:
         return None
+
+
+def _desc_from(el: ET.Element) -> str:
+    """MFL varies: sometimes 'description', sometimes 'desc', sometimes the element text."""
+    return (el.get("description") or el.get("desc") or (el.text or "")).strip()
+
+
+# ---------- Draft pick parsing helpers --------------------------------------
+
+# DP description example: "Year 2026 Draft Pick 1.03"
+# IMPORTANT:
+# - round is 1-based
+# - pick-in-round is 1-based (1.03 => pick_number = 3)
+_DP_DESC_RE = re.compile(
+    r"Year\s+(?P<year>\d{4}).*?\b(?P<round>\d+)\.(?P<pick>\d+)\b",
+    re.IGNORECASE,
+)
+
+# DP token example: "DP_0_2" where:
+#   round_index=0 => round=1
+#   pick_index=2  => pick_number=3 (1-based for storage/display)
+_DP_TOKEN_RE = re.compile(r"^DP_(?P<round_idx>\d+)_(?P<pick_idx>\d+)$", re.IGNORECASE)
+
+# FP token example: "FP_0001_2027_1" (future pick with no pick number)
+_FP_TOKEN_RE = re.compile(r"^FP_(?P<orig>\d{1,4})_(?P<year>\d{4})_(?P<round>\d+)$", re.IGNORECASE)
+
+
+def _parse_dp_from_description(desc: str) -> Optional[DraftPickT]:
+    """
+    Returns (season, round, pick_number_1based, original_team=None) for DP description-style picks.
+    """
+    if not desc:
+        return None
+    m = _DP_DESC_RE.search(desc)
+    if not m:
+        return None
+    season = _safe_int(m.group("year"), 0)
+    rnd = _safe_int(m.group("round"), 0)
+    pick_1based = _safe_int(m.group("pick"), 0)
+
+    # Store pick_number as 1-based (3 for "1.03")
+    if season and rnd and pick_1based > 0:
+        return (season, rnd, pick_1based, None)
+    if season and rnd:
+        # If somehow pick isn't present/valid, keep None
+        return (season, rnd, None, None)
+    return None
+
+
+def _parse_dp_from_token(token: str, desc: str = "", default_year: Optional[int] = None) -> Optional[DraftPickT]:
+    """
+    Returns (season, round, pick_number_1based, original_team=None) for DP tokens.
+
+    Uses:
+      - token DP_<roundIdx>_<pickIdx> (0-based indices)
+      - year from description when available, else default_year when provided
+
+    Storage contract:
+      - round is 1-based
+      - pick_number is 1-based
+    """
+    if not token:
+        return None
+
+    # Prefer extracting year from description if available
+    season = None
+    if desc:
+        d = _parse_dp_from_description(desc)
+        if d:
+            season = d[0]
+
+    if season is None and default_year:
+        season = int(default_year)
+
+    m = _DP_TOKEN_RE.match(token.strip())
+    if not m:
+        # If token doesn't parse but description does, use that.
+        if desc:
+            d = _parse_dp_from_description(desc)
+            if d:
+                return d
+        return None
+
+    rnd_idx = _safe_int(m.group("round_idx"), -1)
+    pick_idx = _safe_int(m.group("pick_idx"), -1)
+    if rnd_idx < 0 or pick_idx < 0:
+        return None
+
+    rnd = rnd_idx + 1
+    pick_1based = pick_idx + 1  # IMPORTANT: store 1-based
+
+    if season and rnd:
+        return (int(season), int(rnd), int(pick_1based), None)
+
+    # If we still couldn't resolve season, fall back to description parsing
+    if desc:
+        d = _parse_dp_from_description(desc)
+        if d:
+            return d
+
+    return None
+
+
+def _parse_fp_from_token(token: str, desc: str = "") -> Optional[DraftPickT]:
+    """
+    Returns (season, round, pick_number=None, original_team) for FP style picks.
+
+    IMPORTANT:
+    - future picks typically do not include pick-in-round, so pick_number stays None
+    """
+    if not token:
+        return None
+
+    m = _FP_TOKEN_RE.match(token.strip())
+    if m:
+        orig = _fid(m.group("orig"))
+        season = _safe_int(m.group("year"), 0)
+        rnd = _safe_int(m.group("round"), 0)
+        if season and rnd:
+            return (season, rnd, None, orig or None)
+
+    # fallback: sometimes token isn't in FP_* format; try to infer from description
+    dp = _parse_dp_from_description(desc or "")
+    if dp:
+        return dp
+    return None
 
 
 # ---------- User leagues (discovery) ----------------------------------------
@@ -272,7 +405,12 @@ def _extract_ir_slots(root: ET.Element) -> Optional[int]:
             if iv is not None:
                 return iv
 
-    ir = root.find(".//injuredReserve") or root.find(".//injured_reserve") or root.find(".//injuryReserve") or root.find(".//injuryreserve")
+    ir = (
+        root.find(".//injuredReserve")
+        or root.find(".//injured_reserve")
+        or root.find(".//injuryReserve")
+        or root.find(".//injuryreserve")
+    )
     if ir is not None:
         for key in ("limit", "max", "count"):
             iv = _try_int(ir.get(key))
@@ -287,6 +425,9 @@ def _extract_ir_slots(root: ET.Element) -> Optional[int]:
 def parse_assets(xml_bytes: bytes) -> List[FranchiseAssets]:
     root = ET.fromstring(xml_bytes)
     result: List[FranchiseAssets] = []
+
+    # Try to infer season default from the payload (best-effort)
+    default_year = _safe_int(root.get("year") or root.get("season") or 0, 0) or None
 
     for fr in root.findall(".//franchise"):
         fid = fr.get("id")
@@ -306,28 +447,45 @@ def parse_assets(xml_bytes: bytes) -> List[FranchiseAssets]:
                 except ValueError:
                     continue
 
-        picks: List[Tuple[int, int, str]] = []
-        picks_el = fr.find("futureYearDraftPicks")
-        if picks_el is not None:
-            for de in picks_el.findall("draftPick"):
-                pick_str = de.get("pick", "")
-                parts = pick_str.split("_")
-                if len(parts) >= 4:
-                    orig = _fid(parts[1])
-                    season = _safe_int(parts[2], 0)
-                    rnd = _safe_int(parts[3], 0)
-                    if season and rnd:
-                        picks.append((season, rnd, orig))
+        picks: List[DraftPickT] = []
 
-        result.append(FranchiseAssets(franchise_id=fid, player_ids=player_ids, future_picks=picks))
+        # 1) currentYearDraftPicks
+        curr_el = fr.find("currentYearDraftPicks")
+        if curr_el is not None:
+            for de in curr_el.findall("draftPick"):
+                token = de.get("pick") or ""
+                desc = _desc_from(de)
+                parsed = None
+                if token and str(token).upper().startswith("DP_"):
+                    parsed = _parse_dp_from_token(token, desc=desc, default_year=default_year)
+                if not parsed:
+                    parsed = _parse_dp_from_description(desc)
+                if parsed:
+                    picks.append(parsed)
+
+        # 2) futureYearDraftPicks
+        fut_el = fr.find("futureYearDraftPicks")
+        if fut_el is not None:
+            for de in fut_el.findall("draftPick"):
+                token = de.get("pick", "") or ""
+                desc = _desc_from(de)
+                parsed = _parse_fp_from_token(token, desc=desc)
+                if parsed:
+                    picks.append(parsed)
+
+        result.append(FranchiseAssets(franchise_id=fid, player_ids=player_ids, draft_picks=picks))
 
     return result
 
 
 # ---------- Fallback parsers ------------------------------------------------
 
-def parse_future_picks_fallback(picks_xml: Optional[bytes]) -> Dict[str, List[Tuple[int, int, str]]]:
-    result: Dict[str, List[Tuple[int, int, str]]] = {}
+def parse_future_picks_fallback(picks_xml: Optional[bytes]) -> Dict[str, List[DraftPickT]]:
+    """
+    Older endpoint fallback that only provides future picks.
+    We normalize to DraftPickT with pick_number=None.
+    """
+    result: Dict[str, List[DraftPickT]] = {}
     if not picks_xml:
         return result
 
@@ -336,13 +494,13 @@ def parse_future_picks_fallback(picks_xml: Optional[bytes]) -> Dict[str, List[Tu
         fid = _fid(fr.get("id"))
         if not fid:
             continue
-        lst: List[Tuple[int, int, str]] = []
+        lst: List[DraftPickT] = []
         for pe in fr.findall(".//futureDraftPick"):
             season = _safe_int(pe.get("year"), 0)
             rnd = _safe_int(pe.get("round"), 0)
             orig = _fid(pe.get("originalPickFor") or pe.get("originalpickfor") or pe.get("original_pick_for") or "")
             if season and rnd and orig:
-                lst.append((season, rnd, orig))
+                lst.append((season, rnd, None, orig))
         result[fid] = lst
     return result
 
@@ -366,21 +524,23 @@ def parse_rosters_fallback(rosters_xml: bytes, picks_xml: Optional[bytes] = None
                     player_ids.append(int(pid))
                 except Exception:
                     continue
-        assets[fid] = FranchiseAssets(franchise_id=fid, player_ids=player_ids, future_picks=[])
+        assets[fid] = FranchiseAssets(franchise_id=fid, player_ids=player_ids, draft_picks=[])
 
     for fid, picks in picks_by_fid.items():
         fa = assets.get(fid)
         if not fa:
-            fa = FranchiseAssets(franchise_id=fid, player_ids=[], future_picks=[])
+            fa = FranchiseAssets(franchise_id=fid, player_ids=[], draft_picks=[])
             assets[fid] = fa
-        normalized: List[Tuple[int, int, str]] = []
-        for season, rnd, orig in picks:
+        normalized: List[DraftPickT] = []
+        for season, rnd, pick_no, orig in picks:
             season_i = _safe_int(season, 0)
             rnd_i = _safe_int(rnd, 0)
-            orig_s = _fid(orig)
-            if season_i and rnd_i and orig_s:
-                normalized.append((season_i, rnd_i, orig_s))
-        fa.future_picks = normalized
+            orig_s = _fid(orig) if orig else None
+            # pick_no is expected None for future picks; if present, treat it as already 1-based
+            pn_i = _safe_int(pick_no, 0) if pick_no is not None else None
+            if season_i and rnd_i:
+                normalized.append((season_i, rnd_i, pn_i if pick_no is not None else None, orig_s))
+        fa.draft_picks = normalized
 
     return [assets[k] for k in sorted(assets.keys())]
 
@@ -420,27 +580,36 @@ def parse_standings(xml_bytes: bytes) -> List[StandingRow]:
 
 # ---------- Pending trades ---------------------------------------------------
 
-def parse_pending_trades(xml_bytes: bytes) -> List[PendingTrade]:
+def parse_pending_trades(xml_bytes: bytes, *, default_year: Optional[int] = None) -> List[PendingTrade]:
     root = ET.fromstring(xml_bytes)
     out: List[PendingTrade] = []
 
-    def _parse_asset_tokens(csv: str) -> tuple[List[int], List[Tuple[int, int, str]]]:
+    # Best-effort season default for DP tokens with no description:
+    # 1) caller-supplied default_year (best)
+    # 2) root attr year/season (sometimes absent on pendingTrades)
+    # 3) None => DP picks without year are ignored (safer than inventing)
+    inferred = _safe_int(root.get("year") or root.get("season") or 0, 0) or None
+    season_default = int(default_year) if default_year else inferred
+
+    def _parse_asset_tokens(csv: str) -> tuple[List[int], List[DraftPickT]]:
         players: List[int] = []
-        picks: List[Tuple[int, int, str]] = []
+        picks: List[DraftPickT] = []
         if not csv:
             return players, picks
         for tok in str(csv).split(","):
             tok = tok.strip()
             if not tok:
                 continue
-            if tok.upper().startswith("FP_"):
-                parts = tok.split("_")
-                if len(parts) >= 4:
-                    orig = _fid(parts[1])
-                    season = _safe_int(parts[2], 0)
-                    rnd = _safe_int(parts[3], 0)
-                    if season and rnd and orig:
-                        picks.append((season, rnd, orig))
+            up = tok.upper()
+            if up.startswith("FP_"):
+                parsed = _parse_fp_from_token(tok, desc="")
+                if parsed:
+                    picks.append(parsed)
+                continue
+            if up.startswith("DP_"):
+                parsed = _parse_dp_from_token(tok, desc="", default_year=season_default)
+                if parsed:
+                    picks.append(parsed)
                 continue
             try:
                 players.append(int(tok))
@@ -488,21 +657,63 @@ def parse_pending_trades(xml_bytes: bytes) -> List[PendingTrade]:
                         except Exception:
                             pass
 
-                picks: List[Tuple[int, int, str]] = []
-                for de in side.findall(".//draftPicks/draftPick") + side.findall(".//futureDraftPick"):
+                picks: List[DraftPickT] = []
+
+                # Collect pick elements from multiple possible locations.
+                pick_els: list[ET.Element] = []
+                pick_els.extend(side.findall(".//draftPicks/draftPick"))
+                pick_els.extend(side.findall(".//futureDraftPick"))
+                pick_els.extend(side.findall(".//draftPick"))  # catches current-year DP_... in some leagues
+
+                # De-dupe
+                seen = set()
+                uniq: list[ET.Element] = []
+                for el in pick_els:
+                    oid = id(el)
+                    if oid in seen:
+                        continue
+                    seen.add(oid)
+                    uniq.append(el)
+
+                for de in uniq:
+                    # Explicit future-pick fields
                     season = _safe_int(de.get("year"), 0)
                     rnd = _safe_int(de.get("round"), 0)
-                    orig = _fid(de.get("originalPickFor") or de.get("originalpickfor") or de.get("original_pick_for") or "")
-                    if not (season and rnd and orig):
-                        pick_token = de.get("pick")
-                        if pick_token:
-                            parts = str(pick_token).split("_")
-                            if len(parts) >= 4:
-                                orig = _fid(parts[1])
-                                season = _safe_int(parts[2], 0)
-                                rnd = _safe_int(parts[3], 0)
+                    orig_raw = de.get("originalPickFor") or de.get("originalpickfor") or de.get("original_pick_for") or ""
+                    orig = _fid(orig_raw) if orig_raw not in (None, "") else ""
                     if season and rnd and orig:
-                        picks.append((season, rnd, orig))
+                        picks.append((season, rnd, None, orig))
+                        continue
+
+                    # Token-based picks
+                    pick_token = de.get("pick") or de.get("id") or ""
+                    desc = _desc_from(de)
+                    if pick_token:
+                        up = str(pick_token).upper()
+                        if up.startswith("FP_"):
+                            parsed = _parse_fp_from_token(str(pick_token), desc=desc)
+                            if parsed:
+                                picks.append(parsed)
+                        elif up.startswith("DP_"):
+                            parsed = _parse_dp_from_token(str(pick_token), desc=desc, default_year=season_default)
+                            if parsed:
+                                picks.append(parsed)
+                        else:
+                            parsed = _parse_dp_from_description(desc)
+                            if parsed:
+                                picks.append(parsed)
+                    else:
+                        parsed = _parse_dp_from_description(desc)
+                        if parsed:
+                            picks.append(parsed)
+
+                # Some formats include CSV assets
+                give_csv = side.get("will_give_up") or side.get("willGiveUp") or ""
+                recv_csv = side.get("will_receive") or side.get("willReceive") or ""
+                if give_csv or recv_csv:
+                    extra_players, extra_picks = _parse_asset_tokens(give_csv)
+                    player_ids.extend(extra_players)
+                    picks.extend(extra_picks)
 
                 faab: Optional[float] = None
                 bb = side.find(".//blindBidDollars")
@@ -513,8 +724,9 @@ def parse_pending_trades(xml_bytes: bytes) -> List[PendingTrade]:
                     except Exception:
                         faab = None
 
-                sides.append(TradeSide(franchise_id=fid, player_ids=player_ids, future_picks=picks, faab=faab))
+                sides.append(TradeSide(franchise_id=fid, player_ids=player_ids, draft_picks=picks, faab=faab))
 
+        # (rest unchanged)
         if not sides and offer is None:
             for fr_side in tr.findall("./franchise"):
                 fid = _fid(fr_side.get("id"))
@@ -539,25 +751,60 @@ def parse_pending_trades(xml_bytes: bytes) -> List[PendingTrade]:
                         except Exception:
                             pass
 
-                picks: List[Tuple[int, int, str]] = []
-                for de in (
-                    give.findall(".//draftPicks/draftPick")
-                    + give.findall(".//futureDraftPick")
-                    + give.findall("./draftPick")
-                ):
+                picks: List[DraftPickT] = []
+
+                pick_els: list[ET.Element] = []
+                pick_els.extend(give.findall(".//draftPicks/draftPick"))
+                pick_els.extend(give.findall(".//futureDraftPick"))
+                pick_els.extend(give.findall("./draftPick"))
+                pick_els.extend(give.findall(".//draftPick"))
+
+                seen = set()
+                uniq: list[ET.Element] = []
+                for el in pick_els:
+                    oid = id(el)
+                    if oid in seen:
+                        continue
+                    seen.add(oid)
+                    uniq.append(el)
+
+                for de in uniq:
                     season = _safe_int(de.get("year"), 0)
                     rnd = _safe_int(de.get("round"), 0)
-                    orig = _fid(de.get("originalPickFor") or de.get("originalpickfor") or de.get("original_pick_for") or "")
-                    if not (season and rnd and orig):
-                        pick_token = de.get("pick")
-                        if pick_token:
-                            parts = str(pick_token).split("_")
-                            if len(parts) >= 4:
-                                orig = _fid(parts[1])
-                                season = _safe_int(parts[2], 0)
-                                rnd = _safe_int(parts[3], 0)
+                    orig_raw = de.get("originalPickFor") or de.get("originalpickfor") or de.get("original_pick_for") or ""
+                    orig = _fid(orig_raw) if orig_raw not in (None, "") else ""
                     if season and rnd and orig:
-                        picks.append((season, rnd, orig))
+                        picks.append((season, rnd, None, orig))
+                        continue
+
+                    pick_token = de.get("pick") or de.get("id") or ""
+                    desc = _desc_from(de)
+                    if pick_token:
+                        up = str(pick_token).upper()
+                        if up.startswith("FP_"):
+                            parsed = _parse_fp_from_token(str(pick_token), desc=desc)
+                            if parsed:
+                                picks.append(parsed)
+                        elif up.startswith("DP_"):
+                            parsed = _parse_dp_from_token(str(pick_token), desc=desc, default_year=season_default)
+                            if parsed:
+                                picks.append(parsed)
+                        else:
+                            parsed = _parse_dp_from_description(desc)
+                            if parsed:
+                                picks.append(parsed)
+                    else:
+                        parsed = _parse_dp_from_description(desc)
+                        if parsed:
+                            picks.append(parsed)
+
+                # CSV fallback on franchise
+                give_csv = fr_side.get("will_give_up") or fr_side.get("willGiveUp") or ""
+                recv_csv = fr_side.get("will_receive") or fr_side.get("willReceive") or ""
+                if give_csv or recv_csv:
+                    extra_players, extra_picks = _parse_asset_tokens(give_csv)
+                    player_ids.extend(extra_players)
+                    picks.extend(extra_picks)
 
                 faab: Optional[float] = None
                 bb = give.find(".//blindBidDollars") or fr_side.find(".//blindBidDollars")
@@ -569,7 +816,7 @@ def parse_pending_trades(xml_bytes: bytes) -> List[PendingTrade]:
                         faab = None
 
                 if player_ids or picks or faab is not None:
-                    sides.append(TradeSide(franchise_id=fid, player_ids=player_ids, future_picks=picks, faab=faab))
+                    sides.append(TradeSide(franchise_id=fid, player_ids=player_ids, draft_picks=picks, faab=faab))
 
         if not sides:
             proposer = _fid(tr.get("offeringteam") or tr.get("offeringTeam") or "")
@@ -589,8 +836,8 @@ def parse_pending_trades(xml_bytes: bytes) -> List[PendingTrade]:
                 p_players, p_picks = _parse_asset_tokens(give_csv)
                 o_players, o_picks = _parse_asset_tokens(recv_csv)
 
-                sides.append(TradeSide(franchise_id=proposed_by, player_ids=p_players, future_picks=p_picks, faab=None))
-                sides.append(TradeSide(franchise_id=offered_to, player_ids=o_players, future_picks=o_picks, faab=None))
+                sides.append(TradeSide(franchise_id=proposed_by, player_ids=p_players, draft_picks=p_picks, faab=None))
+                sides.append(TradeSide(franchise_id=offered_to, player_ids=o_players, draft_picks=o_picks, faab=None))
 
         comments: List[Dict[str, str]] = []
         com_block = tr.find("./comments")

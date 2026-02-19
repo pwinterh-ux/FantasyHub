@@ -156,56 +156,56 @@
   </div>
 </div>
 
-
-
-  <div class="tile pad dark" style="margin-top:8px;">
-    <div class="responsive-table" style="overflow-x:auto;">
-      <table style="width:100%; border-collapse:separate; border-spacing:0 8px; color:#eaf1f7;">
-        <thead>
-          <tr style="text-align:left; opacity:.9;">
-            <th style="padding:10px;">League</th>
-            <th style="padding:10px;">Season</th>
-            <th style="padding:10px;">My Team</th>
-            <th style="padding:10px;">Record</th>
-            <th style="padding:10px;">Standing</th>
-            <th style="padding:10px;">Starters</th>
+<div class="tile pad dark" style="margin-top:8px;">
+  <div class="responsive-table" style="overflow-x:auto;">
+    <table style="width:100%; border-collapse:separate; border-spacing:0 8px; color:#eaf1f7;">
+      <thead>
+        <tr style="text-align:left; opacity:.9;">
+          <th style="padding:10px;">League</th>
+          <th style="padding:10px;">Season</th>
+          <th style="padding:10px;">My Team</th>
+          <th style="padding:10px;">Record</th>
+          <th style="padding:10px;">Standing</th>
+          <th style="padding:10px;">Starters</th>
+        </tr>
+      </thead>
+      <tbody id="leagues-tbody">
+        {% for league in leagues %}
+          <tr class="league-row"
+              data-league-row="{{ league.key }}"
+              data-platform="{{ league.platform }}"
+              data-db-id="{{ league.db_id }}"
+              data-league-name="{{ league.name }}"
+              data-league-year="{{ league.season }}"
+              data-external-id="{{ league.external_id or '' }}"
+              data-mfl-id="{{ league.external_id if league.platform == 'mfl' else '' }}"
+              data-details-url="{{ league.details_url }}"
+              data-submit-url="{{ league.submit_url or '' }}"
+              data-delete-url="{{ league.delete_url or '' }}"
+              style="
+                background: radial-gradient(120% 120% at 10% 0%, rgba(12,14,18,.86), rgba(8,10,12,.9));
+                color:#eaf1f7;
+                border:1px solid rgba(255,255,255,.12);
+                border-radius:12px;
+                box-shadow: 0 8px 22px rgba(0,0,0,.25);
+              ">
+            <td style="padding:14px; border-top-left-radius:12px; border-bottom-left-radius:12px; font-weight:600; cursor:pointer;">
+              {{ league.name }}
+              <div style="font-size: 12px; opacity:.8;">
+                {{ league.platform_label }}{% if league.external_id %}: {{ league.external_id }}{% endif %}
+              </div>
+            </td>
+            <td style="padding:14px; cursor:pointer;">{{ league.season or '—' }}</td>
+            <td style="padding:14px; cursor:pointer;">{{ league.my_team_name or '—' }}</td>
+            <td style="padding:14px; cursor:pointer;">{{ league.my_team_record or '—' }}</td>
+            <td style="padding:14px; cursor:pointer;">{% if league.my_team_standing is not none %}{{ league.my_team_standing }}{% else %}—{% endif %}</td>
+            <td style="padding:14px; border-top-right-radius:12px; border-bottom-right-radius:12px; cursor:pointer;">
+              <span class="roster-slots" data-raw="{{ league.roster_slots_display or '' }}">{{ league.roster_slots_display or 'Not set' }}</span>
+            </td>
           </tr>
-        </thead>
-        <tbody id="leagues-tbody">
-          {% for league in leagues %}
-            <tr class="league-row"
-                data-league-row="{{ league.key }}"
-                data-platform="{{ league.platform }}"
-                data-db-id="{{ league.db_id }}"
-                data-league-name="{{ league.name }}"
-                data-league-year="{{ league.season }}"
-                data-external-id="{{ league.external_id or '' }}"
-                data-mfl-id="{{ league.external_id if league.platform == 'mfl' else '' }}"
-                data-details-url="{{ league.details_url }}"
-                data-submit-url="{{ league.submit_url or '' }}"
-                style="
-                  background: radial-gradient(120% 120% at 10% 0%, rgba(12,14,18,.86), rgba(8,10,12,.9));
-                  color:#eaf1f7;
-                  border:1px solid rgba(255,255,255,.12);
-                  border-radius:12px;
-                  box-shadow: 0 8px 22px rgba(0,0,0,.25);
-                ">
-              <td style="padding:14px; border-top-left-radius:12px; border-bottom-left-radius:12px; font-weight:600; cursor:pointer;">
-                {{ league.name }}
-                <div style="font-size: 12px; opacity:.8;">{{ league.platform_label }}{% if league.external_id %}: {{ league.external_id }}{% endif %}</div>
-              </td>
-              <td style="padding:14px; cursor:pointer;">{{ league.season or '—' }}</td>
-              <td style="padding:14px; cursor:pointer;">{{ league.my_team_name or '—' }}</td>
-              <td style="padding:14px; cursor:pointer;">{{ league.my_team_record or '—' }}</td>
-              <td style="padding:14px; cursor:pointer;">{% if league.my_team_standing is not none %}{{ league.my_team_standing }}{% else %}—{% endif %}</td>
-              <td style="padding:14px; border-top-right-radius:12px; border-bottom-right-radius:12px; cursor:pointer;">
-                <span class="roster-slots" data-raw="{{ league.roster_slots_display or '' }}">{{ league.roster_slots_display or 'Not set' }}</span>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 
@@ -215,8 +215,44 @@
   const playersLookupUrl = "{{ url_for('leagues.players_lookup') }}";
   const baseOffersSearch = "{{ url_for('offers.search') }}";
 
-  // ---------- details view helpers (unchanged) ----------
+  function escapeHtml(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // ---------- details view helpers ----------
   function pad4(x){ x = String(x || ''); return x.padStart(4, '0'); }
+  function pad2(x){ x = String(x ?? ''); return x.padStart(2, '0'); }
+
+  // Draft pick formatter:
+  // - Prefer overall_pick if present (future-proof), else pick_number
+  // - Show round.pick (e.g., 1.03) when both exist
+  // - If only round exists, show R1
+  // - If nothing exists, show —
+  function formatPickLabel(p){
+    if (!p) return '—';
+    const round = (p.round !== undefined && p.round !== null && String(p.round) !== '') ? String(p.round) : null;
+
+    let pick = null;
+    if (p.overall_pick !== undefined && p.overall_pick !== null && String(p.overall_pick) !== '') {
+      pick = String(p.overall_pick);
+    } else if (p.pick_number !== undefined && p.pick_number !== null && String(p.pick_number) !== '') {
+      pick = String(p.pick_number);
+    }
+
+    if (round && pick) {
+      // If pick is numeric, pad to 2 digits (03). If not numeric (e.g. "comp"), leave as-is.
+      const pickDisplay = /^\d+$/.test(pick) ? pad2(pick) : pick;
+      return `${round}.${pickDisplay}`;
+    }
+    if (round) return `R${round}`;
+    return pick ?? '—';
+  }
+
   async function fetchSleeperNames(missingIds) {
     if (!missingIds || !missingIds.length) return {};
     const url = `${playersLookupUrl}?platform=sleeper&ids=${encodeURIComponent(missingIds.join(','))}`;
@@ -226,12 +262,14 @@
       return await res.json();
     } catch { return {}; }
   }
+
   function closeOpenDetails(exceptLeagueId) {
     document.querySelectorAll('tr.details-row').forEach(tr => {
       const lid = tr.getAttribute('data-for-league');
       if (!exceptLeagueId || String(lid) !== String(exceptLeagueId)) tr.remove();
     });
   }
+
   function standingsRows(teams, myFranchise) {
     return (teams || []).map((t, idx) => {
       const identifier = t.identifier ?? t.mfl_id;
@@ -240,14 +278,15 @@
       return `
         <tr class="${mine ? 'is-mine' : ''}">
           <td style="width:56px;">${rank}</td>
-          <td>${t.name || '—'}</td>
-          <td>${t.record || '—'}</td>
+          <td>${escapeHtml(t.name || '—')}</td>
+          <td>${escapeHtml(t.record || '—')}</td>
           <td>${t.points_for ?? '—'}</td>
           <td>${t.points_against ?? '—'}</td>
         </tr>
       `;
     }).join('');
   }
+
   function renderRoster(roster) {
     const order = { QB: 0, RB: 1, WR: 2, TE: 3, FLEX: 4, 'WR/RB': 5, 'WR/RB/TE': 6, SF: 7, 'SUPER_FLEX': 7, K: 8, DEF: 9 };
     const items = (roster || []).slice().sort((a,b) => {
@@ -261,7 +300,7 @@
       if (sa !== sb) return sa - sb;
       const an = a.name || a.player_id || '';
       const bn = b.name || b.player_id || '';
-      return an.localeCompare(bn);
+      return String(an).localeCompare(String(bn));
     });
 
     let lastPos = null;
@@ -269,13 +308,13 @@
       const pos = (r.position || '').toUpperCase();
       const groupStart = lastPos !== null && pos !== lastPos ? 'group-start' : '';
       lastPos = pos;
-      const team = r.team ? `<span class="mini" style="margin-left:6px;white-space:nowrap;">— ${r.team}</span>` : '';
+      const team = r.team ? `<span class="mini" style="margin-left:6px;white-space:nowrap;">— ${escapeHtml(r.team)}</span>` : '';
       const sellQuery = r.name || r.player_id || '';
       const sellHref = `${baseOffersSearch}?q=${encodeURIComponent(sellQuery)}&mode=sell`;
-      const displayName = r.name || r.player_id || '—';
+      const displayName = escapeHtml(r.name || r.player_id || '—');
       return `
         <tr class="${groupStart}">
-          <td style="width:64px;"><span class="pos-chip">${pos || '—'}</span></td>
+          <td style="width:64px;"><span class="pos-chip">${escapeHtml(pos || '—')}</span></td>
           <td>${displayName} ${team}</td>
           <td style="width:100px;">
             <a class="btn-ghost btn-compact" href="${sellHref}">Sell</a>
@@ -298,24 +337,34 @@
       </div>
     `;
   }
+
   function renderPicks(picks, teams) {
     const teamMap = {};
     (teams || []).forEach(t => {
       const keyRaw = t.identifier ?? t.mfl_id ?? t.sleeper_roster_id ?? '';
       if (keyRaw === null || keyRaw === undefined || keyRaw === '') return;
-      const key = pad4(keyRaw);
-      teamMap[key] = t.name || pad4(keyRaw);
+
+      // MFL uses 4-digit franchise IDs; Sleeper roster IDs are often not 4-digit.
+      // We still pad numeric-looking values for MFL; otherwise keep as-is.
+      const keyStr = String(keyRaw);
+      const key = /^\d+$/.test(keyStr) ? pad4(keyStr) : keyStr;
+
+      teamMap[key] = t.name || keyStr;
     });
 
     const rows = (picks || []).map(p => {
-      const fid = pad4(p.original_team || '');
-      const orig = teamMap[fid] || fid;
+      const origRaw = (p && p.original_team !== undefined && p.original_team !== null) ? String(p.original_team) : '';
+      const origKey = /^\d+$/.test(origRaw) ? pad4(origRaw) : origRaw;
+      const orig = teamMap[origKey] || origRaw || '—';
+
+      const season = (p && p.season !== undefined && p.season !== null && String(p.season) !== '') ? p.season : '—';
+      const pickLabel = formatPickLabel(p);
+
       return `
         <tr>
-          <td style="width:70px;">${p.season}</td>
-          <td style="width:70px;">R${p.round}</td>
-          <td style="width:90px;">${p.pick_number ?? '—'}</td>
-          <td>${orig}</td>
+          <td style="width:80px;">${escapeHtml(season)}</td>
+          <td style="width:90px;">${escapeHtml(pickLabel)}</td>
+          <td>${escapeHtml(orig)}</td>
         </tr>
       `;
     }).join('');
@@ -325,19 +374,25 @@
         <h4 style="margin: 8px 0 6px;">My Draft Picks</h4>
         <table class="picks-table">
           <thead>
-            <tr><th style="width:70px;">Season</th><th style="width:70px;">Round</th><th style="width:90px;">Pick</th><th>Original Team</th></tr>
+            <tr>
+              <th style="width:80px;">Season</th>
+              <th style="width:90px;">Pick</th>
+              <th>Original Team</th>
+            </tr>
           </thead>
           <tbody>
-            ${rows || '<tr><td colspan="4" style="padding:10px;">No draft picks loaded.</td></tr>'}
+            ${rows || '<tr><td colspan="3" style="padding:10px;">No draft picks loaded.</td></tr>'}
           </tbody>
         </table>
       </div>
     `;
   }
+
   async function toggleDetails(rowEl) {
     const leagueId = rowEl.getAttribute('data-league-row');
     const url = rowEl.getAttribute('data-details-url');
     const submitUrl = rowEl.getAttribute('data-submit-url');
+    const deleteUrl = rowEl.getAttribute('data-delete-url');
 
     const existing = document.querySelector(`tr.details-row[data-for-league="${leagueId}"]`);
     if (existing) { existing.remove(); return; }
@@ -401,15 +456,18 @@
       if (synced && synced !== '—') metaParts.push(`Last sync: ${synced}`);
       const metaLine = metaParts.join(' • ');
 
+      const leagueNameSafe = escapeHtml((data.league && data.league.name) ? data.league.name : '');
+
       td.innerHTML = `
         <div class="details-panel">
           <div class="details-top">
             <div class="details-header">
-              <h3>${data.league.name}</h3>
-              <span class="mini">${metaLine || ''}</span>
+              <h3>${leagueNameSafe}</h3>
+              <span class="mini">${escapeHtml(metaLine || '')}</span>
             </div>
-            <div>
+            <div style="display:flex; gap:8px; align-items:center;">
               ${submitUrl ? `<a href="${submitUrl}" class="btn-ghost btn-compact" title="Submit lineup for this league">Submit Lineup</a>` : ''}
+              ${deleteUrl ? `<button type="button" class="btn-ghost btn-compact js-delete-league" data-delete-url="${deleteUrl}" data-league-name="${leagueNameSafe}" title="Delete this league from the database">Delete League</button>` : ''}
             </div>
           </div>
 
@@ -433,7 +491,7 @@
             </div>
             <div>
               <div style="margin-bottom:8px;">
-                <strong>Lineup:</strong> ${slots}
+                <strong>Lineup:</strong> ${escapeHtml(slots)}
               </div>
               ${renderRoster(roster)}
               ${renderPicks(data.my_draft_picks, teams)}
@@ -446,11 +504,48 @@
       td.innerHTML = `<div class="details-panel">Could not load league details. Please try again.</div>`;
     }
   }
+
   if (tbody) {
+    // Expand/collapse on row click, but ignore clicks on action controls
     tbody.addEventListener('click', (e) => {
+      if (e.target.closest('button, a, .js-delete-league')) return;
       const row = e.target.closest('tr.league-row');
       if (!row) return;
       toggleDetails(row);
+    });
+
+    // Delete handler (MFL only; controlled by deleteUrl presence)
+    tbody.addEventListener('click', async (e) => {
+      const deleteBtn = e.target.closest('.js-delete-league');
+      if (!deleteBtn) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const deleteUrl = deleteBtn.getAttribute('data-delete-url');
+      const leagueName = deleteBtn.getAttribute('data-league-name') || 'this league';
+      if (!deleteUrl) return;
+
+      const confirmed = window.confirm(`Delete ${leagueName} from the database? This removes teams, rosters, and picks too.`);
+      if (!confirmed) return;
+
+      const priorLabel = deleteBtn.textContent;
+      deleteBtn.disabled = true;
+      deleteBtn.textContent = 'Deleting…';
+
+      try {
+        const res = await fetch(deleteUrl, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Accept': 'application/json' }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || 'Delete failed');
+        window.location.reload();
+      } catch (err) {
+        alert(err?.message || 'Unable to delete league. Please try again.');
+        deleteBtn.disabled = false;
+        deleteBtn.textContent = priorLabel;
+      }
     });
   }
 
@@ -466,7 +561,6 @@
   const leagueLabel = document.getElementById('syncLeagueLabel');
   const phaseLabel = document.getElementById('syncPhaseLabel');
   const detail = document.getElementById('syncDetail');
-  const progressWrap = document.getElementById('syncProgress');
   const progressBar = document.getElementById('syncProgressBar');
   const retryBtn = document.getElementById('syncRetry');
   const cancelBtn = document.getElementById('syncCancel');
@@ -478,6 +572,7 @@
 
   function disableLink(){ if (refreshLink){ refreshLink.setAttribute('aria-disabled','true'); refreshLink.classList.add('is-disabled'); } }
   function restoreLink(){ if (refreshLink){ refreshLink.removeAttribute('aria-disabled'); refreshLink.classList.remove('is-disabled'); } }
+
   function resetActions(){
     if (!retryBtn || !cancelBtn) return;
     retryBtn.style.display = 'none';
@@ -486,11 +581,13 @@
     cancelBtn.onclick = null;
     cancelBtn.textContent = 'Cancel';
   }
+
   function updateProgress(done, total){
     if (!progressBar) return;
     const pct = total ? Math.min(100, Math.round((done/total)*100)) : 0;
     progressBar.style.width = pct + '%';
   }
+
   function promptRetry(message, allowRetry){
     return new Promise(resolve => {
       spinner.style.display = 'none';
@@ -518,7 +615,7 @@
       if (!mflId || seen.has(mflId)) continue;
       seen.add(mflId);
       out.push({
-        id: mflId,                 // MFL league id string
+        id: mflId,
         year: row.getAttribute('data-league-year') || '',
         name: row.getAttribute('data-league-name') || `MFL ${mflId}`,
         display: `MFL — ${row.getAttribute('data-league-name') || 'League'} (${mflId})`
@@ -528,7 +625,6 @@
   }
 
   async function runMflAssetsPhase(league){
-    // Robust: send both league_id and mfl_id; many backends accept either.
     const body = new URLSearchParams();
     body.append('league_id', league.id);
     body.append('mfl_id', league.id);
@@ -582,8 +678,7 @@
 
   async function runSleeperAssetsPhase(league){
     const body = new URLSearchParams();
-    body.append('league_id', league.id); // DB id for SleeperLeague
-    // sleeper endpoint doesn’t need 'phase'; it runs a full assets sync
+    body.append('league_id', league.id);
     if (league.year !== undefined && league.year !== null && String(league.year) !== '') {
       body.append('year', league.year);
     }
@@ -624,9 +719,7 @@
       disableLink();
 
       try {
-        // Collect MFL from table, then Sleeper from API
         const mflLeagues = gatherMflFromTable();
-        // choose a year hint for Sleeper list (use most common season in table or current year)
         const firstRow = document.querySelector('tr.league-row');
         const yearHint = firstRow ? (firstRow.getAttribute('data-league-year') || '') : '';
         const sleeperLeagues = await fetchSleeperSaved(yearHint);
@@ -635,10 +728,8 @@
         let done = 0;
         updateProgress(0, Math.max(1,total));
 
-        // NOTE: run MFL first, then Sleeper. Swap order if you want Sleeper first.
-        if (mflLeagues.length) {
-          headline.textContent = 'Refreshing MFL assets…';
-        }
+        if (mflLeagues.length) headline.textContent = 'Refreshing MFL assets…';
+
         for (let i=0; i<mflLeagues.length; ) {
           const lg = mflLeagues[i];
           leagueLabel.textContent = lg.display;
@@ -669,9 +760,8 @@
           }
         }
 
-        if (sleeperLeagues.length) {
-          headline.textContent = 'Refreshing Sleeper assets…';
-        }
+        if (sleeperLeagues.length) headline.textContent = 'Refreshing Sleeper assets…';
+
         for (let j=0; j<sleeperLeagues.length; ) {
           const lg = sleeperLeagues[j];
           leagueLabel.textContent = lg.display;

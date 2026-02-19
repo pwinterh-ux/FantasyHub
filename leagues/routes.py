@@ -10,7 +10,9 @@ from flask import (
     Blueprint,
     abort,
     current_app,
+    flash,
     jsonify,
+    redirect,
     render_template,
     request,
     url_for,
@@ -38,6 +40,7 @@ class LeagueRow:
     my_team_standing: int | None
     details_url: str
     submit_url: str | None
+    delete_url: str | None
     platform_label: str
 
 
@@ -200,6 +203,28 @@ def _reflect_table(name: str) -> Table | None:
         current_app.logger.debug("Unable to reflect table %s", name, exc_info=True)
         db.session.rollback()
         return None
+
+
+def _delete_mfl_leagues_with_children(leagues: Sequence[League]) -> int:
+    """Delete MFL leagues and dependent team/roster/pick rows."""
+    removed = 0
+    for league in leagues:
+        team_ids = [
+            tid
+            for (tid,) in db.session.query(Team.id)
+            .filter(Team.league_id == league.id)
+            .all()
+        ]
+        if team_ids:
+            Roster.query.filter(Roster.team_id.in_(team_ids)).delete(synchronize_session=False)
+            DraftPick.query.filter(DraftPick.team_id.in_(team_ids)).delete(synchronize_session=False)
+            Team.query.filter(Team.id.in_(team_ids)).delete(synchronize_session=False)
+
+        db.session.delete(league)
+        db.session.flush()
+        removed += 1
+
+    return removed
 
 
 # ---------- Sleeper helpers ----------
@@ -384,6 +409,7 @@ def my_leagues():
                 my_team_standing=getattr(my_team, "standing", None) if my_team else None,
                 details_url=url_for("leagues.league_details_json", platform="mfl", league_id=lg.id),
                 submit_url=url_for("lineups.lineups_single_league", league_id=lg.id, next=request.url),
+                delete_url=url_for("leagues.delete_mfl_league", league_id=lg.id),
                 platform_label=_compose_platform_label("mfl"),
             )
         )
@@ -443,12 +469,46 @@ def my_leagues():
                 my_team_standing=my_standing,
                 details_url=url_for("leagues.league_details_json", platform="sleeper", league_id=league_pk),
                 submit_url=None,
+                delete_url=None,
                 platform_label=_compose_platform_label("sleeper"),
             )
         )
 
     rows.sort(key=lambda r: (-(r.season or 0) if isinstance(r.season, (int, float)) else 0, (r.name or "").lower()))
     return render_template("my_leagues.html", leagues=rows)
+
+
+@leagues_bp.route("/mfl/<int:league_id>/delete", methods=["POST"])
+@login_required
+def delete_mfl_league(league_id: int):
+    league = League.query.filter_by(id=league_id, user_id=current_user.id).first()
+    if not league:
+        if "application/json" in (request.headers.get("Accept") or "").lower():
+            return jsonify({"ok": False, "error": "League not found"}), 404
+        abort(404)
+
+    league_name = league.name
+    try:
+        _delete_mfl_leagues_with_children([league])
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception(
+            "delete_mfl_league failed for league=%s user=%s: %s",
+            league_id,
+            current_user.id,
+            exc,
+        )
+        if "application/json" in (request.headers.get("Accept") or "").lower():
+            return jsonify({"ok": False, "error": "Unable to delete league."}), 500
+        flash("Unable to delete league. Please try again.", "danger")
+        return redirect(url_for("leagues.my_leagues"))
+
+    if "application/json" in (request.headers.get("Accept") or "").lower():
+        return jsonify({"ok": True, "league_id": league_id, "league_name": league_name})
+
+    flash(f"Deleted league {league_name}.", "success")
+    return redirect(url_for("leagues.my_leagues"))
 
 
 @leagues_bp.route("/<platform>/<int:league_id>/details.json", methods=["GET"])
