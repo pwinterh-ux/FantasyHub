@@ -358,6 +358,104 @@ def preview_offers():
         if skipped:
             flash(f"Skipped (no picks selected): {', '.join(skipped)}", "info")
 
+    elif mode == "sell" and template_code == "sell_current_for_future":
+        try:
+            recv_round = int(request.form.get("sell_future_round") or "0")
+        except Exception:
+            recv_round = 0
+        if recv_round not in {1, 2, 3, 4}:
+            flash("Invalid future round.", "warning")
+            return redirect(url_for("offers.search"))
+
+        lids: List[str] = []
+        for key in request.form.keys():
+            m = re.match(r"buyer_(\d+)$", key)
+            if m:
+                lids.append(m.group(1))
+        lids = list(dict.fromkeys(lids))
+        if len(lids) != 1:
+            flash("Please select exactly one league for SELL offers.", "warning")
+            return redirect(url_for("offers.search"))
+
+        lid = lids[0]
+        lg = League.query.filter_by(user_id=current_user.id, mfl_id=str(lid)).first()
+        if not lg:
+            flash("League not found.", "warning")
+            return redirect(url_for("offers.search"))
+        my_team = _my_team_for_league(lg)
+        if not my_team:
+            flash("Your franchise in this league isn’t set.", "warning")
+            return redirect(url_for("offers.search"))
+
+        my_pick_id = request.form.get(f"sell_current_give_pick_{lid}")
+        if not my_pick_id:
+            flash("Select one current-year pick to sell.", "warning")
+            return redirect(url_for("offers.search"))
+        my_pick_row = DraftPick.query.get(my_pick_id)
+        if not my_pick_row or my_pick_row.team_id != my_team.id:
+            flash("Invalid pick selection.", "warning")
+            return redirect(url_for("offers.search"))
+
+        my_fid = str(my_team.mfl_id).zfill(4) if my_team.mfl_id is not None else None
+        my_pick_token = _draftpick_to_token(my_pick_row, league_year=lg.year, fallback_orig_fid=my_fid)
+        if not my_pick_token:
+            flash("Could not encode your pick.", "warning")
+            return redirect(url_for("offers.search"))
+
+        buyer_team_ids = request.form.getlist(f"buyer_{lid}")
+        if not buyer_team_ids:
+            flash("Select at least one buyer team.", "warning")
+            return redirect(url_for("offers.search"))
+
+        fnames, frecords = _league_maps(lg)
+        host = (lg.league_host or "").strip() or "api.myfantasyleague.com"
+        skipped_buyers: List[str] = []
+
+        for bt in buyer_team_ids:
+            buyer_team = Team.query.get(bt)
+            if not buyer_team or buyer_team.league_id != lg.id:
+                continue
+
+            pick_ids = _extract_sell_picks_for_buyer(request.form, str(lid), str(buyer_team.id))
+            buyer_fid = str(buyer_team.mfl_id).zfill(4) if buyer_team.mfl_id is not None else None
+            will_recv = _draftpick_tokens_from_ids(
+                pick_ids,
+                league_year=lg.year,
+                fallback_orig_fid=buyer_fid,
+            )
+            will_recv = [tok for tok in will_recv if tok.startswith("FP_")]
+
+            if not will_recv:
+                skipped_buyers.append(buyer_team.name or f"FID {buyer_team.mfl_id}")
+                continue
+
+            will_give = [my_pick_token]
+            give_names = {my_pick_token: _fmt_pick(my_pick_token, lg.year, fnames, frecords)}
+            recv_names = {tok: _fmt_pick(tok, lg.year, fnames, frecords) for tok in will_recv}
+
+            pending.append({
+                "host": host,
+                "league_id": lg.mfl_id,
+                "league_name": lg.name,
+                "year": lg.year,
+                "offered_by_fid": my_team.mfl_id,
+                "offered_by_name": fnames.get(str(my_team.mfl_id).zfill(4), str(my_team.mfl_id)),
+                "offered_by_record": frecords.get(str(my_team.mfl_id).zfill(4), ""),
+                "offered_to_fid": buyer_team.mfl_id,
+                "offered_to_name": fnames.get(str(buyer_team.mfl_id).zfill(4), str(buyer_team.mfl_id)),
+                "offered_to_record": frecords.get(str(buyer_team.mfl_id).zfill(4), ""),
+                "will_give_up": will_give,
+                "will_receive": will_recv,
+                "will_give_up_names": give_names,
+                "will_receive_names": recv_names,
+                "expires_unix": _now_utc_ts() + 7*24*3600,
+                "comments": "",
+            })
+            count += 1
+
+        if skipped_buyers:
+            flash(f"Skipped buyer(s) with no future picks selected: {', '.join(skipped_buyers)}", "info")
+
     elif mode == "sell" and template_code != "upgrade":
         lids: List[str] = []
         for key in request.form.keys():

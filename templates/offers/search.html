@@ -20,6 +20,7 @@
     box-shadow: 0 6px 18px rgba(16,185,129,.35);
     text-decoration:none; display:inline-block;
   }
+  .btn[disabled] { opacity:.5; cursor:not-allowed; box-shadow:none; }
   .btn-ghost {
     background: #0f172a; color:#e2e8f0; border:1px solid rgba(255,255,255,.08);
     border-radius:10px; padding:10px 14px; text-decoration:none;
@@ -37,6 +38,29 @@
   }
   .results { margin-top:6px; border-top:1px dashed rgba(255,255,255,.12); padding-top:8px; }
   .hint { font-size:12px; opacity:.8; }
+
+  /* tabs */
+  .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .tab-btn{
+    background:#0b1220;
+    border:1px solid rgba(255,255,255,.12);
+    color:#e2e8f0;
+    padding:10px 12px;
+    border-radius:10px;
+    cursor:pointer;
+    font-weight:800;
+    text-decoration:none;
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+  }
+  .tab-btn[aria-selected="true"]{
+    background: rgba(16,185,129,.12);
+    border-color: rgba(16,185,129,.45);
+    box-shadow: 0 6px 18px rgba(16,185,129,.18);
+  }
+  .tab-panel{ display:none; }
+  .tab-panel.active{ display:block; }
 </style>
 
 <div class="hud-wrap">
@@ -46,102 +70,178 @@
     <div class="row">
       <div>
         <h2 class="hdr">Trade Builder</h2>
-        <div class="muted" style="margin-top:4px;">Pick a player, then choose Buy/Sell and a template.</div>
+        <div class="muted" style="margin-top:4px;">
+          Choose a workflow: player-based offers, or pick-for-pick.
+        </div>
       </div>
       <a href="{{ url_for('offers.search') }}" class="btn-ghost">Reset</a>
     </div>
   </div>
 
-  <!-- Search + options tile (darkened) -->
+  <!-- Main tile -->
   <div class="tile pad dark">
 
-    <!-- Search bar (always visible) -->
-    <form method="GET" action="{{ url_for('offers.search') }}" style="margin:0 0 12px;">
-      <div class="field">
-        <label for="q">Player</label>
-        <input id="q" name="q" class="input" type="text" value="{{ q or '' }}" placeholder="Search player by name…" autocomplete="off" style="flex:1;">
-        <button type="submit" class="btn">Search</button>
-      </div>
-      <div class="hint" style="margin-top:6px;">Type a few letters (max 50 results). Choose from the dropdown after searching.</div>
-    </form>
+    <!-- Tabs -->
+    <div class="tabs" role="tablist" aria-label="Trade Builder Tabs">
+      <button class="tab-btn" id="tab-player" role="tab" aria-selected="true" aria-controls="panel-player" type="button">
+        Buy/Sell Player
+      </button>
+      <button class="tab-btn" id="tab-pick" role="tab" aria-selected="false" aria-controls="panel-pick" type="button">
+        Sell Current Pick for Future Pick
+      </button>
+    </div>
 
-    <!-- Build form: hidden until results exist -->
-    {% if players and players|length > 0 %}
-    <form id="build-form" method="POST" action="{{ url_for('offers.search') }}" style="margin:0; display:block;">
+    <!-- ========== TAB 1: Player workflow ========== -->
+    <div id="panel-player" class="tab-panel active" role="tabpanel" aria-labelledby="tab-player">
 
-      <!-- player dropdown (compact) -->
-      <div class="results">
+      <!-- Search bar -->
+      <form method="GET" action="{{ url_for('offers.search') }}" style="margin:0 0 12px;">
         <div class="field">
-          <label for="player_id">Choose</label>
-          <select id="player_id" name="player_id" class="input" style="flex:1; min-width:280px;">
-            {% for p in players %}
-              <option value="{{ p.id }}">{{ p.name }} — ID {{ p.id }}</option>
+          <label for="q">Player</label>
+          <input id="q" name="q" class="input" type="text" value="{{ q or '' }}" placeholder="Search player by name…" autocomplete="off" style="flex:1;">
+          <button type="submit" class="btn">Search</button>
+        </div>
+        <div class="hint" style="margin-top:6px;">Type a few letters (max 50 results). Choose from the dropdown after searching.</div>
+      </form>
+
+      {% if players and players|length > 0 %}
+      <form id="build-form-player" method="POST" action="{{ url_for('offers.search') }}" style="margin:0;">
+
+        <div class="results">
+          <div class="field">
+            <label for="player_id">Choose</label>
+            <select id="player_id" name="player_id" class="input" style="flex:1; min-width:280px;">
+              {% for p in players %}
+                <option value="{{ p.id }}">{{ p.name }} — ID {{ p.id }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <!-- mode -->
+        <div class="field" id="mode-row" style="margin-top:12px;">
+          <label>Mode</label>
+          <label style="display:inline-flex;align-items:center;gap:6px;">
+            <input type="radio" name="mode" value="buy" {% if request.args.get('mode','buy') == 'buy' %}checked{% endif %}> Buy
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:6px;">
+            <input type="radio" name="mode" value="sell" {% if request.args.get('mode') == 'sell' %}checked{% endif %}> Sell
+          </label>
+        </div>
+
+        <!-- template -->
+        <div class="field" id="template-row" style="margin-top:6px;">
+          <label>Template</label>
+          <select id="template_code" name="template_code">
+            {% for code, label, _req in price_templates %}
+              <option value="{{ code }}">{{ label }}</option>
+            {% endfor %}
+            <option value="upgrade" data-sell-only="1">Pick Upgrade (give round ➜ receive round)</option>
+          </select>
+          <span class="pill" id="upgrade-pill" style="display:none;">Pick Upgrade</span>
+        </div>
+
+        <!-- upgrade controls -->
+        <div class="field" id="upgrade-controls-row" style="margin-top:6px; display:none;">
+          <label></label>
+          <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+            <label>Give round
+              <select name="upgrade_give_round" id="upgrade_give_round" style="margin-left:6px;">
+                <option value="1">1st</option>
+                <option value="2" selected>2nd</option>
+                <option value="3">3rd</option>
+                <option value="4">4th</option>
+              </select>
+            </label>
+            <label>Receive round
+              <select name="upgrade_recv_round" id="upgrade_recv_round" style="margin-left:6px;">
+                <option value="1" selected>1st</option>
+                <option value="2">2nd</option>
+                <option value="3">3rd</option>
+                <option value="4">4th</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:12px;">
+          <div>
+            <div class="muted hint">Choose a player, set mode and template, then build offers.</div>
+            <div class="muted hint">Note: Early/Mid/Late templates only use current-year draft picks.</div>
+          </div>
+          <button type="submit" class="btn">Build Offers</button>
+        </div>
+      </form>
+      {% else %}
+        <div class="muted hint">Search for a player to unlock the buy/sell player options.</div>
+      {% endif %}
+    </div>
+
+    <!-- ========== TAB 2: Pick-for-pick workflow ========== -->
+    <div id="panel-pick" class="tab-panel" role="tabpanel" aria-labelledby="tab-pick">
+
+      <form id="build-form-pick" method="POST" action="{{ url_for('offers.search') }}" style="margin:0;">
+        <!-- hidden flag so backend knows this is pick-for-pick -->
+        <input type="hidden" name="sell_current_for_future" value="1">
+
+        <div class="field" style="margin-top:6px;">
+          <label>Current-year pick</label>
+          <select name="sell_current_pick_code" id="sell_current_pick_code" class="input">
+            {% for code, label in sell_current_pick_options %}
+              <option value="{{ code }}" {% if loop.first %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
+
+          <label style="min-width:auto;">Future round</label>
+          <select name="sell_future_round" id="sell_future_round" class="input">
+            <option value="1" selected>1st</option>
+            <option value="2">2nd</option>
+            <option value="3">3rd</option>
+            <option value="4">4th</option>
+          </select>
         </div>
-      </div>
 
-      <!-- mode -->
-      <div class="field" style="margin-top:12px;">
-        <label>Mode</label>
-        <label style="display:inline-flex;align-items:center;gap:6px;">
-          <input type="radio" name="mode" value="buy" {% if request.args.get('mode','buy') == 'buy' %}checked{% endif %}> Buy
-        </label>
-        <label style="display:inline-flex;align-items:center;gap:6px;">
-          <input type="radio" name="mode" value="sell" {% if request.args.get('mode') == 'sell' %}checked{% endif %}> Sell
-        </label>
-      </div>
-
-      <!-- template (row 1) -->
-      <div class="field" style="margin-top:6px;">
-        <label>Template</label>
-        <select id="template_code" name="template_code">
-          {% for code, label, _req in price_templates %}
-            <option value="{{ code }}">{{ label }}</option>
-          {% endfor %}
-          <option value="upgrade" data-sell-only="1">Pick Upgrade (give round ➜ receive round)</option>
-        </select>
-        <span class="pill" id="upgrade-pill" style="display:none;">Pick Upgrade</span>
-      </div>
-
-      <!-- template (row 2) — upgrade controls on a NEW LINE -->
-      <div class="field" id="upgrade-controls-row" style="margin-top:6px; display:none;">
-        <label></label> <!-- spacer to align under "Template" -->
-        <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-          <label>Give round
-            <select name="upgrade_give_round" id="upgrade_give_round" style="margin-left:6px;">
-              <option value="1">1st</option>
-              <option value="2" selected>2nd</option>
-              <option value="3">3rd</option>
-              <option value="4">4th</option>
-            </select>
-          </label>
-          <label>Receive round
-            <select name="upgrade_recv_round" id="upgrade_recv_round" style="margin-left:6px;">
-              <option value="1" selected>1st</option>
-              <option value="2">2nd</option>
-              <option value="3">3rd</option>
-              <option value="4">4th</option>
-            </select>
-          </label>
+        <div class="row" style="margin-top:12px;">
+          <div>
+            <div class="muted hint">Pick-for-pick mode builds offers without selecting a player.</div>
+          </div>
+          <button type="submit" class="btn">Build Offers</button>
         </div>
-      </div>
+      </form>
+    </div>
 
-      <div class="row" style="margin-top:12px;">
-        <div>
-          <div class="muted hint">Choose a player, set mode and template, then build offers.</div>
-          <div class="muted hint">Note: Early/Mid/Late templates only use current-year draft picks.</div>
-        </div>
-        <button type="submit" class="btn">Build Offers</button>
-      </div>
-    </form>
-    {% endif %}
   </div>
 </div>
 
 <script>
 (function() {
-  const modeEls = Array.from(document.querySelectorAll('input[name="mode"]'));
+  // -------- Tabs --------
+  const tabPlayer = document.getElementById('tab-player');
+  const tabPick   = document.getElementById('tab-pick');
+  const panelPlayer = document.getElementById('panel-player');
+  const panelPick   = document.getElementById('panel-pick');
+
+  function activateTab(which) {
+    const isPlayer = which === 'player';
+
+    tabPlayer.setAttribute('aria-selected', isPlayer ? 'true' : 'false');
+    tabPick.setAttribute('aria-selected', isPlayer ? 'false' : 'true');
+
+    panelPlayer.classList.toggle('active', isPlayer);
+    panelPick.classList.toggle('active', !isPlayer);
+
+    // optional: set URL hash so refresh keeps the tab
+    window.location.hash = isPlayer ? '#player' : '#pick';
+  }
+
+  tabPlayer && tabPlayer.addEventListener('click', () => activateTab('player'));
+  tabPick && tabPick.addEventListener('click', () => activateTab('pick'));
+
+  // initialize from hash
+  if (window.location.hash === '#pick') activateTab('pick');
+
+  // -------- Player tab: upgrade logic (unchanged behavior) --------
+  const modeEls = Array.from(document.querySelectorAll('#build-form-player input[name="mode"]'));
   const templateSel = document.getElementById('template_code');
   const upRow = document.getElementById('upgrade-controls-row');
   const upPill = document.getElementById('upgrade-pill');
@@ -154,12 +254,12 @@
   }
 
   function syncUpgradeVisibility() {
-    if (!templateSel) return; // form is hidden when no results
+    if (!templateSel) return; // player form not rendered until search results exist
     const isUpgrade = templateSel.value === 'upgrade';
     const visible = isSell() && isUpgrade;
 
-    upRow.style.display = visible ? 'flex' : 'none';
-    upPill.style.display = visible ? 'inline-block' : 'none';
+    if (upRow) upRow.style.display = visible ? 'flex' : 'none';
+    if (upPill) upPill.style.display = visible ? 'inline-block' : 'none';
     if (giveSel) giveSel.toggleAttribute('required', visible);
     if (recvSel) recvSel.toggleAttribute('required', visible);
 
