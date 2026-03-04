@@ -289,15 +289,36 @@
 
   function renderRoster(roster) {
     const order = { QB: 0, RB: 1, WR: 2, TE: 3, FLEX: 4, 'WR/RB': 5, 'WR/RB/TE': 6, SF: 7, 'SUPER_FLEX': 7, K: 8, DEF: 9 };
+
+    // NOTE: Sort is now:
+    // 1) position group order
+    // 2) within position: consensus positional rank (r.position_rank) ascending, NULLs last
+    // 3) tie-breaker: starters first
+    // 4) tie-breaker: name
     const items = (roster || []).slice().sort((a,b) => {
       const pa = (a.position || '').toUpperCase();
       const pb = (b.position || '').toUpperCase();
+
       const oa = (pa in order) ? order[pa] : 99;
       const ob = (pb in order) ? order[pb] : 99;
       if (oa !== ob) return oa - ob;
+
+      const ra = (a.position_rank === null || a.position_rank === undefined || a.position_rank === '') ? null : Number(a.position_rank);
+      const rb = (b.position_rank === null || b.position_rank === undefined || b.position_rank === '') ? null : Number(b.position_rank);
+
+      // NULL ranks last
+      const na = (ra === null || Number.isNaN(ra)) ? 1 : 0;
+      const nb = (rb === null || Number.isNaN(rb)) ? 1 : 0;
+      if (na !== nb) return na - nb;
+
+      // rank ascending
+      if (ra !== null && rb !== null && ra !== rb) return ra - rb;
+
+      // starters first (tie-break)
       const sa = a.is_starter ? 0 : 1;
       const sb = b.is_starter ? 0 : 1;
       if (sa !== sb) return sa - sb;
+
       const an = a.name || a.player_id || '';
       const bn = b.name || b.player_id || '';
       return String(an).localeCompare(String(bn));
@@ -312,9 +333,11 @@
       const sellQuery = r.name || r.player_id || '';
       const sellHref = `${baseOffersSearch}?q=${encodeURIComponent(sellQuery)}&mode=sell`;
       const displayName = escapeHtml(r.name || r.player_id || '—');
+      const rankLabel = (r.position_rank === null || r.position_rank === undefined || r.position_rank === '') ? 'NULL' : String(r.position_rank);
+
       return `
         <tr class="${groupStart}">
-          <td style="width:64px;"><span class="pos-chip">${escapeHtml(pos || '—')}</span></td>
+          <td style="width:90px;"><span class="pos-chip">${(pos || '—') + rankLabel}</span></td>
           <td>${displayName} ${team}</td>
           <td style="width:100px;">
             <a class="btn-ghost btn-compact" href="${sellHref}">Sell</a>
@@ -328,7 +351,7 @@
         <h4 style="margin: 8px 0 6px;">My Roster</h4>
         <table class="roster-table">
           <thead>
-            <tr><th style="width:64px;">Pos</th><th>Player</th><th style="width:100px;">Action</th></tr>
+            <tr><th style="width:90px;">Pos/Rank</th><th>Player</th><th style="width:100px;">Action</th></tr>
           </thead>
           <tbody>
             ${rows || '<tr><td colspan="3" style="padding:10px;">No roster loaded.</td></tr>'}
