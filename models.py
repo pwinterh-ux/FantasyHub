@@ -480,3 +480,101 @@ class NflSchedule(db.Model):
     def __repr__(self) -> str:
         h = "H" if self.is_home else "A"
         return f"<NflSchedule {self.year} W{self.week} {self.team} vs {self.opponent} {h}>"
+
+
+# ----- Dynasty Ranks (current only) -----------------------------------------
+
+class DynastyRankSourceCurrent(db.Model):
+    __tablename__ = "dynasty_rank_source_current"
+    __table_args__ = (
+        db.UniqueConstraint("source", "position", "mfl_id", name="uq_dynasty_rank_source_current_key"),
+        db.Index("ix_dynasty_rank_source_current_source_position_rank", "source", "position", "source_rank"),
+        db.Index("ix_dynasty_rank_source_current_position_rank", "position", "source_rank"),
+        db.Index("ix_dynasty_rank_source_current_mfl", "mfl_id"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    source = db.Column(db.String(40), nullable=False, index=True)  # e.g. fantasycalc
+    position = db.Column(db.String(10), nullable=False, index=True)  # QB/RB/WR/TE
+    mfl_id = db.Column(db.String(20), nullable=False, index=True)
+
+    player_name = db.Column(db.String(120), nullable=True)
+    source_rank = db.Column(db.Integer, nullable=True)
+    source_value = db.Column(db.Float, nullable=True)
+
+    updated_at_utc = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    def __repr__(self) -> str:
+        return f"<DynastyRankSourceCurrent {self.source} {self.position} mfl:{self.mfl_id} r:{self.source_rank}>"
+
+
+class DynastyRankConsensusCurrent(db.Model):
+    __tablename__ = "dynasty_rank_consensus_current"
+    __table_args__ = (
+        db.UniqueConstraint("position", "mfl_id", name="uq_dynasty_rank_consensus_current_key"),
+        db.Index("ix_dynasty_rank_consensus_current_position_rank", "position", "consensus_rank"),
+        db.Index("ix_dynasty_rank_consensus_current_position_positional_rank", "position", "positional_rank"),
+        db.Index("ix_dynasty_rank_consensus_current_mfl", "mfl_id"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    position = db.Column(db.String(10), nullable=False, index=True)
+    mfl_id = db.Column(db.String(20), nullable=False, index=True)
+
+    player_name = db.Column(db.String(120), nullable=True)
+    consensus_rank = db.Column(db.Float, nullable=True)
+    positional_rank = db.Column(db.Integer, nullable=True)
+    sources_used = db.Column(db.Integer, nullable=False, default=1)
+
+    updated_at_utc = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<DynastyRankConsensusCurrent {self.position} mfl:{self.mfl_id} "
+            f"c:{self.consensus_rank} p:{self.positional_rank}>"
+        )
+
+
+class DynastyRankIngestAudit(db.Model):
+    __tablename__ = "dynasty_rank_ingest_audit"
+    __table_args__ = (
+        db.Index("ix_dynasty_rank_ingest_audit_source_started", "source", "started_at_utc"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    source = db.Column(db.String(40), nullable=False, index=True)  # e.g. fantasycalc
+
+    started_at_utc = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    finished_at_utc = db.Column(db.DateTime, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="running")  # success/partial/failed
+
+    qb_count = db.Column(db.Integer, nullable=False, default=0)
+    rb_count = db.Column(db.Integer, nullable=False, default=0)
+    wr_count = db.Column(db.Integer, nullable=False, default=0)
+    te_count = db.Column(db.Integer, nullable=False, default=0)
+
+    error_summary = db.Column(db.Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<DynastyRankIngestAudit {self.id} {self.source} {self.status}>"
+
+
+class DynastyRankMapOverride(db.Model):
+    __tablename__ = "dynasty_rank_map_overrides"
+    __table_args__ = (
+        db.UniqueConstraint("source", "position", "source_name_norm", name="uq_dynasty_rank_map_override_key"),
+        db.Index("ix_dynasty_rank_map_override_source_pos", "source", "position"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    source = db.Column(db.String(40), nullable=False, index=True)
+    position = db.Column(db.String(10), nullable=False, index=True)
+    source_name_norm = db.Column(db.String(160), nullable=False, index=True)
+    source_name_raw = db.Column(db.String(160), nullable=True)
+    mapped_mfl_id = db.Column(db.String(20), nullable=False, index=True)
+    notes = db.Column(db.String(255), nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    updated_at_utc = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    def __repr__(self) -> str:
+        return f"<DynastyRankMapOverride {self.source} {self.position} {self.source_name_norm} -> {self.mapped_mfl_id}>"

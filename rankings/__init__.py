@@ -1,0 +1,1 @@
+"""Rankings source adapters."""

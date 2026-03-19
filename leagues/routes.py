@@ -21,7 +21,7 @@ from flask_login import login_required, current_user
 from sqlalchemy import MetaData, Table, asc, or_, select
 
 from app import db
-from models import League, Team, Player, Roster, DraftPick
+from models import League, Team, Player, Roster, DraftPick, DynastyRankConsensusCurrent
 
 leagues_bp = Blueprint("leagues", __name__, url_prefix="/leagues")
 
@@ -549,7 +549,22 @@ def _league_details_json_mfl(league_id: int):
                 .order_by(asc(Player.position), asc(Player.name))
                 .all()
             )
+            mfl_ids = [str(p.mfl_id) for _, p in rows if p.mfl_id]
+            positions = [str(p.position).upper() for _, p in rows if p.position]
+            consensus_by_key: dict[tuple[str, str], DynastyRankConsensusCurrent] = {}
+            if mfl_ids:
+                consensus_rows = (
+                    DynastyRankConsensusCurrent.query
+                    .filter(DynastyRankConsensusCurrent.mfl_id.in_(mfl_ids))
+                    .filter(DynastyRankConsensusCurrent.position.in_(positions))
+                    .all()
+                )
+                consensus_by_key = {
+                    (str(c.position).upper(), str(c.mfl_id)): c for c in consensus_rows
+                }
             for r, p in rows:
+                lookup_key = (str(p.position).upper(), str(p.mfl_id)) if (p.position and p.mfl_id) else None
+                consensus = consensus_by_key.get(lookup_key) if lookup_key else None
                 roster_items.append({
                     "player_id": p.id,
                     "mfl_id": p.mfl_id,
@@ -557,6 +572,7 @@ def _league_details_json_mfl(league_id: int):
                     "position": p.position,
                     "team": p.team,
                     "status": p.status,
+                    "position_rank": (consensus.positional_rank if consensus else None),
                     "is_starter": bool(r.is_starter),
                 })
 
