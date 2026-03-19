@@ -95,6 +95,19 @@ PICK_RANGE_BY_TEMPLATE: Dict[str, Tuple[int, str]] = {
     "late2nd": (2, "late"),
 }
 
+SELL_CURRENT_FOR_FUTURE_CODE = "sell_current_for_future"
+SELL_CURRENT_PICK_OPTIONS: List[Tuple[str, str]] = [
+    ("early1st", "Early 1st"),
+    ("mid1st", "Mid 1st"),
+    ("late1st", "Late 1st"),
+    ("early2nd", "Early 2nd"),
+    ("mid2nd", "Mid 2nd"),
+    ("late2nd", "Late 2nd"),
+    ("3rd", "3rd"),
+    ("4th", "4th"),
+]
+SELL_CURRENT_PICK_LABELS: Dict[str, str] = dict(SELL_CURRENT_PICK_OPTIONS)
+
 
 def _default_mfl_year() -> int:
     # Flip to 2026 when MFL year rolls
@@ -217,6 +230,36 @@ def _filter_picks_for_template(
     return filtered
 
 
+def _filter_current_year_pick_sell_give(
+    picks_by_round: Dict[int, List[DraftPick]],
+    team_count: int,
+    give_code: str,
+    current_year: int,
+) -> List[DraftPick]:
+    if give_code in PICK_RANGE_BY_TEMPLATE:
+        target_round, tier = PICK_RANGE_BY_TEMPLATE[give_code]
+        start_pick, end_pick = _pick_range_bounds(max(1, team_count), tier)
+    else:
+        mapping = {"3rd": 3, "4th": 4}
+        target_round = mapping.get(give_code)
+        if not target_round:
+            return []
+        start_pick, end_pick = 1, max(1, team_count)
+
+    out: List[DraftPick] = []
+    for dp in picks_by_round.get(int(target_round), []):
+        try:
+            season = int(dp.season or 0)
+            pn = int(dp.pick_number or 0)
+        except Exception:
+            continue
+        if season != int(current_year):
+            continue
+        if start_pick <= pn <= end_pick:
+            out.append(dp)
+    return out
+
+
 def _session_key(mode: str, player_id: int, template_code: str) -> str:
     return f"tb_sent::{mode}::{player_id}::{template_code}"
 
@@ -322,9 +365,31 @@ def search():
     # If user started a new search, wipe per-session 'sent' contexts
     if request.method == "POST":
         _clear_sent_contexts()
+        is_current_for_future = (request.form.get("sell_current_for_future") or "").strip() == "1"
         player_id = request.form.get("player_id", "").strip()
         mode = (request.form.get("mode") or "buy").lower()
         template_code = request.form.get("template_code") or "2nd"  # default
+
+        if is_current_for_future:
+            give_code = (request.form.get("sell_current_pick_code") or "").strip()
+            recv_round = (request.form.get("sell_future_round") or "").strip()
+            if give_code not in SELL_CURRENT_PICK_LABELS:
+                flash("Choose which current-year pick you are selling.", "warning")
+                return redirect(url_for("offers.search"))
+            try:
+                recv_round_i = int(recv_round)
+            except Exception:
+                recv_round_i = 0
+            if recv_round_i not in {1, 2, 3, 4}:
+                flash("Choose a valid future round to receive.", "warning")
+                return redirect(url_for("offers.search"))
+            return redirect(url_for(
+                "offers.build",
+                mode="sell",
+                template_code=SELL_CURRENT_FOR_FUTURE_CODE,
+                sell_current_pick_code=give_code,
+                sell_future_round=recv_round_i,
+            ))
 
         if not player_id:
             flash("Pick a player from the search results.", "warning")
@@ -370,6 +435,7 @@ def search():
         q=q,
         players=players,
         price_templates=PRICE_TEMPLATES,
+        sell_current_pick_options=SELL_CURRENT_PICK_OPTIONS,
     )
 
 
@@ -393,6 +459,11 @@ def build():
         player_id = 0
     mode = (request.args.get("mode") or "buy").lower()
     template_code = request.args.get("template_code") or "2nd"
+    sell_current_pick_code = (request.args.get("sell_current_pick_code") or "").strip()
+    try:
+        sell_future_round = int(request.args.get("sell_future_round") or "0")
+    except Exception:
+        sell_future_round = 0
 
     # Upgrade-specific params (from Offers page)
     upgrade_give_round: Optional[int] = None
@@ -408,15 +479,27 @@ def build():
             upgrade_recv_round = 0
 
     # Validations
-    if not player_id or mode not in {"buy", "sell"} or (template_code not in PRICE_INDEX and template_code != "upgrade"):
+    is_sell_current_for_future = template_code == SELL_CURRENT_FOR_FUTURE_CODE
+    valid_pick_sell = (
+        is_sell_current_for_future
+        and mode == "sell"
+        and sell_current_pick_code in SELL_CURRENT_PICK_LABELS
+        and sell_future_round in {1, 2, 3, 4}
+    )
+    if mode not in {"buy", "sell"} or (
+        template_code not in PRICE_INDEX and template_code != "upgrade" and not valid_pick_sell
+    ):
+        flash("Invalid builder parameters.", "danger")
+        return redirect(url_for("offers.search"))
+    if not valid_pick_sell and not player_id:
         flash("Invalid builder parameters.", "danger")
         return redirect(url_for("offers.search"))
     if template_code == "upgrade" and (not upgrade_give_round or not upgrade_recv_round):
         flash("Pick Upgrade requires both give/receive rounds.", "warning")
         return redirect(url_for("offers.search"))
 
-    player = Player.query.get(player_id)
-    if not player:
+    player = Player.query.get(player_id) if player_id else None
+    if not is_sell_current_for_future and not player:
         flash("Player not found.", "danger")
         return redirect(url_for("offers.search"))
 
@@ -524,7 +607,67 @@ def build():
 
     else:
         # ---------------------------- SELL -----------------------------------
-        if template_code != "upgrade":
+        if template_code == SELL_CURRENT_FOR_FUTURE_CODE:
+            for lg in leagues:
+                my_team = _get_my_team_in_league(lg)
+                if not my_team:
+                    continue
+
+                my_picks_by_round = _pick_objects_by_round(my_team)
+                give_picks = _filter_current_year_pick_sell_give(
+                    my_picks_by_round,
+                    _league_team_count(lg),
+                    sell_current_pick_code,
+                    year_now,
+                )
+                if not give_picks:
+                    continue
+
+                teams = Team.query.filter(Team.league_id == lg.id, Team.id != my_team.id).all()
+                buyers_detail: List[Dict[str, Any]] = []
+                league_years: Set[int] = set()
+                for t in teams:
+                    pbr = _pick_objects_by_round(t)
+                    recv_picks = [
+                        dp for dp in pbr.get(int(sell_future_round), [])
+                        if dp.season and int(dp.season) > int(year_now)
+                    ]
+                    if not recv_picks:
+                        continue
+                    for dp in recv_picks:
+                        try:
+                            y = int(dp.season)
+                            sell_years_set.add(y)
+                            league_years.add(y)
+                        except Exception:
+                            pass
+                    buyers_detail.append({"team": t, "recv_picks": recv_picks})
+
+                if not buyers_detail:
+                    continue
+                if str(lg.mfl_id) in sent_hide:
+                    continue
+
+                league_fnames: Dict[str, str] = {}
+                league_frecords: Dict[str, str] = {}
+                for t in Team.query.filter(Team.league_id == lg.id).all():
+                    if t.mfl_id:
+                        fid = str(t.mfl_id).zfill(4)
+                        league_fnames[fid] = t.name or fid
+                        league_frecords[fid] = t.record or ""
+
+                rows.append({
+                    "league": lg,
+                    "my_team": my_team,
+                    "pick_sell": True,
+                    "my_give_picks": give_picks,
+                    "buyers": buyers_detail,
+                    "years": sorted(league_years),
+                    "franchise_names": league_fnames,
+                    "franchise_records": league_frecords,
+                })
+
+        elif template_code != "upgrade":
             # --------- SELL (standard templates) ----------
             for lg in leagues:
                 my_team = _get_my_team_in_league(lg)
@@ -672,7 +815,11 @@ def build():
         "offers/build.html",
         mode=mode,
         template_code=template_code,
-        template_label=PRICE_LABEL.get(template_code, "Pick Upgrade" if template_code == "upgrade" else template_code),
+        template_label=(
+            f"Sell {SELL_CURRENT_PICK_LABELS.get(sell_current_pick_code, 'Current-Year Pick')} for Future {sell_future_round}{'st' if sell_future_round == 1 else 'nd' if sell_future_round == 2 else 'rd' if sell_future_round == 3 else 'th'}"
+            if is_sell_current_for_future
+            else PRICE_LABEL.get(template_code, "Pick Upgrade" if template_code == "upgrade" else template_code)
+        ),
         player=player,
         req=req,
         rows=rows,
@@ -683,6 +830,10 @@ def build():
         # upgrade params for template JS/labels
         upgrade_give_round=upgrade_give_round,
         upgrade_recv_round=upgrade_recv_round,
+        sell_current_pick_code=sell_current_pick_code,
+        sell_future_round=sell_future_round,
+        sell_current_for_future_code=SELL_CURRENT_FOR_FUTURE_CODE,
+        sell_current_pick_label=SELL_CURRENT_PICK_LABELS.get(sell_current_pick_code, "Current-Year Pick"),
     )
 
 

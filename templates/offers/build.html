@@ -102,7 +102,7 @@
   {% endif %}
 
   <form id="offer-form" method="POST" action="{{ url_for('offers.preview_offers') }}">
-    <input type="hidden" name="player_id" value="{{ player.id }}">
+    <input type="hidden" name="player_id" value="{{ player.id if player else "" }}">
     <input type="hidden" name="mode" value="{{ mode }}">
     <input type="hidden" name="template_code" value="{{ template_code }}">
 
@@ -110,10 +110,66 @@
       <!-- Carry upgrade params to preview -->
       <input type="hidden" name="upgrade_give_round" value="{{ upgrade_give_round }}">
       <input type="hidden" name="upgrade_recv_round" value="{{ upgrade_recv_round }}">
-    {% endif %}
+    {% elif template_code == sell_current_for_future_code %}
+      <input type="hidden" name="sell_current_pick_code" value="{{ sell_current_pick_code }}">
+      <input type="hidden" name="sell_future_round" value="{{ sell_future_round }}">    {% endif %}
 
     {% for row in rows %}
-      {% if template_code != 'upgrade' %}
+      {% if template_code == sell_current_for_future_code %}
+        {% set lid = row.league.mfl_id %}
+        <div class="tile tile-pad league-card" data-lid="{{ lid }}" aria-expanded="true">
+          <div class="league-row">
+            <label style="display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" name="league_id" value="{{ lid }}" checked>
+              <span class="league-title">{{ row.league.name }}</span>
+            </label>
+            <div class="league-meta">ID {{ lid }} • Host {{ row.league.league_host or 'api.myfantasyleague.com' }}</div>
+          </div>
+
+          <div class="sec-hdr" style="margin-top:10px;">Your current-year pick to sell</div>
+          <div class="muter">Select one {{ sell_current_pick_label }} currently owned in this league.</div>
+          <div class="fr-line" style="margin-top:6px;">
+            {% for dp in row.my_give_picks %}
+              <label class="fr-pick">
+                <input type="radio"
+                       name="sell_current_give_pick_{{ lid }}"
+                       value="{{ dp.id }}"
+                       data-year="{{ dp.season }}"
+                       data-round="{{ dp.round }}">
+                {{ pick_label(dp, row.franchise_names, row.franchise_records) }}
+              </label>
+            {% endfor %}
+          </div>
+
+          <div class="sec-hdr" style="margin-top:12px;">Eligible Buyers (future Round {{ sell_future_round }})</div>
+          <div class="muter">Only future picks are shown and eligible for receive-side selection.</div>
+          <div class="buyers-grid">
+            {% for bd in row.buyers %}
+              <div class="buyer-card" data-buyer-id="{{ bd.team.id }}">
+                <label class="buyer-name" style="display:flex;align-items:center;gap:8px;">
+                  <input type="checkbox" name="buyer_{{ lid }}" value="{{ bd.team.id }}">
+                  <span>{{ bd.team.name }}</span>
+                  <span class="muter">FID {{ bd.team.mfl_id }} • Record {{ bd.team.record or '–' }}</span>
+                </label>
+
+                <div class="small" style="font-weight:700; margin-bottom:4px;">Select their future Round {{ sell_future_round }} pick (one)</div>
+                <div class="fr-line">
+                  {% for dp in bd.recv_picks %}
+                    <label class="fr-pick">
+                      <input type="checkbox"
+                             name="pick_{{ lid }}_{{ bd.team.id }}_{{ sell_future_round }}"
+                             value="{{ dp.id }}"
+                             data-year="{{ dp.season }}"
+                             data-round="{{ dp.round }}">
+                      {{ pick_label(dp, row.franchise_names, row.franchise_records) }}
+                    </label>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% elif template_code != 'upgrade' %}
         <!-- ======================= BUY / SELL (standard templates) ======================= -->
         <div class="tile tile-pad league-card" data-lid="{{ row.league.mfl_id }}" aria-expanded="true">
           <div class="league-row">
@@ -286,8 +342,10 @@
 (function() {
   const mode = "{{ mode }}";
   const templateCode = "{{ template_code }}";
+  const sellCurrentForFutureCode = "{{ sell_current_for_future_code }}";
   const REQ = {{ req|tojson }};
   const prefWrap = document.getElementById('pref-wrap');
+
 
   function getPreferredYear() {
     const sel = prefWrap ? prefWrap.querySelector('input[name="pref_year"]:checked') : null;
@@ -377,6 +435,37 @@
     });
   }
 
+  function autoSelectSellCurrentForFuture(card) {
+    const prefYear = getPreferredYear();
+    const lid = card.getAttribute('data-lid');
+
+    const myRadios = Array.from(card.querySelectorAll(`input[type="radio"][name="sell_current_give_pick_${lid}"]`));
+    if (myRadios.length) {
+      let choice = null;
+      if (prefYear) choice = myRadios.find(r => String(r.dataset.year) === String(prefYear));
+      if (!choice) {
+        myRadios.sort((a,b) => (String(a.dataset.year)||'').localeCompare(String(b.dataset.year)||''));
+        choice = myRadios[0];
+      }
+      if (choice) choice.checked = true;
+    }
+
+    card.querySelectorAll('.buyer-card').forEach(bc => {
+      const checks = Array.from(bc.querySelectorAll('input[type="checkbox"][name^="pick_"]'));
+      checks.forEach(c => { c.checked = false; });
+      if (!checks.length) return;
+
+      let choice = null;
+      if (prefYear) choice = checks.find(c => String(c.dataset.year) === String(prefYear));
+      if (!choice) {
+        checks.sort((a,b) => (String(a.dataset.year)||'').localeCompare(String(b.dataset.year)||''));
+        choice = checks[0];
+      }
+      if (choice) choice.checked = true;
+    });
+  }
+
+
   // ---------------------- SELL behaviors ------------------------------------
   if (mode === 'sell') {
     const leagueBoxes = Array.from(document.querySelectorAll('input[name="league_id"]'));
@@ -400,7 +489,9 @@
             // Auto-check all buyers (both standard & upgrade), then apply helpers
             card.querySelectorAll('input[name^="buyer_"]').forEach(b => { b.checked = true; });
 
-            if (templateCode !== 'upgrade') {
+            if (templateCode === sellCurrentForFutureCode) {
+              autoSelectSellCurrentForFuture(card);
+            } else if (templateCode !== 'upgrade') {
               // Standard SELL: pick counts per REQ by preferred year
               card.querySelectorAll('.buyer-card').forEach(bc => autoSelectPicks(bc));
             } else {
@@ -427,6 +518,8 @@
   document.querySelectorAll('.league-card').forEach(card => {
     if (mode === 'buy' && templateCode !== 'upgrade') {
       autoSelectPicks(card);
+    } else if (mode === 'sell' && templateCode === sellCurrentForFutureCode) {
+      autoSelectSellCurrentForFuture(card);
     } else if (mode === 'sell' && templateCode !== 'upgrade') {
       card.querySelectorAll('.buyer-card').forEach(bc => autoSelectPicks(bc));
     } else if (mode === 'sell' && templateCode === 'upgrade') {
@@ -441,6 +534,8 @@
       document.querySelectorAll('.league-card').forEach(card => {
         if (mode === 'buy' && templateCode !== 'upgrade') {
           autoSelectPicks(card);
+        } else if (mode === 'sell' && templateCode === sellCurrentForFutureCode) {
+          autoSelectSellCurrentForFuture(card);
         } else if (mode === 'sell' && templateCode !== 'upgrade') {
           card.querySelectorAll('.buyer-card').forEach(bc => autoSelectPicks(bc));
         } else if (mode === 'sell' && templateCode === 'upgrade') {
