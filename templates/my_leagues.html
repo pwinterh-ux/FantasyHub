@@ -94,6 +94,99 @@
   .pos-chip { font-size:11px; padding:2px 6px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background:#0b1220; }
 
   .btn-compact { padding:6px 10px; font-size:12px; border-radius:10px; }
+  .best-available-module { margin: 14px 0 12px; }
+  .best-available-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; }
+  @media (max-width: 900px) { .best-available-grid { grid-template-columns: 1fr; } }
+  .best-available-card {
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.5);
+    overflow: hidden;
+  }
+  .best-available-card h5 {
+    margin: 0;
+    padding: 10px 12px;
+    font-size: 13px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: rgba(226,232,240,.92);
+    border-bottom: 1px solid rgba(255,255,255,.08);
+  }
+  .best-available-card table { width:100%; border-collapse: collapse; }
+  .best-available-card th,
+  .best-available-card td {
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255,255,255,.08);
+    text-align: left;
+    vertical-align: middle;
+  }
+  .best-available-card tbody tr:last-child td { border-bottom: 0; }
+  .best-rank { font-size: 12px; font-weight: 700; color: #7dd3fc; }
+  .btn-add {
+    background: rgba(34,197,94,.14);
+    border: 1px solid rgba(74,222,128,.35);
+    color: #dcfce7;
+  }
+  .btn-add:hover { background: rgba(34,197,94,.22); }
+  .waiver-mask {
+    position: fixed; inset: 0; background: rgba(2, 6, 23, 0.76);
+    display: none; align-items: center; justify-content: center;
+    z-index: 10020; padding: 20px;
+  }
+  .waiver-modal {
+    width: min(760px, 100%);
+    max-height: min(88vh, 860px);
+    overflow: auto;
+    border-radius: 16px;
+    border: 1px solid rgba(148,163,184,.2);
+    background: radial-gradient(120% 120% at 10% 0%, rgba(15,23,42,.98), rgba(2,6,23,.98));
+    box-shadow: 0 24px 60px rgba(2,6,23,.55);
+    padding: 18px;
+  }
+  .waiver-head, .waiver-foot {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+  }
+  .waiver-head { margin-bottom: 14px; }
+  .waiver-foot { margin-top: 16px; flex-wrap: wrap; }
+  .waiver-title { margin:0; font-size: 20px; color:#f8fafc; }
+  .waiver-subtitle { margin:4px 0 0; font-size: 13px; color:rgba(226,232,240,.75); }
+  .waiver-layout { display:grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 340px); gap:16px; }
+  @media (max-width: 900px) { .waiver-layout { grid-template-columns: 1fr; } }
+  .waiver-pane {
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 12px;
+    background: rgba(15,23,42,.52);
+    padding: 14px;
+  }
+  .waiver-pane h4 { margin:0 0 8px; }
+  .drop-list { display:flex; flex-direction:column; gap:10px; }
+  .drop-option {
+    display:flex; align-items:flex-start; gap:10px;
+    padding: 10px 12px;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 12px;
+    background: rgba(2,6,23,.36);
+  }
+  .drop-option input { margin-top: 3px; }
+  .drop-option.is-selected {
+    border-color: rgba(56,189,248,.5);
+    background: rgba(14,116,144,.16);
+    box-shadow: inset 0 0 0 1px rgba(56,189,248,.16);
+  }
+  .drop-option-name { font-weight: 600; color:#f8fafc; }
+  .drop-option-meta { margin-top: 3px; font-size: 12px; color: rgba(226,232,240,.75); }
+  .review-card {
+    border: 1px solid rgba(56,189,248,.18);
+    border-radius: 12px;
+    background: rgba(8,47,73,.28);
+    padding: 12px;
+  }
+  .review-row { display:flex; justify-content:space-between; gap:10px; padding: 6px 0; }
+  .review-row strong { color:#f8fafc; }
+  .waiver-confirmation {
+    margin-top: 12px; padding: 12px; border-radius: 12px;
+    background: rgba(34,197,94,.12); border: 1px solid rgba(74,222,128,.28); color:#dcfce7;
+  }
 </style>
 
 <!-- Overlay -->
@@ -110,6 +203,41 @@
     <div class="sync-actions">
       <button type="button" class="button" id="syncRetry">Retry</button>
       <button type="button" class="button" id="syncCancel" style="background:#444;">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="waiverFlowMask" class="waiver-mask" aria-hidden="true">
+  <div class="waiver-modal" role="dialog" aria-modal="true" aria-labelledby="waiverFlowTitle">
+    <div class="waiver-head">
+      <div>
+        <h3 id="waiverFlowTitle" class="waiver-title">Add player</h3>
+        <p id="waiverFlowSubtitle" class="waiver-subtitle">Select a player to drop before continuing.</p>
+      </div>
+      <button type="button" class="btn-ghost btn-compact" id="waiverFlowClose">Close</button>
+    </div>
+    <div class="waiver-layout">
+      <div class="waiver-pane">
+        <h4 style="margin-bottom:6px;">Choose a player to drop</h4>
+        <div id="waiverDropList" class="drop-list"></div>
+      </div>
+      <div class="waiver-pane">
+        <h4 style="margin-bottom:6px;">Review</h4>
+        <div class="review-card">
+          <div class="review-row"><span>Add</span><strong id="waiverReviewAdd">—</strong></div>
+          <div class="review-row"><span>Drop</span><strong id="waiverReviewDrop">Select a player</strong></div>
+          <div class="review-row"><span>League</span><strong id="waiverReviewLeague">—</strong></div>
+          <div class="review-row"><span>Action</span><strong>Demo flow only</strong></div>
+        </div>
+        <div id="waiverConfirmation" class="waiver-confirmation" style="display:none;"></div>
+      </div>
+    </div>
+    <div class="waiver-foot">
+      <span class="mini">This flow is wired for UX validation only. No add/drop API call will be made yet.</span>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn-ghost btn-compact" id="waiverReviewBtn">Review Add</button>
+        <button type="button" class="button" id="waiverConfirmBtn" disabled>Confirm Add</button>
+      </div>
     </div>
   </div>
 </div>
@@ -214,6 +342,26 @@
   const tbody = document.getElementById('leagues-tbody');
   const playersLookupUrl = "{{ url_for('leagues.players_lookup') }}";
   const baseOffersSearch = "{{ url_for('offers.search') }}";
+  const leagueDetailsCache = new Map();
+  const positionOrder = ['QB', 'RB', 'WR', 'TE'];
+  const waiverMask = document.getElementById('waiverFlowMask');
+  const waiverCloseBtn = document.getElementById('waiverFlowClose');
+  const waiverSubtitle = document.getElementById('waiverFlowSubtitle');
+  const waiverDropList = document.getElementById('waiverDropList');
+  const waiverReviewAdd = document.getElementById('waiverReviewAdd');
+  const waiverReviewDrop = document.getElementById('waiverReviewDrop');
+  const waiverReviewLeague = document.getElementById('waiverReviewLeague');
+  const waiverReviewBtn = document.getElementById('waiverReviewBtn');
+  const waiverConfirmBtn = document.getElementById('waiverConfirmBtn');
+  const waiverConfirmation = document.getElementById('waiverConfirmation');
+  const waiverState = {
+    leagueId: null,
+    leagueName: '',
+    addPlayer: null,
+    roster: [],
+    selectedDropId: null,
+    reviewed: false,
+  };
 
   function escapeHtml(s) {
     return String(s ?? '')
@@ -222,6 +370,121 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  function rosterSort(a, b) {
+    const order = { QB: 0, RB: 1, WR: 2, TE: 3, FLEX: 4, 'WR/RB': 5, 'WR/RB/TE': 6, SF: 7, 'SUPER_FLEX': 7, K: 8, DEF: 9 };
+    const pa = (a.position || '').toUpperCase();
+    const pb = (b.position || '').toUpperCase();
+
+    const oa = (pa in order) ? order[pa] : 99;
+    const ob = (pb in order) ? order[pb] : 99;
+    if (oa !== ob) return oa - ob;
+
+    const ra = (a.position_rank === null || a.position_rank === undefined || a.position_rank === '') ? null : Number(a.position_rank);
+    const rb = (b.position_rank === null || b.position_rank === undefined || b.position_rank === '') ? null : Number(b.position_rank);
+    const na = (ra === null || Number.isNaN(ra)) ? 1 : 0;
+    const nb = (rb === null || Number.isNaN(rb)) ? 1 : 0;
+    if (na !== nb) return na - nb;
+    if (ra !== null && rb !== null && ra !== rb) return ra - rb;
+
+    const sa = a.is_starter ? 0 : 1;
+    const sb = b.is_starter ? 0 : 1;
+    if (sa !== sb) return sa - sb;
+
+    return String(a.name || a.player_id || '').localeCompare(String(b.name || b.player_id || ''));
+  }
+
+  function formatRankLabel(item) {
+    if (item.position_rank !== null && item.position_rank !== undefined && item.position_rank !== '') {
+      return `Rank ${item.position_rank}`;
+    }
+    if (item.consensus_rank !== null && item.consensus_rank !== undefined && item.consensus_rank !== '') {
+      return `Consensus ${item.consensus_rank}`;
+    }
+    return 'Unranked';
+  }
+
+  function closeWaiverFlow() {
+    if (!waiverMask) return;
+    waiverMask.style.display = 'none';
+    waiverMask.setAttribute('aria-hidden', 'true');
+    waiverState.leagueId = null;
+    waiverState.leagueName = '';
+    waiverState.addPlayer = null;
+    waiverState.roster = [];
+    waiverState.selectedDropId = null;
+    waiverState.reviewed = false;
+    if (waiverDropList) waiverDropList.innerHTML = '';
+    if (waiverReviewAdd) waiverReviewAdd.textContent = '—';
+    if (waiverReviewDrop) waiverReviewDrop.textContent = 'Select a player';
+    if (waiverReviewLeague) waiverReviewLeague.textContent = '—';
+    if (waiverSubtitle) waiverSubtitle.textContent = 'Select a player to drop before continuing.';
+    if (waiverConfirmBtn) waiverConfirmBtn.disabled = true;
+    if (waiverConfirmation) {
+      waiverConfirmation.style.display = 'none';
+      waiverConfirmation.textContent = '';
+    }
+  }
+
+  function syncWaiverSelectionUi() {
+    if (!waiverDropList) return;
+    waiverDropList.querySelectorAll('.drop-option').forEach(option => {
+      option.classList.toggle('is-selected', option.getAttribute('data-player-id') === waiverState.selectedDropId);
+    });
+
+    const selected = waiverState.roster.find(r => String(r.player_id) === String(waiverState.selectedDropId));
+    if (waiverReviewDrop) {
+      waiverReviewDrop.textContent = selected ? `${selected.name || selected.player_id} (${selected.position || '—'})` : 'Select a player';
+    }
+    if (waiverConfirmBtn) waiverConfirmBtn.disabled = !(waiverState.selectedDropId && waiverState.reviewed);
+  }
+
+  function openWaiverFlow(leagueId, bestAvailablePlayer) {
+    const details = leagueDetailsCache.get(String(leagueId));
+    if (!details || !waiverMask || !bestAvailablePlayer || !waiverDropList) return;
+
+    waiverState.leagueId = String(leagueId);
+    waiverState.leagueName = details.leagueName || 'League';
+    waiverState.addPlayer = bestAvailablePlayer;
+    waiverState.roster = (details.roster || []).slice().sort(rosterSort);
+    waiverState.selectedDropId = null;
+    waiverState.reviewed = false;
+
+    if (waiverSubtitle) {
+      waiverSubtitle.textContent = `Select who to drop to add ${bestAvailablePlayer.name || 'this player'} in ${waiverState.leagueName}.`;
+    }
+    if (waiverReviewAdd) {
+      waiverReviewAdd.textContent = `${bestAvailablePlayer.name || '—'} (${bestAvailablePlayer.position || '—'} • ${formatRankLabel(bestAvailablePlayer)})`;
+    }
+    if (waiverReviewLeague) waiverReviewLeague.textContent = waiverState.leagueName;
+    if (waiverReviewDrop) waiverReviewDrop.textContent = 'Select a player';
+    if (waiverConfirmBtn) waiverConfirmBtn.disabled = true;
+    if (waiverConfirmation) {
+      waiverConfirmation.style.display = 'none';
+      waiverConfirmation.textContent = '';
+    }
+
+    waiverDropList.innerHTML = waiverState.roster.length ? waiverState.roster.map(player => {
+      const playerId = escapeHtml(String(player.player_id || ''));
+      const rank = formatRankLabel(player);
+      return `
+        <label class="drop-option" data-player-id="${playerId}">
+          <input type="radio" name="drop_player" value="${playerId}">
+          <div>
+            <div class="drop-option-name">${escapeHtml(player.name || player.player_id || '—')}</div>
+            <div class="drop-option-meta">
+              ${escapeHtml(player.position || '—')} • ${escapeHtml(rank)}${player.team ? ` • ${escapeHtml(player.team)}` : ''}${player.is_starter ? ' • Starter' : ''}
+            </div>
+          </div>
+        </label>
+      `;
+    }).join('') : '<div class="mini">No roster players are available to drop yet.</div>';
+
+    waiverMask.style.display = 'flex';
+    waiverMask.setAttribute('aria-hidden', 'false');
+    const firstInput = waiverDropList.querySelector('input[type="radio"]');
+    if (firstInput) firstInput.focus();
   }
 
   // ---------- details view helpers ----------
@@ -288,41 +551,7 @@
   }
 
   function renderRoster(roster) {
-    const order = { QB: 0, RB: 1, WR: 2, TE: 3, FLEX: 4, 'WR/RB': 5, 'WR/RB/TE': 6, SF: 7, 'SUPER_FLEX': 7, K: 8, DEF: 9 };
-
-    // NOTE: Sort is now:
-    // 1) position group order
-    // 2) within position: consensus positional rank (r.position_rank) ascending, NULLs last
-    // 3) tie-breaker: starters first
-    // 4) tie-breaker: name
-    const items = (roster || []).slice().sort((a,b) => {
-      const pa = (a.position || '').toUpperCase();
-      const pb = (b.position || '').toUpperCase();
-
-      const oa = (pa in order) ? order[pa] : 99;
-      const ob = (pb in order) ? order[pb] : 99;
-      if (oa !== ob) return oa - ob;
-
-      const ra = (a.position_rank === null || a.position_rank === undefined || a.position_rank === '') ? null : Number(a.position_rank);
-      const rb = (b.position_rank === null || b.position_rank === undefined || b.position_rank === '') ? null : Number(b.position_rank);
-
-      // NULL ranks last
-      const na = (ra === null || Number.isNaN(ra)) ? 1 : 0;
-      const nb = (rb === null || Number.isNaN(rb)) ? 1 : 0;
-      if (na !== nb) return na - nb;
-
-      // rank ascending
-      if (ra !== null && rb !== null && ra !== rb) return ra - rb;
-
-      // starters first (tie-break)
-      const sa = a.is_starter ? 0 : 1;
-      const sb = b.is_starter ? 0 : 1;
-      if (sa !== sb) return sa - sb;
-
-      const an = a.name || a.player_id || '';
-      const bn = b.name || b.player_id || '';
-      return String(an).localeCompare(String(bn));
-    });
+    const items = (roster || []).slice().sort(rosterSort);
 
     let lastPos = null;
     const rows = items.map(r => {
@@ -357,6 +586,68 @@
             ${rows || '<tr><td colspan="3" style="padding:10px;">No roster loaded.</td></tr>'}
           </tbody>
         </table>
+      </div>
+    `;
+  }
+
+  function renderBestAvailable(bestAvailable, leagueId) {
+    const items = Array.isArray(bestAvailable) ? bestAvailable : [];
+    const byPosition = Object.fromEntries(positionOrder.map(pos => [pos, []]));
+    items.forEach(item => {
+      const pos = String(item.position || '').toUpperCase();
+      if (byPosition[pos]) byPosition[pos].push(item);
+    });
+
+    const cards = positionOrder.map(pos => {
+      const rows = (byPosition[pos] || []).map(player => {
+        const displayName = escapeHtml(player.name || player.player_id || '—');
+        const playerJson = escapeHtml(JSON.stringify(player));
+        const meta = [formatRankLabel(player), player.team || null].filter(Boolean).join(' • ');
+        return `
+          <tr>
+            <td style="width:86px;"><span class="pos-chip">${escapeHtml(pos)}</span></td>
+            <td>
+              <div>${displayName}</div>
+              <div class="mini">${escapeHtml(meta)}</div>
+            </td>
+            <td style="width:92px;"><span class="best-rank">${escapeHtml(formatRankLabel(player))}</span></td>
+            <td style="width:92px;">
+              <button
+                type="button"
+                class="btn-ghost btn-compact btn-add js-best-available-add"
+                data-league-id="${escapeHtml(String(leagueId))}"
+                data-player-json="${playerJson}">
+                Add
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      return `
+        <div class="best-available-card">
+          <h5>${escapeHtml(pos)}</h5>
+          <table>
+            <thead>
+              <tr>
+                <th style="width:86px;">Pos</th>
+                <th>Player</th>
+                <th style="width:92px;">Rank</th>
+                <th style="width:92px;">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows || '<tr><td colspan="4" class="mini">No ranked players available.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="best-available-module">
+        <h4 style="margin: 8px 0 10px;">Best Available</h4>
+        <div class="best-available-grid">${cards}</div>
       </div>
     `;
   }
@@ -480,6 +771,12 @@
       const metaLine = metaParts.join(' • ');
 
       const leagueNameSafe = escapeHtml((data.league && data.league.name) ? data.league.name : '');
+      const bestAvailable = Array.isArray(data.best_available) ? data.best_available : [];
+      leagueDetailsCache.set(String(leagueId), {
+        leagueName: (data.league && data.league.name) ? data.league.name : '',
+        roster,
+        bestAvailable,
+      });
 
       td.innerHTML = `
         <div class="details-panel">
@@ -517,6 +814,7 @@
                 <strong>Lineup:</strong> ${escapeHtml(slots)}
               </div>
               ${renderRoster(roster)}
+              ${renderBestAvailable(bestAvailable, leagueId)}
               ${renderPicks(data.my_draft_picks, teams)}
             </div>
           </div>
@@ -570,7 +868,59 @@
         deleteBtn.textContent = priorLabel;
       }
     });
+
+    tbody.addEventListener('click', (e) => {
+      const addBtn = e.target.closest('.js-best-available-add');
+      if (!addBtn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const leagueId = addBtn.getAttribute('data-league-id');
+      const raw = addBtn.getAttribute('data-player-json');
+      if (!leagueId || !raw) return;
+      try {
+        openWaiverFlow(leagueId, JSON.parse(raw));
+      } catch (err) {
+        console.error('Unable to open add flow:', err);
+      }
+    });
   }
+
+  waiverCloseBtn?.addEventListener('click', closeWaiverFlow);
+  waiverMask?.addEventListener('click', (e) => {
+    if (e.target === waiverMask) closeWaiverFlow();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && waiverMask?.style.display === 'flex') closeWaiverFlow();
+  });
+  waiverDropList?.addEventListener('change', (e) => {
+    const radio = e.target.closest('input[type="radio"][name="drop_player"]');
+    if (!radio) return;
+    waiverState.selectedDropId = String(radio.value);
+    waiverState.reviewed = false;
+    if (waiverConfirmBtn) waiverConfirmBtn.disabled = true;
+    if (waiverConfirmation) {
+      waiverConfirmation.style.display = 'none';
+      waiverConfirmation.textContent = '';
+    }
+    syncWaiverSelectionUi();
+  });
+  waiverReviewBtn?.addEventListener('click', () => {
+    if (!waiverState.selectedDropId || !waiverState.addPlayer) {
+      window.alert('Select a player to drop before reviewing the add.');
+      return;
+    }
+    waiverState.reviewed = true;
+    syncWaiverSelectionUi();
+  });
+  waiverConfirmBtn?.addEventListener('click', () => {
+    if (!waiverState.selectedDropId || !waiverState.addPlayer) return;
+    const selected = waiverState.roster.find(r => String(r.player_id) === String(waiverState.selectedDropId));
+    if (!selected) return;
+    if (waiverConfirmation) {
+      waiverConfirmation.textContent = `Verified demo flow: add ${waiverState.addPlayer.name || 'player'} and drop ${selected.name || selected.player_id} in ${waiverState.leagueName}. API call still pending implementation.`;
+      waiverConfirmation.style.display = 'block';
+    }
+  });
 
   // ---------- ASSETS REFRESH (MFL + Sleeper with correct labels) ----------
   const cfgEl = document.getElementById('leagueRefreshConfig');
