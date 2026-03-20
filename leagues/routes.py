@@ -369,6 +369,156 @@ def _serialize_sleeper_picks(rows: Sequence[Mapping[str, Any]]) -> list[dict[str
     return items
 
 
+_BEST_AVAILABLE_POSITIONS = ("QB", "RB", "WR", "TE")
+
+
+def _build_best_available_mfl(league_id: int) -> list[dict[str, Any]]:
+    owned_rows = (
+        db.session.query(Player.mfl_id)
+        .join(Roster, Roster.player_id == Player.id)
+        .join(Team, Team.id == Roster.team_id)
+        .filter(Team.league_id == league_id)
+        .all()
+    )
+    owned_mfl_ids = {str(mfl_id) for (mfl_id,) in owned_rows if mfl_id not in (None, "")}
+
+    consensus_rows = (
+        DynastyRankConsensusCurrent.query
+        .filter(DynastyRankConsensusCurrent.position.in_(_BEST_AVAILABLE_POSITIONS))
+        .order_by(
+            asc(DynastyRankConsensusCurrent.position),
+            DynastyRankConsensusCurrent.positional_rank.is_(None),
+            asc(DynastyRankConsensusCurrent.positional_rank),
+            DynastyRankConsensusCurrent.consensus_rank.is_(None),
+            asc(DynastyRankConsensusCurrent.consensus_rank),
+            asc(DynastyRankConsensusCurrent.player_name),
+        )
+        .all()
+    )
+
+    grouped: dict[str, list[dict[str, Any]]] = {pos: [] for pos in _BEST_AVAILABLE_POSITIONS}
+    selected_mfl_ids: list[str] = []
+    for consensus in consensus_rows:
+        position = str(consensus.position or "").upper()
+        mfl_id = str(consensus.mfl_id or "")
+        if (
+            position not in grouped
+            or not mfl_id
+            or mfl_id in owned_mfl_ids
+            or len(grouped[position]) >= 3
+        ):
+            continue
+        grouped[position].append(
+            {
+                "player_id": None,
+                "mfl_id": mfl_id,
+                "name": consensus.player_name,
+                "position": position,
+                "team": None,
+                "status": None,
+                "position_rank": consensus.positional_rank,
+                "consensus_rank": consensus.consensus_rank,
+            }
+        )
+        selected_mfl_ids.append(mfl_id)
+
+    player_map = {
+        str(player.mfl_id): player
+        for player in Player.query.filter(Player.mfl_id.in_(selected_mfl_ids)).all()
+    } if selected_mfl_ids else {}
+
+    out: list[dict[str, Any]] = []
+    for position in _BEST_AVAILABLE_POSITIONS:
+        for item in grouped[position]:
+            player = player_map.get(str(item["mfl_id"]))
+            if player:
+                item["player_id"] = player.id
+                item["name"] = player.name or item["name"]
+                item["team"] = player.team
+                item["status"] = player.status
+            out.append(item)
+    return out
+
+
+def _build_best_available_sleeper(league_id: int) -> list[dict[str, Any]]:
+    rosters_tbl = _reflect_table("sleeper_rosters")
+    teams_tbl = _reflect_table("sleeper_teams")
+    players_tbl = _reflect_table("sleeper_players")
+    if rosters_tbl is None or teams_tbl is None or players_tbl is None:
+        return []
+
+    player_cols = set(players_tbl.c.keys())
+    if "mfl_id" not in player_cols or "sleeper_id" not in player_cols:
+        return []
+
+    owned_stmt = (
+        select(rosters_tbl.c.player_sid)
+        .select_from(rosters_tbl.join(teams_tbl, rosters_tbl.c.team_id == teams_tbl.c.id))
+        .where(teams_tbl.c.league_id == league_id)
+    )
+    owned_player_ids = {
+        str(row[0])
+        for row in db.session.execute(owned_stmt).all()
+        if row and row[0] not in (None, "")
+    }
+
+    player_stmt = select(players_tbl).where(players_tbl.c.position.in_(_BEST_AVAILABLE_POSITIONS))
+    candidate_rows = db.session.execute(player_stmt).mappings().all()
+    available_rows = [
+        row for row in candidate_rows
+        if row.get("mfl_id") not in (None, "") and str(row.get("sleeper_id") or "") not in owned_player_ids
+    ]
+    if not available_rows:
+        return []
+
+    available_by_key = {
+        (str(row.get("position") or "").upper(), str(row.get("mfl_id"))): row
+        for row in available_rows
+        if str(row.get("position") or "").upper() in _BEST_AVAILABLE_POSITIONS
+    }
+
+    consensus_mfl_ids = [str(row.get("mfl_id")) for row in available_rows if row.get("mfl_id") not in (None, "")]
+    consensus_rows = (
+        DynastyRankConsensusCurrent.query
+        .filter(DynastyRankConsensusCurrent.position.in_(_BEST_AVAILABLE_POSITIONS))
+        .filter(DynastyRankConsensusCurrent.mfl_id.in_(consensus_mfl_ids))
+        .order_by(
+            asc(DynastyRankConsensusCurrent.position),
+            DynastyRankConsensusCurrent.positional_rank.is_(None),
+            asc(DynastyRankConsensusCurrent.positional_rank),
+            DynastyRankConsensusCurrent.consensus_rank.is_(None),
+            asc(DynastyRankConsensusCurrent.consensus_rank),
+            asc(DynastyRankConsensusCurrent.player_name),
+        )
+        .all()
+    )
+
+    grouped: dict[str, list[dict[str, Any]]] = {pos: [] for pos in _BEST_AVAILABLE_POSITIONS}
+    for consensus in consensus_rows:
+        position = str(consensus.position or "").upper()
+        key = (position, str(consensus.mfl_id or ""))
+        player_row = available_by_key.get(key)
+        if position not in grouped or player_row is None or len(grouped[position]) >= 3:
+            continue
+        grouped[position].append(
+            {
+                "player_id": str(player_row.get("sleeper_id")),
+                "mfl_id": str(consensus.mfl_id or ""),
+                "name": player_row.get("name") or consensus.player_name,
+                "position": position,
+                "team": player_row.get("team"),
+                "status": player_row.get("status"),
+                "position_rank": consensus.positional_rank,
+                "consensus_rank": consensus.consensus_rank,
+            }
+        )
+
+    out: list[dict[str, Any]] = []
+    for position in _BEST_AVAILABLE_POSITIONS:
+        out.extend(grouped[position])
+    return out
+
+
 def _compose_platform_label(platform: str) -> str:
     return "Sleeper" if platform == "sleeper" else "MFL"
 
@@ -592,6 +742,8 @@ def _league_details_json_mfl(league_id: int):
                     "original_team": dp.original_team,
                 })
 
+        best_available = _build_best_available_mfl(league.id)
+
         payload = {
             "league": {
                 "id": league.id,
@@ -631,10 +783,12 @@ def _league_details_json_mfl(league_id: int):
             ),
             "my_roster": roster_items,
             "my_draft_picks": draft_picks,
+            "best_available": best_available,
             "counts": {
                 "teams": len(teams),
                 "roster": len(roster_items),
                 "draft_picks": len(draft_picks),
+                "best_available": len(best_available),
             }
         }
         return jsonify(payload)
@@ -697,6 +851,7 @@ def _league_details_json_sleeper(league_id: int):
 
         roster_items = _serialize_sleeper_roster(roster_rows)
         draft_picks = _serialize_sleeper_picks(pick_rows)
+        best_available = _build_best_available_sleeper(int(league_row.get("id")))
 
         roster_slots = _mapping_first(league_row, "roster_slots", "lineup_slots")
         roster_slots_display = _format_sleeper_roster_slots(roster_slots) or (
@@ -725,10 +880,12 @@ def _league_details_json_sleeper(league_id: int):
             "my_team": my_team_payload,
             "my_roster": roster_items,
             "my_draft_picks": draft_picks,
+            "best_available": best_available,
             "counts": {
                 "teams": len(teams_payload),
                 "roster": len(roster_items),
                 "draft_picks": len(draft_picks),
+                "best_available": len(best_available),
             },
         }
         return jsonify(payload)
