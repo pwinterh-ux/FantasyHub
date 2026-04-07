@@ -144,11 +144,10 @@ def ir_index():
 
         # 2) Build IR-eligible set with Taxi removed (so planning never sees Taxi)
         ir_eligible_ids = {pid for pid in ir_eligible_ids_all if pid in rostered_non_taxi}
-        if not ir_eligible_ids:
-            skipped.append({"league": league.name, "reason": "No IR-eligible injuries (non-Taxi)"})
-            continue
 
-        # 3) Plan with Taxi-free eligible ids
+        # 3) Plan with Taxi-free eligible ids. This still lets us activate
+        # players off IR when they are no longer eligible, even if nobody on
+        # the current roster qualifies to move onto IR.
         plan = ir_optimizer.plan_for_league(
             league=league,
             franchise_id=franchise_id,

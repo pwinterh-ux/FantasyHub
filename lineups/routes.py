@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 
 import requests
@@ -41,6 +41,10 @@ lineups_bp = Blueprint("lineups", __name__, template_folder="../templates")
 
 MFL_MAX_WEEKS_FALLBACK = 18
 PARALLEL_WORKERS = 3  # mirror other mass API calls (tweak to 2-3 as desired)
+LINEUP_WEEK_ROLLOVER_WEEKDAY = 1  # Tuesday
+LINEUP_WEEK_ONE_OPENERS = {
+    2026: date(2026, 9, 9),
+}
 
 # -------------------------- Host & cookies ----------------------------------
 
@@ -145,6 +149,44 @@ def _get_current_mfl_week(year: int) -> int:
         pass
     return int(current_app.config.get("MFL_WEEK_FALLBACK", 1))
 
+def _lineup_week_one_opener(year: int) -> date | None:
+    opener = LINEUP_WEEK_ONE_OPENERS.get(year)
+    if opener is not None:
+        return opener
+
+    configured = current_app.config.get("LINEUP_WEEK_ONE_OPENER")
+    if isinstance(configured, dict):
+        value = configured.get(year) or configured.get(str(year))
+    else:
+        value = configured
+
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _date_based_lineup_week(year: int, today: date) -> int | None:
+    opener = _lineup_week_one_opener(year)
+    if opener is None:
+        return None
+    if today < opener:
+        return 1
+
+    rollover = opener
+    while rollover.weekday() != LINEUP_WEEK_ROLLOVER_WEEKDAY:
+        rollover += timedelta(days=1)
+
+    if today < rollover:
+        return 1
+
+    return 2 + ((today - rollover).days // 7)
+
+
 def _effective_current_week(year: int) -> int:
     cfg_week = current_app.config.get("MFL_CURRENT_WEEK")
     try:
@@ -155,29 +197,21 @@ def _effective_current_week(year: int) -> int:
         return forced_week
 
     try:
-        wk = int(current_app.config.get("MFL_WEEK_FALLBACK", 2))
+        wk = int(current_app.config.get("MFL_WEEK_FALLBACK", 1))
     except (TypeError, ValueError):
-        wk = 2
+        wk = 1
     if wk < 1:
         wk = 1
 
     try:
-        now = datetime.now()
+        today = datetime.now().date()
     except Exception:
-        now = None
+        today = None
 
-    if now:
-        if wk < 2 and now.month == 9 and now.day >= 8:
-            wk = 2
-
-        week3_start = None
-        try:
-            week3_start = datetime(year, 9, 16)
-        except Exception:
-            pass
-        if week3_start and now >= week3_start:
-            delta_weeks = (now - week3_start).days // 7
-            wk = max(wk, 3 + delta_weeks)
+    if today:
+        date_week = _date_based_lineup_week(year, today)
+        if date_week is not None:
+            wk = max(wk, date_week)
 
     minwk = current_app.config.get("MFL_MIN_CURRENT_WEEK")
     if isinstance(minwk, int) and 1 <= minwk <= 22:
