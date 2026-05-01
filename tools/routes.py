@@ -180,6 +180,7 @@ def _fetch_on_the_clock_for_league(league: League) -> dict[str, Any]:
         status = "complete"
 
     return {
+        "provider": "mfl",
         "league_id": league.id,
         "league_name": league.name or f"League {league.mfl_id}",
         "league_mfl_id": league.mfl_id,
@@ -194,6 +195,124 @@ def _fetch_on_the_clock_for_league(league: League) -> dict[str, Any]:
         "upcoming_picks": upcoming,
         "draft_url": _draft_url_for_league(league) or static_url,
     }
+
+def _fetch_on_the_clock_for_sleeper_league(league: SleeperLeague, sleeper_user_id: str | None) -> dict[str, Any]:
+    if not league.sleeper_id:
+        raise ValueError("Sleeper league is missing sleeper_id")
+
+    draft_id = (league.draft_id or "").strip()
+    if not draft_id:
+        drafts_url = f"https://api.sleeper.app/v1/league/{league.sleeper_id}/drafts"
+        drafts_resp = requests.get(drafts_url, timeout=MFL_HTTP_TIMEOUT)
+        drafts_resp.raise_for_status()
+        drafts = drafts_resp.json() or []
+        if not drafts:
+            return {
+                "provider": "sleeper",
+                "league_id": league.id,
+                "league_name": league.name or f"Sleeper League {league.sleeper_id}",
+                "league_sleeper_id": league.sleeper_id,
+                "league_year": league.year,
+                "my_queue_position": None,
+                "queue_rank": 999,
+                "picks_away": None,
+                "next_user_pick": None,
+                "status": "no_draft",
+                "total_picks_made": 0,
+                "upcoming_picks": [],
+                "draft_url": None,
+            }
+        draft_id = str(drafts[0].get("draft_id") or "").strip()
+
+    draft_url = f"https://api.sleeper.app/v1/draft/{draft_id}"
+    picks_url = f"https://api.sleeper.app/v1/draft/{draft_id}/picks"
+    draft_resp = requests.get(draft_url, timeout=MFL_HTTP_TIMEOUT)
+    draft_resp.raise_for_status()
+    draft_data = draft_resp.json() or {}
+
+    picks_resp = requests.get(picks_url, timeout=MFL_HTTP_TIMEOUT)
+    picks_resp.raise_for_status()
+    made_picks = picks_resp.json() or []
+
+    total_teams = int((draft_data.get("settings") or {}).get("teams") or 0)
+    total_rounds = int((draft_data.get("settings") or {}).get("rounds") or 0)
+    total_slots = total_teams * total_rounds
+
+    user_slot = None
+    if sleeper_user_id:
+        draft_order = draft_data.get("draft_order") or {}
+        raw_slot = draft_order.get(str(sleeper_user_id))
+        try:
+            user_slot = int(raw_slot) if raw_slot is not None else None
+        except (TypeError, ValueError):
+            user_slot = None
+
+    slot_to_roster = {int(k): v for k, v in (draft_data.get("slot_to_roster_id") or {}).items() if str(k).isdigit()}
+    team_names = {int(t.sleeper_roster_id): (t.name or t.owner_name or f"Roster {t.sleeper_roster_id}") for t in league.teams}
+
+    made_pick_count = len(made_picks)
+    next_pick_no = made_pick_count + 1
+    upcoming = []
+    for pick_no in range(next_pick_no, min(total_slots, next_pick_no + 2) + 1):
+        if total_teams <= 0:
+            break
+        round_no = ((pick_no - 1) // total_teams) + 1
+        offset = (pick_no - 1) % total_teams
+        draft_slot = offset + 1 if round_no % 2 == 1 else (total_teams - offset)
+        roster_id = slot_to_roster.get(draft_slot)
+        try:
+            roster_id_int = int(roster_id) if roster_id is not None else None
+        except (TypeError, ValueError):
+            roster_id_int = None
+        upcoming.append({
+            "round": round_no,
+            "pick": offset + 1,
+            "franchise_id": str(roster_id_int) if roster_id_int is not None else None,
+            "team_name": team_names.get(roster_id_int, f"Roster {roster_id_int or '—'}"),
+            "is_made": False,
+            "label": _draft_pick_label(round_no, offset + 1),
+            "draft_slot": draft_slot,
+        })
+
+    my_queue_position = None
+    picks_away = None
+    next_user_pick = None
+    if user_slot and total_teams > 0 and total_slots > 0:
+        for idx, pick_no in enumerate(range(next_pick_no, total_slots + 1)):
+            round_no = ((pick_no - 1) // total_teams) + 1
+            offset = (pick_no - 1) % total_teams
+            draft_slot = offset + 1 if round_no % 2 == 1 else (total_teams - offset)
+            if draft_slot == user_slot:
+                picks_away = idx
+                next_user_pick = {
+                    "round": round_no,
+                    "pick": offset + 1,
+                    "label": _draft_pick_label(round_no, offset + 1),
+                }
+                break
+
+        for idx, up in enumerate(upcoming, start=1):
+            if up.get("draft_slot") == user_slot:
+                my_queue_position = idx
+                break
+
+    status = draft_data.get("status") or ("complete" if made_pick_count >= total_slots and total_slots > 0 else "in_progress")
+    return {
+        "provider": "sleeper",
+        "league_id": league.id,
+        "league_name": league.name or f"Sleeper League {league.sleeper_id}",
+        "league_sleeper_id": league.sleeper_id,
+        "league_year": league.year,
+        "my_queue_position": my_queue_position,
+        "queue_rank": (picks_away + 1) if picks_away is not None else 999,
+        "picks_away": picks_away,
+        "next_user_pick": next_user_pick,
+        "status": status,
+        "total_picks_made": made_pick_count,
+        "upcoming_picks": upcoming,
+        "draft_url": f"https://sleeper.com/draft/nfl/{draft_id}",
+    }
+
 
 
 @bp.route("/")
@@ -281,13 +400,33 @@ def on_the_clock():
     mfl_leagues = [
         {
             "db_id": lg.id,
+            "provider": "mfl",
             "mfl_id": lg.mfl_id,
             "year": lg.year,
             "name": lg.name or f"League {lg.mfl_id}",
         }
         for lg in leagues
     ]
-    return render_template("tools/on_the_clock.html", leagues=mfl_leagues)
+    sleeper_leagues = []
+    if SleeperLeague is not None:
+        sleeper_rows = (
+            db.session.query(SleeperLeague)
+            .filter(SleeperLeague.user_id == current_user.id)
+            .order_by(SleeperLeague.year.desc(), SleeperLeague.name.asc())
+            .all()
+        )
+        sleeper_leagues = [
+            {
+                "db_id": lg.id,
+                "provider": "sleeper",
+                "sleeper_id": lg.sleeper_id,
+                "year": lg.year,
+                "name": lg.name or f"Sleeper League {lg.sleeper_id}",
+            }
+            for lg in sleeper_rows
+        ]
+
+    return render_template("tools/on_the_clock.html", leagues=(mfl_leagues + sleeper_leagues))
 
 
 @bp.route("/on-the-clock/league/<int:league_id>", methods=["GET"])
@@ -298,17 +437,29 @@ def on_the_clock_league(league_id: int):
         .filter(League.id == league_id, League.user_id == current_user.id)
         .first()
     )
+    provider = "mfl"
+    if not league and SleeperLeague is not None:
+        league = (
+            db.session.query(SleeperLeague)
+            .filter(SleeperLeague.id == league_id, SleeperLeague.user_id == current_user.id)
+            .first()
+        )
+        provider = "sleeper" if league else provider
+
     if not league:
         return jsonify({"ok": False, "error": "League not found."}), 404
 
     try:
-        payload = _fetch_on_the_clock_for_league(league)
+        if provider == "sleeper":
+            payload = _fetch_on_the_clock_for_sleeper_league(league, current_user.sleeper_user_id)
+        else:
+            payload = _fetch_on_the_clock_for_league(league)
         return jsonify({"ok": True, "league": payload})
     except requests.RequestException as exc:
-        current_app.logger.warning("on_the_clock network error league=%s: %s", league_id, exc)
-        return jsonify({"ok": False, "error": "MFL request failed for this league."}), 502
+        current_app.logger.warning("on_the_clock network error provider=%s league=%s: %s", provider, league_id, exc)
+        return jsonify({"ok": False, "error": f"{provider.upper()} request failed for this league."}), 502
     except ET.ParseError:
         return jsonify({"ok": False, "error": "MFL returned an invalid draft response."}), 502
     except Exception as exc:
-        current_app.logger.exception("on_the_clock error league=%s: %s", league_id, exc)
+        current_app.logger.exception("on_the_clock error provider=%s league=%s: %s", provider, league_id, exc)
         return jsonify({"ok": False, "error": "Unable to load draft data for this league."}), 500

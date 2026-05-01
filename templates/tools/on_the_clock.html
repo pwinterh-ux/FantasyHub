@@ -50,7 +50,7 @@
     <div class="hdrbar">
       <div>
         <h2 style="margin:0;">On The Clock</h2>
-        <div class="mini">Scans every synced MFL league and shows the next 3 picks in queue.</div>
+        <div class="mini">Scans every synced MFL and Sleeper league and shows the next 3 picks in queue.</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;">
         <button id="runBtn" class="btn-ghost">Scan Leagues</button>
@@ -110,7 +110,9 @@
         `).join('')
       : `<div class="trow"><div class="col" style="grid-column:1 / span 2;">No upcoming picks found.</div></div>`;
 
-    const leagueMeta = league.league_mfl_id ? `MFL ${league.league_mfl_id} • Season ${league.league_year || ''}` : '';
+    const leagueMeta = league.provider === 'sleeper'
+      ? `Sleeper ${league.league_sleeper_id || ''} • Season ${league.league_year || ''}`
+      : (league.league_mfl_id ? `MFL ${league.league_mfl_id} • Season ${league.league_year || ''}` : '');
     const draftLink = league.draft_url ? `<a class="btn-ghost" href="${league.draft_url}" target="_blank" rel="noopener">Open Draft</a>` : '';
     const err = item.ok ? '' : `<div class="empty">${item.error || 'Unable to scan this league.'}</div>`;
 
@@ -138,7 +140,7 @@
 
   async function runScan(){
     if (!leagues.length){
-      resultsWrap.innerHTML = '<div class="tile empty">No synced MFL leagues found.</div>';
+      resultsWrap.innerHTML = '<div class="tile empty">No synced leagues found.</div>';
       return;
     }
 
@@ -150,7 +152,7 @@
 
     for (let i = 0; i < leagues.length; i += 1){
       const lg = leagues[i];
-      syncLeagueLabel.textContent = `${lg.name || 'League'} (${lg.mfl_id || ''})`;
+      syncLeagueLabel.textContent = `${lg.name || 'League'} (${lg.mfl_id || lg.sleeper_id || ''})`;
       syncDetail.textContent = `Scanning ${i + 1} of ${total}…`;
       try {
         const res = await fetch(`${cfg.leagueApiBase}/${lg.db_id}`, { headers: { 'Accept': 'application/json' } });
