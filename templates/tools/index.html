@@ -218,6 +218,21 @@
       </div>
     </div>
 
+    <!-- On The Clock (MFL Only) -->
+    <div class="card {% if not has_mfl_leagues %}is-disabled{% endif %}">
+      <div class="badge">MFL Only</div>
+      <div class="card-inner">
+        <h3>On The Clock</h3>
+        <div class="desc">
+          Scan all synced MFL leagues and show the next three picks in queue. Leagues where your franchise is up first are sorted to the top.
+        </div>
+        <div class="actions">
+          <a class="btn open-tool" data-tool="On The Clock" href="{{ url_for('tools.on_the_clock') }}" data-mfl-only="1">Open</a>
+          <span class="sub">Includes quick link to each league draft page.</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Waivers (Coming Soon) -->
     <div class="card is-disabled">
       <div class="badge">Coming Soon</div>

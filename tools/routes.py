@@ -3,12 +3,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
+import xml.etree.ElementTree as ET
 
-from flask import Blueprint, render_template, current_app
+import requests
+
+from flask import Blueprint, render_template, current_app, jsonify
 from flask_login import login_required, current_user
 from sqlalchemy import func
 
-from models import League, db
+from models import League, Team, db
 
 try:
     # If your project has a SleeperLeague model, we’ll use it; otherwise we’ll noop gracefully.
@@ -21,10 +24,14 @@ from lineups.routes import (
     _pick_year_for_week_lookup,
     _effective_current_week,
     _allowed_weeks_from,
+    _league_host,
+    _cookie_header_for_host,
     MFL_MAX_WEEKS_FALLBACK,
 )
 
 bp = Blueprint("tools", __name__, url_prefix="/tools")
+
+MFL_HTTP_TIMEOUT = 15
 
 
 def _fmt_dt(dt):
@@ -82,6 +89,111 @@ def _week_bundle_from_lineups() -> tuple[int, list[int]]:
         max_week = MFL_MAX_WEEKS_FALLBACK
     weeks = _allowed_weeks_from(current_week, max_week)
     return current_week, weeks
+
+
+def _draft_pick_label(round_no: int, pick_no: int) -> str:
+    return f"{round_no}.{pick_no:02d}"
+
+
+def _draft_url_for_league(league: League) -> str | None:
+    base = None
+    try:
+        base = league._league_base()  # convenience helper on model
+    except Exception:
+        base = None
+    if not base or not league.year or not league.mfl_id:
+        return None
+    return f"{base}/{league.year}/options?L={league.mfl_id}&O=17"
+
+
+def _fetch_on_the_clock_for_league(league: League) -> dict[str, Any]:
+    host = _league_host(league) or "api.myfantasyleague.com"
+    cookie = _cookie_header_for_host(host)
+    url = f"https://{host}/{league.year}/export"
+    params = {"TYPE": "draftResults", "L": str(league.mfl_id), "JSON": "0"}
+    headers = {"Accept": "application/xml, text/xml;q=0.9, */*;q=0.8"}
+    if cookie:
+        headers["Cookie"] = cookie
+
+    resp = requests.get(url, params=params, headers=headers, timeout=MFL_HTTP_TIMEOUT)
+    resp.raise_for_status()
+
+    root = ET.fromstring(resp.content)
+    draft_unit = root.find(".//draftUnit")
+    static_url = draft_unit.get("static_url") if draft_unit is not None else None
+
+    teams = {
+        (t.mfl_id or "").strip(): (t.name or f"Franchise {t.mfl_id}")
+        for t in (
+            db.session.query(Team)
+            .filter(Team.league_id == league.id)
+            .all()
+        )
+    }
+
+    picks: list[dict[str, Any]] = []
+    total_made = 0
+    for p in root.findall(".//draftPick"):
+        round_raw = p.get("round") or p.get("roundNumber") or ""
+        pick_raw = p.get("pick") or p.get("pickNumber") or ""
+        franchise = (p.get("franchise") or p.get("franchise_id") or "").strip()
+        player = (p.get("player") or "").strip()
+        if player:
+            total_made += 1
+        try:
+            round_no = int(round_raw)
+            pick_no = int(pick_raw)
+        except (TypeError, ValueError):
+            continue
+        picks.append(
+            {
+                "round": round_no,
+                "pick": pick_no,
+                "franchise_id": franchise,
+                "team_name": teams.get(franchise, f"Franchise {franchise or '—'}"),
+                "is_made": bool(player),
+                "label": _draft_pick_label(round_no, pick_no),
+            }
+        )
+
+    remaining = [x for x in picks if not x["is_made"]]
+    upcoming = remaining[:3]
+    my_franchise = (league.franchise_id or "").strip()
+    my_queue_position = None
+    for idx, up in enumerate(upcoming, start=1):
+        if my_franchise and up["franchise_id"] == my_franchise:
+            my_queue_position = idx
+            break
+
+    next_user_pick = None
+    picks_away = None
+    if my_franchise:
+        for idx, up in enumerate(remaining):
+            if up["franchise_id"] == my_franchise:
+                next_user_pick = up
+                picks_away = idx
+                break
+
+    if upcoming:
+        status = "in_progress" if total_made > 0 else "not_started"
+    else:
+        status = "complete"
+
+    return {
+        "league_id": league.id,
+        "league_name": league.name or f"League {league.mfl_id}",
+        "league_mfl_id": league.mfl_id,
+        "league_year": league.year,
+        "my_franchise_id": my_franchise or None,
+        "my_queue_position": my_queue_position,
+        "queue_rank": (picks_away + 1) if picks_away is not None else 999,
+        "picks_away": picks_away,
+        "next_user_pick": next_user_pick,
+        "status": status,
+        "total_picks_made": total_made,
+        "upcoming_picks": upcoming,
+        "draft_url": _draft_url_for_league(league) or static_url,
+    }
 
 
 @bp.route("/")
@@ -155,3 +267,48 @@ def index():
         selected_week=selected_week,
         mfl_leagues=mfl_leagues,
     )
+
+
+@bp.route("/on-the-clock")
+@login_required
+def on_the_clock():
+    leagues = (
+        db.session.query(League)
+        .filter(League.user_id == current_user.id)
+        .order_by(League.year.desc(), League.name.asc())
+        .all()
+    )
+    mfl_leagues = [
+        {
+            "db_id": lg.id,
+            "mfl_id": lg.mfl_id,
+            "year": lg.year,
+            "name": lg.name or f"League {lg.mfl_id}",
+        }
+        for lg in leagues
+    ]
+    return render_template("tools/on_the_clock.html", leagues=mfl_leagues)
+
+
+@bp.route("/on-the-clock/league/<int:league_id>", methods=["GET"])
+@login_required
+def on_the_clock_league(league_id: int):
+    league = (
+        db.session.query(League)
+        .filter(League.id == league_id, League.user_id == current_user.id)
+        .first()
+    )
+    if not league:
+        return jsonify({"ok": False, "error": "League not found."}), 404
+
+    try:
+        payload = _fetch_on_the_clock_for_league(league)
+        return jsonify({"ok": True, "league": payload})
+    except requests.RequestException as exc:
+        current_app.logger.warning("on_the_clock network error league=%s: %s", league_id, exc)
+        return jsonify({"ok": False, "error": "MFL request failed for this league."}), 502
+    except ET.ParseError:
+        return jsonify({"ok": False, "error": "MFL returned an invalid draft response."}), 502
+    except Exception as exc:
+        current_app.logger.exception("on_the_clock error league=%s: %s", league_id, exc)
+        return jsonify({"ok": False, "error": "Unable to load draft data for this league."}), 500

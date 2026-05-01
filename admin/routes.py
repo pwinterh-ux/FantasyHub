@@ -1,29 +1,15 @@
 """
 Admin routes (merged JSON tools + HTML UI)
-
-Access control:
-- ONLY users with users.is_admin truthy can access anything in this blueprint.
-
-What’s included:
-- JSON utilities you already had:
-    GET  /_admin/health
-    POST /_admin/grant-bonus
-    GET  /_admin/logs/api
-    GET  /_admin/logs/webhooks
-    GET  /_admin/logs/actions
-- NEW hidden HTML admin pages:
-    GET  /_admin/users           (list/search)
-    GET  /_admin/users/<id>      (edit form)
-    POST /_admin/users/<id>      (save plan/bonus/founder/clear MFL)
-
-Register in app.py if you haven’t already:
-    from admin import bp as admin_bp
-    app.register_blueprint(admin_bp)
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
+
+import os
+import subprocess
+import sys
 from typing import Optional
 
 from flask import (
@@ -37,14 +23,15 @@ from flask import (
     current_app,
 )
 from flask_login import current_user, login_required
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 
 from app import db
 from models import User
-from . import bp  # blueprint defined in admin/__init__.py (url_prefix="/_admin")
+from . import bp
+
 
 # --------------------------------------------------------------------
-# Admin guard (ONLY users.is_admin)
+# Admin guard
 # --------------------------------------------------------------------
 
 def _require_admin():
@@ -56,7 +43,7 @@ def _require_admin():
 
 
 # --------------------------------------------------------------------
-# Health (JSON)
+# Health
 # --------------------------------------------------------------------
 
 @bp.route("/health", methods=["GET"])
@@ -67,8 +54,7 @@ def health():
 
 
 # --------------------------------------------------------------------
-# Grant bonus mass-offers (JSON)
-#  Body: { "user_id": 123, "count": 5 }
+# Grant bonus mass-offers
 # --------------------------------------------------------------------
 
 @bp.route("/grant-bonus", methods=["POST"])
@@ -78,6 +64,7 @@ def grant_bonus():
 
     data = request.get_json(silent=True) or {}
     user_id = data.get("user_id")
+
     try:
         count = int(data.get("count") or 1)
     except Exception:
@@ -88,11 +75,13 @@ def grant_bonus():
 
     try:
         db.session.execute(
-            """
-            UPDATE users
-               SET bonus_mass_offers = COALESCE(bonus_mass_offers, 0) + :count
-             WHERE id = :user_id
-            """,
+            text(
+                """
+                UPDATE users
+                   SET bonus_mass_offers = COALESCE(bonus_mass_offers, 0) + :count
+                 WHERE id = :user_id
+                """
+            ),
             {"count": count, "user_id": user_id},
         )
         db.session.commit()
@@ -103,7 +92,7 @@ def grant_bonus():
 
 
 # --------------------------------------------------------------------
-# Log viewers (JSON)
+# Log viewers
 # --------------------------------------------------------------------
 
 def _limit_param(default: int = 100, max_cap: int = 500) -> int:
@@ -122,14 +111,18 @@ def logs_api():
     limit = _limit_param()
     try:
         rows = db.session.execute(
-            f"""
-            SELECT id, created_at, user_id, league_id, host, method, endpoint,
-                   status_code, response_ms, ok, throttled, message
-              FROM api_call_logs
-          ORDER BY id DESC
-             LIMIT {limit}
-        """
+            text(
+                """
+                SELECT id, created_at, user_id, league_id, host, method, endpoint,
+                       status_code, response_ms, ok, throttled, message
+                  FROM api_call_logs
+              ORDER BY id DESC
+                 LIMIT :limit
+                """
+            ),
+            {"limit": limit},
         ).mappings().all()
+
         return jsonify({"items": [dict(r) for r in rows], "limit": limit})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -143,13 +136,17 @@ def logs_webhooks():
     limit = _limit_param()
     try:
         rows = db.session.execute(
-            f"""
-            SELECT id, event_id, event_type, received_at, processed_at, success, error
-              FROM stripe_webhook_logs
-          ORDER BY id DESC
-             LIMIT {limit}
-        """
+            text(
+                """
+                SELECT id, event_id, event_type, received_at, processed_at, success, error
+                  FROM stripe_webhook_logs
+              ORDER BY id DESC
+                 LIMIT :limit
+                """
+            ),
+            {"limit": limit},
         ).mappings().all()
+
         return jsonify({"items": [dict(r) for r in rows], "limit": limit})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -163,24 +160,126 @@ def logs_actions():
     limit = _limit_param()
     try:
         rows = db.session.execute(
-            f"""
-            SELECT id, created_at, user_id, league_id, action_type, target_week, result_ok, message
-              FROM action_logs
-          ORDER BY id DESC
-             LIMIT {limit}
-        """
+            text(
+                """
+                SELECT id, created_at, user_id, league_id, action_type, target_week, result_ok, message
+                  FROM action_logs
+              ORDER BY id DESC
+                 LIMIT :limit
+                """
+            ),
+            {"limit": limit},
         ).mappings().all()
+
         return jsonify({"items": [dict(r) for r in rows], "limit": limit})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 # --------------------------------------------------------------------
-# NEW: HTML Admin UI — list/search users
-#  GET /_admin/users?q=...
+# Admin UI
 # --------------------------------------------------------------------
 
 ALLOWED_PLANS = ["free", "mgr5", "mgr12", "unlimited", "founder"]
+
+
+@bp.route("/", methods=["GET"])
+@login_required
+def admin_home():
+    if (resp := _require_admin()) is not None:
+        return resp
+    return render_template("admin/index.html")
+
+
+# --------------------------------------------------------------------
+# Refresh dynasty rankings
+# --------------------------------------------------------------------
+
+def _project_root() -> Path:
+    """
+    current_app.root_path should normally be the repo/app root on PythonAnywhere.
+    This keeps subprocess execution anchored to the same codebase as the web app.
+    """
+    return Path(current_app.root_path).resolve()
+
+
+def _rankings_refresh_cmd() -> list[str]:
+    """
+    Use the root CLI script we created:
+        python refresh_dynasty_ranks.py --source all
+
+    This avoids the previous:
+        python -m rankings.refresh_dynasty_ranks --source all
+
+    which is what was triggering the getopt_long() failure.
+    """
+    root = _project_root()
+    script = root / "refresh_dynasty_ranks.py"
+
+    if script.exists():
+        return [sys.executable, str(script), "--source", "all"]
+
+    # Fallback only in case the script was moved later.
+    return [sys.executable, "-m", "rankings.refresh_dynasty_ranks", "--source", "all"]
+
+
+@bp.route("/refresh-rankings", methods=["POST"])
+@login_required
+def refresh_rankings():
+    if (resp := _require_admin()) is not None:
+        return resp
+
+    root = _project_root()
+    cmd = _rankings_refresh_cmd()
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
+
+    current_app.logger.info("Starting dynasty rankings refresh: %s", " ".join(cmd))
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        current_app.logger.exception("Dynasty rankings refresh timed out")
+        flash("Rankings refresh failed: timed out after 3 minutes.", "danger")
+        return redirect(url_for("admin.admin_home"))
+    except Exception as exc:
+        current_app.logger.exception("Failed to start dynasty rankings refresh")
+        flash(f"Failed to start rankings refresh: {exc}", "danger")
+        return redirect(url_for("admin.admin_home"))
+
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    combined = "\n".join(x for x in [stdout, stderr] if x).strip()
+
+    if proc.returncode == 0:
+        detail = combined.splitlines()[-1] if combined else "Completed."
+        current_app.logger.info("Dynasty rankings refresh completed: %s", detail)
+        flash("Rankings refresh completed successfully.", "success")
+    else:
+        detail = combined.splitlines()[-1] if combined else f"Exit code {proc.returncode}"
+        current_app.logger.error(
+            "Dynasty rankings refresh failed. returncode=%s stdout=%s stderr=%s",
+            proc.returncode,
+            stdout,
+            stderr,
+        )
+        flash(f"Rankings refresh failed: {detail}", "danger")
+
+    return redirect(url_for("admin.admin_home"))
+
+
+# --------------------------------------------------------------------
+# Users list/search
+# --------------------------------------------------------------------
 
 @bp.route("/users", methods=["GET"])
 @login_required
@@ -190,10 +289,11 @@ def users_list():
 
     q = (request.args.get("q") or "").strip()
     qry = User.query
+
     if q:
         like = f"%{q}%"
         qry = qry.filter(or_(User.email.ilike(like), User.username.ilike(like)))
-    page = 1
+
     try:
         page = max(int(request.args.get("page", "1")), 1)
     except Exception:
@@ -213,8 +313,6 @@ def users_list():
     if has_next:
         results = results[:per_page]
 
-    has_prev = page > 1
-
     return render_template(
         "admin/users.html",
         view="list",
@@ -223,14 +321,12 @@ def users_list():
         plans=ALLOWED_PLANS,
         page=page,
         has_next=has_next,
-        has_prev=has_prev,
+        has_prev=page > 1,
     )
 
 
 # --------------------------------------------------------------------
-# NEW: HTML Admin UI — edit user
-#  GET/POST /_admin/users/<id>
-#  Edits: plan, bonus_mass_offers, founder_expires_at, clear MFL auth
+# User edit
 # --------------------------------------------------------------------
 
 @bp.route("/users/<int:user_id>", methods=["GET", "POST"])
@@ -245,13 +341,11 @@ def users_edit(user_id: int):
         return redirect(url_for("admin.users_list"))
 
     if request.method == "POST":
-        # Plan
         plan = (request.form.get("plan") or "").strip().lower()
         if plan not in ALLOWED_PLANS:
             flash("Invalid plan key.", "danger")
             return redirect(url_for("admin.users_edit", user_id=user_id))
 
-        # Bonus
         try:
             bonus = int(request.form.get("bonus_mass_offers") or "0")
             if bonus < 0:
@@ -259,7 +353,6 @@ def users_edit(user_id: int):
         except Exception:
             bonus = 0
 
-        # Founder expiry (optional YYYY-MM-DD)
         founder_str = (request.form.get("founder_expires_at") or "").strip()
         founder_dt = None
         if founder_str:
@@ -268,10 +361,8 @@ def users_edit(user_id: int):
             except Exception:
                 flash("Invalid founder expiration date.", "warning")
 
-        # Clear MFL auth?
-        clear_mfl = (request.form.get("clear_mfl") == "on")
+        clear_mfl = request.form.get("clear_mfl") == "on"
 
-        # Apply
         user.plan = plan
         user.bonus_mass_offers = bonus
         user.founder_expires_at = founder_dt
