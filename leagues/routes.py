@@ -744,6 +744,56 @@ def _league_details_json_mfl(league_id: int):
 
         best_available = _build_best_available_mfl(league.id)
 
+        team_assets: dict[str, dict[str, Any]] = {}
+        if teams:
+            team_ids = [t.id for t in teams]
+
+            roster_by_team_id: dict[int, list[dict[str, Any]]] = {tid: [] for tid in team_ids}
+            roster_rows = (
+                db.session.query(Roster, Player, Team)
+                .join(Player, Player.id == Roster.player_id)
+                .join(Team, Team.id == Roster.team_id)
+                .filter(Team.id.in_(team_ids))
+                .order_by(Team.id, asc(Player.position), asc(Player.name))
+                .all()
+            )
+            for roster_row, player_row, team_row in roster_rows:
+                roster_by_team_id.setdefault(team_row.id, []).append({
+                    "player_id": player_row.id,
+                    "mfl_id": player_row.mfl_id,
+                    "name": player_row.name,
+                    "position": player_row.position,
+                    "team": player_row.team,
+                    "status": player_row.status,
+                    "is_starter": bool(roster_row.is_starter),
+                })
+
+            picks_by_team_id: dict[int, list[dict[str, Any]]] = {tid: [] for tid in team_ids}
+            pick_rows = (
+                DraftPick.query
+                .filter(DraftPick.team_id.in_(team_ids))
+                .order_by(asc(DraftPick.team_id), asc(DraftPick.season), asc(DraftPick.round), asc(DraftPick.pick_number))
+                .all()
+            )
+            for pick in pick_rows:
+                picks_by_team_id.setdefault(pick.team_id, []).append({
+                    "season": pick.season,
+                    "round": pick.round,
+                    "pick_number": pick.pick_number,
+                    "original_team": pick.original_team,
+                })
+
+            for team in teams:
+                identifier = str(team.mfl_id) if team.mfl_id not in (None, "") else None
+                if not identifier:
+                    continue
+                team_assets[identifier] = {
+                    "team_name": team.name,
+                    "identifier": identifier,
+                    "roster": roster_by_team_id.get(team.id, []),
+                    "draft_picks": picks_by_team_id.get(team.id, []),
+                }
+
         payload = {
             "league": {
                 "id": league.id,
@@ -784,6 +834,7 @@ def _league_details_json_mfl(league_id: int):
             "my_roster": roster_items,
             "my_draft_picks": draft_picks,
             "best_available": best_available,
+            "team_assets": team_assets,
             "counts": {
                 "teams": len(teams),
                 "roster": len(roster_items),
@@ -862,6 +913,19 @@ def _league_details_json_sleeper(league_id: int):
         synced_value = synced_at.isoformat() if hasattr(synced_at, "isoformat") else synced_at
 
         external_identifier = _mapping_first(league_row, "sleeper_id", "league_id", "external_id")
+
+        team_assets: dict[str, dict[str, Any]] = {}
+        for team_row in teams_sorted:
+            identifier = _mapping_first(team_row, "sleeper_roster_id", "roster_id", "team_id", "id")
+            if identifier in (None, ""):
+                continue
+            identifier_str = str(identifier)
+            team_assets[identifier_str] = {
+                "team_name": _mapping_first(team_row, "name", "team_name", "display_name"),
+                "identifier": identifier_str,
+                "roster": _serialize_sleeper_roster(_sleeper_roster_rows(team_row)),
+                "draft_picks": _serialize_sleeper_picks(_sleeper_pick_rows(team_row)),
+            }
 
         payload = {
             "league": {

@@ -78,6 +78,42 @@
     text-align:left; vertical-align: middle;
   }
   .standings-table th, .roster-table th, .picks-table th { font-weight:700; opacity:.95; }
+  .standings-team-btn {
+    background: transparent;
+    border: 0;
+    color: #eaf1f7;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
+  }
+  .standings-team-btn:hover { color: #7dd3fc; }
+  .standings-inline-row td {
+    background: rgba(15,23,42,.36);
+    border-bottom: 1px solid rgba(255,255,255,.10);
+    padding: 0;
+  }
+  .standings-inline-cell {
+    border: 1px solid rgba(255,255,255,.10);
+    border-radius: 10px;
+    margin: 8px;
+    padding: 10px;
+  }
+  .team-assets-grid {
+    display:grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 12px;
+  }
+  @media (max-width: 700px) { .team-assets-grid { grid-template-columns: 1fr; } }
+  .asset-mini-table { width:100%; border-collapse: collapse; }
+  .asset-mini-table th, .asset-mini-table td {
+    padding: 6px 7px;
+    border-bottom: 1px solid rgba(255,255,255,.08);
+    text-align: left;
+    font-size: 12px;
+  }
+  .asset-mini-table tbody tr:last-child td { border-bottom: 0; }
 
   .is-mine { background: rgba(16,185,129,.12); }
 
@@ -372,6 +408,65 @@
       .replace(/'/g, '&#39;');
   }
 
+
+  // MFL team/franchise names sometimes include simple HTML, usually
+  // <font color="...">Team Name</font>. Keep that visual formatting for
+  // team names while stripping unsafe tags/attributes before injecting HTML.
+  function sanitizeTeamNameHtml(value) {
+    const raw = String(value ?? '—');
+    const template = document.createElement('template');
+    template.innerHTML = raw;
+
+    const allowedTags = new Set(['FONT', 'SPAN', 'B', 'I', 'STRONG', 'EM', 'U', 'BR']);
+    const safeColor = (v) => /^[#a-zA-Z0-9(),.%\s-]+$/.test(String(v || '')) && !/url|expression|javascript/i.test(String(v || ''));
+
+    function cleanNode(node) {
+      if (node.nodeType === Node.TEXT_NODE) return document.createTextNode(node.textContent || '');
+      if (node.nodeType !== Node.ELEMENT_NODE) return document.createTextNode('');
+
+      const tag = node.tagName.toUpperCase();
+      if (!allowedTags.has(tag)) {
+        const fragment = document.createDocumentFragment();
+        node.childNodes.forEach(child => fragment.appendChild(cleanNode(child)));
+        return fragment;
+      }
+
+      const el = document.createElement(tag.toLowerCase());
+      if (tag === 'FONT') {
+        const color = node.getAttribute('color');
+        if (color && safeColor(color)) el.setAttribute('color', color);
+      }
+      if (tag === 'SPAN') {
+        const style = node.getAttribute('style') || '';
+        const safeRules = [];
+        style.split(';').forEach(rule => {
+          const [propRaw, ...valParts] = rule.split(':');
+          const prop = String(propRaw || '').trim().toLowerCase();
+          const val = valParts.join(':').trim();
+          if ((prop === 'color' || prop === 'background-color') && safeColor(val)) {
+            safeRules.push(`${prop}: ${val}`);
+          }
+        });
+        if (safeRules.length) el.setAttribute('style', safeRules.join('; '));
+      }
+
+      node.childNodes.forEach(child => el.appendChild(cleanNode(child)));
+      return el;
+    }
+
+    const fragment = document.createDocumentFragment();
+    template.content.childNodes.forEach(child => fragment.appendChild(cleanNode(child)));
+    const wrapper = document.createElement('span');
+    wrapper.appendChild(fragment);
+    return wrapper.innerHTML || '—';
+  }
+
+  function stripTeamNameHtml(value) {
+    const el = document.createElement('span');
+    el.innerHTML = sanitizeTeamNameHtml(value);
+    return el.textContent || el.innerText || String(value ?? '—');
+  }
+
   function rosterSort(a, b) {
     const order = { QB: 0, RB: 1, WR: 2, TE: 3, FLEX: 4, 'WR/RB': 5, 'WR/RB/TE': 6, SF: 7, 'SUPER_FLEX': 7, K: 8, DEF: 9 };
     const pa = (a.position || '').toUpperCase();
@@ -491,6 +586,20 @@
   function pad4(x){ x = String(x || ''); return x.padStart(4, '0'); }
   function pad2(x){ x = String(x ?? ''); return x.padStart(2, '0'); }
 
+  function normalizeTeamId(x){
+    if (x === null || x === undefined || x === '') return '';
+    const s = String(x);
+    return /^\d+$/.test(s) ? pad4(s) : s;
+  }
+
+  function getTeamAsset(teamAssets, teamId){
+    if (!teamAssets || !teamId) return null;
+    const raw = String(teamId);
+    const norm = normalizeTeamId(raw);
+    const unpadded = /^\d+$/.test(raw) ? String(Number(raw)) : raw;
+    return teamAssets[raw] || teamAssets[norm] || teamAssets[unpadded] || null;
+  }
+
   // Draft pick formatter:
   // - Prefer overall_pick if present (future-proof), else pick_number
   // - Show round.pick (e.g., 1.03) when both exist
@@ -533,15 +642,25 @@
     });
   }
 
-  function standingsRows(teams, myFranchise) {
+  function standingsRows(teams, myFranchise, teamAssets) {
     return (teams || []).map((t, idx) => {
-      const identifier = t.identifier ?? t.mfl_id;
-      const mine = myFranchise && identifier && String(identifier) === String(myFranchise);
+      const identifier = t.identifier ?? t.mfl_id ?? t.sleeper_roster_id;
+      const identifierKey = normalizeTeamId(identifier);
+      const teamAsset = getTeamAsset(teamAssets, identifierKey);
+      const canDrill = !!teamAsset;
+      const mine = myFranchise && identifierKey && normalizeTeamId(myFranchise) === identifierKey;
       const rank = (t.standing !== null && t.standing !== undefined) ? t.standing : (idx + 1);
+      const teamName = sanitizeTeamNameHtml(t.name || '—');
+      const teamTitle = escapeHtml(stripTeamNameHtml(t.name || '—'));
+      const teamCell = canDrill ? `
+        <button type="button" class="standings-team-btn js-standings-team-btn" data-team-id="${escapeHtml(identifierKey)}">
+          ${teamName}
+        </button>
+      ` : `<span title="No assets loaded for ${teamTitle}">${teamName}</span>`;
       return `
-        <tr class="${mine ? 'is-mine' : ''}">
+        <tr class="js-standings-team-row ${mine ? 'is-mine' : ''}">
           <td style="width:56px;">${rank}</td>
-          <td>${escapeHtml(t.name || '—')}</td>
+          <td>${teamCell}</td>
           <td>${escapeHtml(t.record || '—')}</td>
           <td>${t.points_for ?? '—'}</td>
           <td>${t.points_against ?? '—'}</td>
@@ -678,7 +797,7 @@
         <tr>
           <td style="width:80px;">${escapeHtml(season)}</td>
           <td style="width:90px;">${escapeHtml(pickLabel)}</td>
-          <td>${escapeHtml(orig)}</td>
+          <td>${sanitizeTeamNameHtml(orig)}</td>
         </tr>
       `;
     }).join('');
@@ -699,6 +818,69 @@
           </tbody>
         </table>
       </div>
+    `;
+  }
+
+  function renderTeamAssetPanel(teamAsset, teams) {
+    if (!teamAsset) {
+      return '<div class="mini">No assets found for this team.</div>';
+    }
+    const rosterRows = (teamAsset.roster || []).slice().sort(rosterSort).map((r) => `
+      <tr>
+        <td style="width:64px;">${escapeHtml((r.position || '—').toUpperCase())}</td>
+        <td>${escapeHtml(r.name || r.player_id || '—')}</td>
+      </tr>
+    `).join('');
+
+    const teamMap = {};
+    (teams || []).forEach(t => {
+      const raw = t.identifier ?? t.mfl_id ?? t.sleeper_roster_id ?? '';
+      if (raw === null || raw === undefined || raw === '') return;
+      const keyStr = String(raw);
+      const key = /^\d+$/.test(keyStr) ? pad4(keyStr) : keyStr;
+      teamMap[key] = t.name || keyStr;
+    });
+    const picksRows = (teamAsset.draft_picks || []).map((p) => {
+      const origRaw = (p && p.original_team !== undefined && p.original_team !== null) ? String(p.original_team) : '';
+      const origKey = /^\d+$/.test(origRaw) ? pad4(origRaw) : origRaw;
+      const origName = teamMap[origKey] || origRaw || '—';
+      return `
+        <tr>
+          <td style="width:64px;">${escapeHtml(String(p.season ?? '—'))}</td>
+          <td style="width:74px;">${escapeHtml(formatPickLabel(p))}</td>
+          <td>${sanitizeTeamNameHtml(origName)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <div class="mini" style="margin-bottom:8px;"><strong>${sanitizeTeamNameHtml(teamAsset.team_name || 'Team')}</strong> assets</div>
+      <div class="team-assets-grid">
+        <div>
+          <table class="asset-mini-table">
+            <thead><tr><th style="width:64px;">Pos</th><th>Player</th></tr></thead>
+            <tbody>${rosterRows || '<tr><td colspan="2">No roster loaded.</td></tr>'}</tbody>
+          </table>
+        </div>
+        <div>
+          <table class="asset-mini-table">
+            <thead><tr><th style="width:64px;">Yr</th><th style="width:74px;">Pick</th><th>Orig</th></tr></thead>
+            <tbody>${picksRows || '<tr><td colspan="3">No picks loaded.</td></tr>'}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderTeamAssetInlineRow(teamId, teamAsset, teams) {
+    return `
+      <tr class="standings-inline-row js-standings-inline-row" data-inline-for-team="${escapeHtml(String(teamId || ''))}">
+        <td colspan="5">
+          <div class="standings-inline-cell">
+            ${renderTeamAssetPanel(teamAsset, teams)}
+          </div>
+        </td>
+      </tr>
     `;
   }
 
@@ -737,6 +919,7 @@
       const myFranchise = data.league && data.league.my_team_identifier ? String(data.league.my_team_identifier) : null;
       const synced = data.league && data.league.synced_at ? new Date(data.league.synced_at).toLocaleString() : '—';
       const teams = data.teams || [];
+      const teamAssets = (data.team_assets && typeof data.team_assets === 'object') ? data.team_assets : {};
       const slots = (data.league && data.league.roster_slots) ? data.league.roster_slots : 'Not set';
       const platformLabel = data.league && data.league.external_id_label ? data.league.external_id_label : '';
 
@@ -776,6 +959,8 @@
         leagueName: (data.league && data.league.name) ? data.league.name : '',
         roster,
         bestAvailable,
+        teams,
+        teamAssets,
       });
 
       td.innerHTML = `
@@ -805,7 +990,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  ${standingsRows(teams, myFranchise) || '<tr><td colspan="5" style="padding:10px;">No team data found.</td></tr>'}
+                  ${standingsRows(teams, myFranchise, teamAssets) || '<tr><td colspan="5" style="padding:10px;">No team data found.</td></tr>'}
                 </tbody>
               </table>
             </div>
@@ -870,6 +1055,35 @@
     });
 
     tbody.addEventListener('click', (e) => {
+      const teamBtn = e.target.closest('.js-standings-team-btn');
+      if (teamBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const detailsRow = teamBtn.closest('tr.details-row');
+        if (!detailsRow) return;
+        const leagueId = detailsRow.getAttribute('data-for-league');
+        const cached = leagueDetailsCache.get(String(leagueId)) || {};
+        const assets = (cached.teamAssets && typeof cached.teamAssets === 'object') ? cached.teamAssets : {};
+        const teams = Array.isArray(cached.teams) ? cached.teams : [];
+        const teamId = teamBtn.getAttribute('data-team-id') || '';
+        const currentRow = teamBtn.closest('tr.js-standings-team-row');
+        if (!currentRow) return;
+
+        const existingInline = currentRow.nextElementSibling;
+        if (
+          existingInline &&
+          existingInline.classList.contains('js-standings-inline-row') &&
+          String(existingInline.getAttribute('data-inline-for-team') || '') === String(teamId)
+        ) {
+          existingInline.remove();
+          return;
+        }
+
+        detailsRow.querySelectorAll('tr.js-standings-inline-row').forEach((row) => row.remove());
+        currentRow.insertAdjacentHTML('afterend', renderTeamAssetInlineRow(teamId, getTeamAsset(assets, teamId), teams));
+        return;
+      }
+
       const addBtn = e.target.closest('.js-best-available-add');
       if (!addBtn) return;
       e.preventDefault();

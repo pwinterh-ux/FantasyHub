@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .admin-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:12px; }
+  .admin-tile { display:block; border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:16px; background:rgba(15,23,42,.6); text-decoration:none; }
+  .admin-tile h3 { margin:0 0 8px; }
+  .admin-tile p { margin:0; color:var(--muted); }
+  .admin-tile button { width:100%; text-align:left; background:transparent; border:none; color:inherit; font:inherit; padding:0; cursor:pointer; }
+</style>
+
+<h2 style="margin-bottom:12px;">Admin</h2>
+
+<div class="admin-grid">
+  <a class="admin-tile" href="{{ url_for('admin.users_list') }}">
+    <h3>Users</h3>
+    <p>Manage user plans, bonuses, and access details.</p>
+  </a>
+
+  <form class="admin-tile" method="post" action="{{ url_for('admin.refresh_rankings') }}">
+    <button type="submit">
+      <h3>Refresh Rankings</h3>
+      <p>Run refresh for all dynasty ranking sources.</p>
+    </button>
+  </form>
+</div>
+{% endblock %}

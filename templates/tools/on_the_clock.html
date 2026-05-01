@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .page{max-width:1200px;margin:24px auto;display:flex;flex-direction:column;gap:14px;}
+  .tile{background:var(--tile-bg);border:1px solid var(--border);border-radius:14px;padding:14px;}
+  .hdrbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .mini{font-size:12px;opacity:.9}
+  .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+  @media (max-width:1100px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media (max-width:720px){.cards{grid-template-columns:1fr}}
+  .card{background:var(--tile-bg);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px}
+  .card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  .ttl{font-size:18px;font-weight:700}
+  .pill{display:inline-block;padding:4px 8px;border-radius:999px;font-size:11px;border:1px solid rgba(255,255,255,.18);background:#0b1220;line-height:1}
+  .pill.mine{border-color:rgba(56,189,248,.6);color:#9be9ff}
+  .pill.warn{border-color:rgba(239,68,68,.5);color:#ffb4b4}
+  .table{width:100%;border:1px solid rgba(255,255,255,.1);border-radius:12px;overflow:hidden;background:rgba(11,18,32,.45)}
+  .thead,.trow{display:grid;grid-template-columns:90px 1fr;align-items:center}
+  .thead{background:rgba(255,255,255,.04);font-weight:700;border-bottom:1px solid rgba(255,255,255,.08)}
+  .trow{border-top:1px solid rgba(255,255,255,.06)}
+  .col{padding:8px 10px}
+  .btn-ghost{display:inline-flex;align-items:center;justify-content:center;padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.18);text-decoration:none}
+  #runBtn{cursor:pointer}
+  .empty{opacity:.8;font-size:13px}
+  #syncOverlay{position:fixed;inset:0;background:rgba(15,23,42,0.82);display:none;align-items:center;justify-content:center;z-index:9999;padding:20px;}
+  .sync-card{background:rgba(15,23,42,0.96);border:1px solid rgba(96,165,250,0.25);border-radius:14px;padding:28px 26px;width:min(420px,100%);display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;}
+  .spinner{width:56px;height:56px;border:6px solid rgba(255,255,255,.25);border-top-color:#38bdf8;border-radius:50%;animation:spin 1s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .sync-progress{width:240px;max-width:100%;height:6px;background:rgba(255,255,255,.12);border-radius:4px;overflow:hidden;}
+  #syncProgressBar{height:100%;width:0%;transition:width .25s ease;}
+</style>
+
+<div id="syncOverlay" aria-live="polite" aria-busy="true">
+  <div class="sync-card">
+    <div class="spinner"></div>
+    <div id="syncHeadline">Scanning leagues…</div>
+    <div id="syncLeagueLabel" class="mini"></div>
+    <div class="sync-progress"><div id="syncProgressBar"></div></div>
+    <div id="syncDetail" class="mini">Starting…</div>
+  </div>
+</div>
+
+<script id="onClockConfig" type="application/json">
+  {{ {"leagueApiBase": url_for('tools.on_the_clock') ~ "/league"} | tojson }}
+</script>
+<script id="onClockLeagues" type="application/json">{{ leagues|tojson }}</script>
+
+<div class="page">
+  <div class="tile">
+    <div class="hdrbar">
+      <div>
+        <h2 style="margin:0;">On The Clock</h2>
+        <div class="mini">Scans every synced MFL and Sleeper league and shows the next 3 picks in queue.</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button id="runBtn" class="btn-ghost">Scan Leagues</button>
+        <a href="{{ url_for('tools.index') }}" class="btn-ghost">Back to Tools</a>
+      </div>
+    </div>
+  </div>
+
+  <div id="resultsWrap" class="cards"></div>
+</div>
+
+<script>
+(function(){
+  const cfg = JSON.parse(document.getElementById('onClockConfig').textContent || '{}');
+  const leagues = JSON.parse(document.getElementById('onClockLeagues').textContent || '[]');
+  const runBtn = document.getElementById('runBtn');
+  const resultsWrap = document.getElementById('resultsWrap');
+  const overlay = document.getElementById('syncOverlay');
+  const syncLeagueLabel = document.getElementById('syncLeagueLabel');
+  const syncDetail = document.getElementById('syncDetail');
+  const progressBar = document.getElementById('syncProgressBar');
+
+  const picksAwaySort = (league) => {
+    if (!league || league.picks_away === null || league.picks_away === undefined) return 999999;
+    return Number(league.picks_away);
+  };
+  const firstPickSort = (league) => {
+    const p = (league && league.upcoming_picks && league.upcoming_picks[0]) || null;
+    if (!p) return 999999;
+    return (Number(p.round || 0) * 1000) + Number(p.pick || 0);
+  };
+
+  function renderCard(item){
+    const league = item.league || {};
+    const picks = Array.isArray(league.upcoming_picks) ? league.upcoming_picks : [];
+    let statusPill = '<span class="pill">Queue</span>';
+    if (item.ok) {
+      if (league.picks_away === 0) {
+        statusPill = "<span class=\"pill mine\">You're on the Clock</span>";
+      } else if (league.picks_away === 1) {
+        statusPill = "<span class=\"pill mine\">You're up next</span>";
+      } else if (league.next_user_pick && league.next_user_pick.label) {
+        statusPill = '<span class="pill">Your next pick ' + league.next_user_pick.label + '</span>';
+      } else {
+        statusPill = '<span class="pill">No Picks Remaining</span>';
+      }
+    } else {
+      statusPill = '<span class="pill warn">Error</span>';
+    }
+
+    const rows = picks.length
+      ? picks.map(p => `
+          <div class="trow">
+            <div class="col">${p.label || '—'}</div>
+            <div class="col">${p.team_name || ('Franchise ' + (p.franchise_id || '—'))}</div>
+          </div>
+        `).join('')
+      : `<div class="trow"><div class="col" style="grid-column:1 / span 2;">No upcoming picks found.</div></div>`;
+
+    const leagueMeta = league.provider === 'sleeper'
+      ? `Sleeper ${league.league_sleeper_id || ''} • Season ${league.league_year || ''}`
+      : (league.league_mfl_id ? `MFL ${league.league_mfl_id} • Season ${league.league_year || ''}` : '');
+    const draftLink = league.draft_url ? `<a class="btn-ghost" href="${league.draft_url}" target="_blank" rel="noopener">Open Draft</a>` : '';
+    const err = item.ok ? '' : `<div class="empty">${item.error || 'Unable to scan this league.'}</div>`;
+
+    return `
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="ttl">${league.league_name || item.name || 'League'}</div>
+            <div class="mini">${leagueMeta}</div>
+          </div>
+          ${statusPill}
+        </div>
+        ${err}
+        <div class="table">
+          <div class="thead">
+            <div class="col">PICK</div>
+            <div class="col">TEAM</div>
+          </div>
+          ${rows}
+        </div>
+        <div>${draftLink}</div>
+      </div>
+    `;
+  }
+
+  async function runScan(){
+    if (!leagues.length){
+      resultsWrap.innerHTML = '<div class="tile empty">No synced leagues found.</div>';
+      return;
+    }
+
+    overlay.style.display = 'flex';
+    progressBar.style.width = '0%';
+    syncDetail.textContent = 'Starting…';
+    const total = leagues.length;
+    const results = [];
+
+    for (let i = 0; i < leagues.length; i += 1){
+      const lg = leagues[i];
+      syncLeagueLabel.textContent = `${lg.name || 'League'} (${lg.mfl_id || lg.sleeper_id || ''})`;
+      syncDetail.textContent = `Scanning ${i + 1} of ${total}…`;
+      try {
+        const res = await fetch(`${cfg.leagueApiBase}/${lg.db_id}`, { headers: { 'Accept': 'application/json' } });
+        const payload = await res.json();
+        if (!res.ok || !payload.ok) {
+          results.push({ ok:false, name:lg.name, error:(payload && payload.error) || 'Scan failed.' });
+        } else {
+          results.push({ ok:true, league:payload.league });
+        }
+      } catch (_err) {
+        results.push({ ok:false, name:lg.name, error:'Network error while scanning this league.' });
+      }
+      const pct = Math.round(((i + 1) / total) * 100);
+      progressBar.style.width = `${pct}%`;
+    }
+
+    overlay.style.display = 'none';
+
+    results.sort((a,b) => {
+      const ra = picksAwaySort(a.league), rb = picksAwaySort(b.league);
+      if (ra !== rb) return ra - rb;
+      const pa = firstPickSort(a.league), pb = firstPickSort(b.league);
+      return pa - pb;
+    });
+
+    resultsWrap.innerHTML = results.map(renderCard).join('');
+  }
+
+  runBtn.addEventListener('click', runScan);
+  runScan();
+})();
+</script>
+{% endblock %}

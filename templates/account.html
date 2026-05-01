@@ -91,6 +91,9 @@
         <a class="btn" href="/pricing">Choose a Plan</a>
       {% endif %}
       <a class="btn-ghost" href="/pricing">View Pricing</a>
+      {% if current_user.is_admin %}
+        <a class="btn-ghost" href="{{ url_for('admin.admin_home') }}">Admin</a>
+      {% endif %}
     </div>
 
     <p class="small muted note">
