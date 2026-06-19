@@ -54,15 +54,23 @@
       <div class="grid-outer">
         {% for row in grid %}
           <div class="league-row">
-            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-              <div style="font-weight:700;">{{ row.league_name }}</div>
-              {% if row.platform == 'mfl' %}
-                <span class="badge badge-mfl">MFL</span>
-              {% else %}
-                <span class="badge badge-slp">SLP</span>
-              {% endif %}
-              {% if row.header_weeks and row.header_weeks|length > 0 %}
-                <div class="sub">Weeks {{ row.header_weeks[0] }}–{{ row.header_weeks[-1] }}</div>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+              <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <div style="font-weight:700;">{{ row.league_name }}</div>
+                {% if row.platform == 'mfl' %}
+                  <span class="badge badge-mfl">MFL</span>
+                {% else %}
+                  <span class="badge badge-slp">SLP</span>
+                {% endif %}
+                {% if row.header_weeks and row.header_weeks|length > 0 %}
+                  <div class="sub">Weeks {{ row.header_weeks[0] }}–{{ row.header_weeks[-1] }}</div>
+                {% endif %}
+              </div>
+              {% if row.platform == 'mfl' and not row.error %}
+                <a class="btn-ghost"
+                   href="{{ url_for('sos.simulate_mfl_season', league_id=row.league.id, start_week=row.start_week or start_week) }}">
+                  Simulate Season
+                </a>
               {% endif %}
             </div>
 
