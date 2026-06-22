@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import re
+import time
 import xml.etree.ElementTree as ET
 from typing import Dict, Iterable, List, Optional, Tuple, Any
 from collections import defaultdict
 
+import requests
 from flask import Blueprint, abort, current_app, render_template, request
 from flask_login import login_required, current_user
 
@@ -600,22 +602,46 @@ def _fetch_projected_scores_chunked(
     cookie: Optional[str],
     chunk_size: int = 80,
 ) -> Dict[int, Any]:
+    """Fetch one week's unique rostered players without exceeding MFL's request rate."""
     merged: Dict[int, Any] = {}
     clean_ids = sorted({int(pid) for pid in player_ids if pid is not None})
     for ix in range(0, len(clean_ids), chunk_size):
         chunk = clean_ids[ix:ix + chunk_size]
         if not chunk:
             continue
-        merged.update(
-            fetch_projected_scores(
-                host,
-                league.mfl_id,
-                league.year,
-                week,
-                chunk,
-                cookie=cookie,
-            )
-        )
+        for attempt in range(4):
+            try:
+                merged.update(
+                    fetch_projected_scores(
+                        host,
+                        league.mfl_id,
+                        league.year,
+                        week,
+                        chunk,
+                        cookie=cookie,
+                    )
+                )
+                # Keep the next batch, including next week's first one, below MFL's limit.
+                time.sleep(1.5)
+                break
+            except requests.exceptions.HTTPError as exc:
+                response = getattr(exc, "response", None)
+                if getattr(response, "status_code", None) != 429 or attempt == 3:
+                    raise
+
+                retry_after = getattr(response, "headers", {}).get("Retry-After")
+                try:
+                    wait_seconds = max(float(retry_after), 2.0)
+                except (TypeError, ValueError):
+                    wait_seconds = 4.0 * (attempt + 1)
+                current_app.logger.warning(
+                    "MFL throttled projected scores for league %s week %s batch %s; retrying in %.1fs",
+                    league.id,
+                    week,
+                    (ix // chunk_size) + 1,
+                    wait_seconds,
+                )
+                time.sleep(wait_seconds)
     return merged
 
 def _projection_value(projections: Dict[int, Any], pid: int) -> float:

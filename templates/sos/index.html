@@ -67,7 +67,7 @@
                 {% endif %}
               </div>
               {% if row.platform == 'mfl' and not row.error %}
-                <a class="btn-ghost"
+                <a class="btn-ghost simulate-season-link"
                    href="{{ url_for('sos.simulate_mfl_season', league_id=row.league.id, start_week=row.start_week or start_week) }}">
                   Simulate Season
                 </a>
@@ -143,4 +143,23 @@
     {% endif %}
   </div>
 </div>
+
+<script>
+  (function () {
+    document.querySelectorAll('.simulate-season-link').forEach(function (link) {
+      link.addEventListener('click', function () {
+        if (!window.SyncOverlay) return;
+        const leagueRow = link.closest('.league-row');
+        const leagueName = leagueRow && leagueRow.querySelector('[style*="font-weight:700"]');
+        window.SyncOverlay.show({
+          headline: 'Simulating season...',
+          league: leagueName ? leagueName.textContent.trim() : '',
+          phase: 'MFL projections and matchups',
+          detail: 'Fetching one week at a time. MFL requests are paced to keep the simulation reliable.',
+          spinner: true
+        });
+      });
+    });
+  })();
+</script>
 {% endblock %}
