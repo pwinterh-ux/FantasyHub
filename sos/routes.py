@@ -593,57 +593,41 @@ def _mfl_rosters_for_league(league_id: int) -> Dict[str, List[Tuple[int, str, st
         out[key].append((pid_i, name or "", (pos or "").upper(), (nfl or "").upper()))
     return dict(out)
 
-def _fetch_projected_scores_chunked(
+def _fetch_weekly_projected_scores(
     *,
     host: str,
     league: League,
     week: int,
-    player_ids: List[int],
     cookie: Optional[str],
-    chunk_size: int = 80,
 ) -> Dict[int, Any]:
-    """Fetch one week's unique rostered players without exceeding MFL's request rate."""
-    merged: Dict[int, Any] = {}
-    clean_ids = sorted({int(pid) for pid in player_ids if pid is not None})
-    for ix in range(0, len(clean_ids), chunk_size):
-        chunk = clean_ids[ix:ix + chunk_size]
-        if not chunk:
-            continue
-        for attempt in range(4):
+    """Fetch MFL's full projection pool once for one week (PLAYERS is blank)."""
+    for attempt in range(4):
+        try:
+            projections = fetch_projected_scores(
+                host,
+                league.mfl_id,
+                league.year,
+                week,
+                [],
+                cookie=cookie,
+            )
+            time.sleep(3.0)
+            return projections
+        except requests.exceptions.HTTPError as exc:
+            response = getattr(exc, "response", None)
+            if getattr(response, "status_code", None) != 429 or attempt == 3:
+                raise
+            retry_after = (getattr(response, "headers", None) or {}).get("Retry-After")
             try:
-                merged.update(
-                    fetch_projected_scores(
-                        host,
-                        league.mfl_id,
-                        league.year,
-                        week,
-                        chunk,
-                        cookie=cookie,
-                    )
-                )
-                # Keep the next batch, including next week's first one, below MFL's limit.
-                time.sleep(1.5)
-                break
-            except requests.exceptions.HTTPError as exc:
-                response = getattr(exc, "response", None)
-                if getattr(response, "status_code", None) != 429 or attempt == 3:
-                    raise
-
-                retry_after = getattr(response, "headers", {}).get("Retry-After")
-                try:
-                    wait_seconds = max(float(retry_after), 2.0)
-                except (TypeError, ValueError):
-                    wait_seconds = 4.0 * (attempt + 1)
-                current_app.logger.warning(
-                    "MFL throttled projected scores for league %s week %s batch %s; retrying in %.1fs",
-                    league.id,
-                    week,
-                    (ix // chunk_size) + 1,
-                    wait_seconds,
-                )
-                time.sleep(wait_seconds)
-    return merged
-
+                wait_seconds = max(float(retry_after), 5.0)
+            except (TypeError, ValueError):
+                wait_seconds = 10.0 * (attempt + 1)
+            current_app.logger.warning(
+                "MFL throttled full projected scores for league %s week %s; retrying in %.1fs",
+                league.id, week, wait_seconds,
+            )
+            time.sleep(wait_seconds)
+    raise RuntimeError("MFL projection request did not return a result.")
 def _projection_value(projections: Dict[int, Any], pid: int) -> float:
     proj = projections.get(pid)
     raw = getattr(proj, "projected", None)
@@ -678,7 +662,6 @@ def _simulate_mfl_league(
 ) -> dict:
     team_map = _team_lookup_mfl(league.id)
     rosters = _mfl_rosters_for_league(league.id)
-    all_player_ids = sorted({pid for players in rosters.values() for pid, _n, _p, _t in players})
     total_required, ranges = parse_lineup_requirements(getattr(league, "roster_slots", None))
     my_id = str(getattr(league, "franchise_id", "") or "").zfill(4)
 
@@ -708,11 +691,10 @@ def _simulate_mfl_league(
     big_wins: List[dict] = []
 
     for week in range(start_week, last_week + 1):
-        projections = _fetch_projected_scores_chunked(
+        projections = _fetch_weekly_projected_scores(
             host=host,
             league=league,
             week=week,
-            player_ids=all_player_ids,
             cookie=cookie,
         )
         weekly_lineups: Dict[str, dict] = {}
@@ -822,8 +804,6 @@ def _simulate_mfl_league(
     close_matchups.sort(key=lambda m: (m["margin"], m["week"]))
     big_wins.sort(key=lambda m: (-m["margin"], m["week"]))
 
-    projection_chunks = (len(all_player_ids) + 79) // 80 if all_player_ids else 0
-
     return {
         "league_name": league.name or "League",
         "start_week": start_week,
@@ -835,5 +815,5 @@ def _simulate_mfl_league(
         "close_matchups": close_matchups[:12],
         "big_wins": big_wins[:12],
         "lineup_rules": getattr(league, "roster_slots", None) or "",
-        "projection_calls": len(list(range(start_week, last_week + 1))) * projection_chunks,
+        "projection_calls": len(weeks),
     }
