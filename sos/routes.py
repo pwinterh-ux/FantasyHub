@@ -651,6 +651,70 @@ def _record_sort_key(row: dict) -> Tuple[float, float, str]:
     win_pct = ((wins + 0.5 * ties) / games) if games else 0.0
     return (-win_pct, -float(row.get("final_pf") or 0), str(row.get("team_name") or ""))
 
+_POSITION_SCORE_COLUMNS = ("QB", "RB", "WR", "TE", "FLEX", "SF", "BENCH")
+
+def _slot_minimum(ranges: Dict[str, Tuple[int, int]], *keys: str) -> int:
+    for key in keys:
+        if key in ranges:
+            return int(ranges[key][0])
+    return 0
+
+def _weekly_positional_scores(
+    players: List[Tuple[int, str, str, str]],
+    projections: Dict[int, Any],
+    starter_ids: List[int],
+    ranges: Dict[str, Tuple[int, int]],
+) -> Dict[str, float]:
+    """Score required starters first, then show remaining starter quality as flex depth."""
+    player_map = {pid: (pos or "").upper() for pid, _name, pos, _nfl in players}
+    scores = {key: 0.0 for key in _POSITION_SCORE_COLUMNS}
+    selected = sorted(starter_ids, key=lambda pid: (-_projection_value(projections, pid), pid))
+    used: set[int] = set()
+
+    for pos in ("QB", "RB", "WR", "TE"):
+        required = _slot_minimum(ranges, pos)
+        for pid in [pid for pid in selected if player_map.get(pid) == pos][:required]:
+            used.add(pid)
+            scores[pos] += _projection_value(projections, pid)
+
+    flex_slots = _slot_minimum(ranges, "FLEX")
+    flex_candidates = [
+        pid for pid in selected
+        if pid not in used and player_map.get(pid) in {"RB", "WR", "TE"}
+    ]
+    # Some MFL formats encode flex capacity only through RB/WR/TE max ranges.
+    flex_limit = flex_slots if flex_slots else len(flex_candidates)
+    for pid in flex_candidates[:flex_limit]:
+        used.add(pid)
+        scores["FLEX"] += _projection_value(projections, pid)
+
+    superflex_slots = _slot_minimum(ranges, "SF", "SUPERFLEX", "SFLX")
+    superflex_candidates = [
+        pid for pid in selected
+        if pid not in used and player_map.get(pid) in {"QB", "RB", "WR", "TE"}
+    ]
+    for pid in superflex_candidates[:superflex_slots]:
+        used.add(pid)
+        scores["SF"] += _projection_value(projections, pid)
+
+    # Bench depth is the five strongest non-starters, with at most one quarterback.
+    bench_ids = sorted(
+        [pid for pid in player_map if pid not in set(starter_ids)],
+        key=lambda pid: (-_projection_value(projections, pid), pid),
+    )
+    bench_count = 0
+    bench_qbs = 0
+    for pid in bench_ids:
+        if player_map.get(pid) == "QB" and bench_qbs >= 1:
+            continue
+        scores["BENCH"] += _projection_value(projections, pid)
+        bench_count += 1
+        bench_qbs += int(player_map.get(pid) == "QB")
+        if bench_count == 5:
+            break
+
+    return scores
+
 def _simulate_mfl_league(
     *,
     league: League,
@@ -689,6 +753,11 @@ def _simulate_mfl_league(
     weeks: List[dict] = []
     close_matchups: List[dict] = []
     big_wins: List[dict] = []
+    starter_usage: Dict[str, Dict[int, dict]] = defaultdict(dict)
+    positional_totals: Dict[str, Dict[str, float]] = {
+        fid: {key: 0.0 for key in _POSITION_SCORE_COLUMNS}
+        for fid in team_map
+    }
 
     for week in range(start_week, last_week + 1):
         projections = _fetch_weekly_projected_scores(
@@ -701,6 +770,9 @@ def _simulate_mfl_league(
         for fid, players in rosters.items():
             starter_ids = pick_optimal_lineup(players, projections, total_required, ranges)
             player_lookup = {pid: (name, pos, nfl) for pid, name, pos, nfl in players}
+            positional_scores = _weekly_positional_scores(players, projections, starter_ids, ranges)
+            for key, value in positional_scores.items():
+                positional_totals.setdefault(fid, {column: 0.0 for column in _POSITION_SCORE_COLUMNS})[key] += value
             starters = []
             total = 0.0
             for pid in starter_ids:
@@ -714,6 +786,13 @@ def _simulate_mfl_league(
                     "team": nfl or "",
                     "projected": score,
                 })
+                usage = starter_usage[fid].setdefault(pid, {
+                    "team_name": getattr(team_map.get(fid), "name", None) or f"Franchise {fid}",
+                    "player_name": name or str(pid),
+                    "position": pos or "",
+                    "starts": 0,
+                })
+                usage["starts"] += 1
             starters.sort(key=lambda p: (-float(p["projected"]), p["position"], p["name"]))
             weekly_lineups[fid] = {
                 "projected": total,
@@ -803,6 +882,22 @@ def _simulate_mfl_league(
     my_matchups = [m for w in weeks for m in w["matchups"] if m["is_my_matchup"]]
     close_matchups.sort(key=lambda m: (m["margin"], m["week"]))
     big_wins.sort(key=lambda m: (-m["margin"], m["week"]))
+    starter_rows = sorted(
+        [entry for team_entries in starter_usage.values() for entry in team_entries.values()],
+        key=lambda row: (row["team_name"], -int(row["starts"]), row["position"], row["player_name"]),
+    )
+    positional_rows = []
+    for fid, totals in positional_totals.items():
+        row = {
+            "team_name": getattr(team_map.get(fid), "name", None) or f"Franchise {fid}",
+            "is_me": fid == my_id,
+            **totals,
+        }
+        row["total"] = sum(totals.values())
+        positional_rows.append(row)
+    positional_rows.sort(key=lambda row: (-float(row["total"]), row["team_name"]))
+    for rank, row in enumerate(positional_rows, start=1):
+        row["rank"] = rank
 
     return {
         "league_name": league.name or "League",
@@ -814,6 +909,8 @@ def _simulate_mfl_league(
         "my_matchups": my_matchups,
         "close_matchups": close_matchups[:12],
         "big_wins": big_wins[:12],
+        "starter_rows": starter_rows,
+        "positional_rows": positional_rows,
         "lineup_rules": getattr(league, "roster_slots", None) or "",
         "projection_calls": len(weeks),
     }
