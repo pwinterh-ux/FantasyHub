@@ -196,6 +196,39 @@
         </details>
       {% endfor %}
     </div>
+
+    <div class="sim-panel">
+      <div style="font-weight:800;margin-bottom:4px;">Positional Strength</div>
+      <div class="sub" style="margin-bottom:8px;">Required QB, RB, WR, and TE starters score first. Flex and Superflex show the next best selected starters. Bench is the top five non-starters each week, with at most one QB.</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Rank</th><th>Team</th><th class="num">QB</th><th class="num">RB</th><th class="num">WR</th><th class="num">TE</th><th class="num">Flex</th><th class="num">SFlex</th><th class="num">Top 5 Bench</th><th class="num">Total</th></tr></thead>
+          <tbody>
+            {% for row in simulation.positional_rows %}
+              <tr class="data-row {% if row.is_me %}me{% endif %}">
+                <td>#{{ row.rank }}</td><td>{{ row.team_name }}</td>
+                <td class="num">{{ "%.1f"|format(row.QB) }}</td><td class="num">{{ "%.1f"|format(row.RB) }}</td><td class="num">{{ "%.1f"|format(row.WR) }}</td><td class="num">{{ "%.1f"|format(row.TE) }}</td>
+                <td class="num">{{ "%.1f"|format(row.FLEX) }}</td><td class="num">{{ "%.1f"|format(row.SF) }}</td><td class="num">{{ "%.1f"|format(row.BENCH) }}</td><td class="num">{{ "%.1f"|format(row.total) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sim-panel">
+      <div style="font-weight:800;margin-bottom:8px;">Projected Starter Usage</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Team</th><th>Player</th><th>Position</th><th class="num">Starts</th></tr></thead>
+          <tbody>
+            {% for row in simulation.starter_rows %}
+              <tr class="data-row"><td>{{ row.team_name }}</td><td>{{ row.player_name }}</td><td>{{ row.position }}</td><td class="num">{{ row.starts }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
   {% endif %}
 </div>
 {% endblock %}
