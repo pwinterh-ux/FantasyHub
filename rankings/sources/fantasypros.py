@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import unescape
+import json
 import re
 
 import requests
@@ -221,14 +222,82 @@ def _parse_tables(
     return out
 
 
+def _parse_ecr_data(
+    html: str,
+    *,
+    wanted: set[str],
+) -> list[FantasyProsRankRow]:
+    """Parse FantasyPros rankings embedded in ``var ecrData = {...};``."""
+    marker = "var ecrData ="
+    marker_idx = html.find(marker)
+    if marker_idx == -1:
+        return []
+
+    json_start = html.find("{", marker_idx + len(marker))
+    if json_start == -1:
+        return []
+
+    try:
+        data, _ = json.JSONDecoder().raw_decode(html[json_start:])
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return []
+
+    players = data.get("players")
+    if not isinstance(players, list):
+        return []
+
+    out: list[FantasyProsRankRow] = []
+
+    for player in players:
+        if not isinstance(player, dict):
+            continue
+
+        pos = str(player.get("player_position_id") or "").upper().strip()
+        if pos not in wanted:
+            continue
+
+        name_raw = str(player.get("player_name") or "").strip()
+        if not name_raw:
+            continue
+
+        pos_rank_text = str(player.get("pos_rank") or "").upper().strip()
+        rank_match = re.fullmatch(r"(QB|RB|WR|TE)([0-9]{1,3})", pos_rank_text)
+        if not rank_match:
+            continue
+
+        rank_pos = rank_match.group(1)
+        if rank_pos != pos:
+            continue
+
+        team = str(player.get("player_team_id") or "").upper().strip() or None
+
+        out.append(
+            FantasyProsRankRow(
+                source="fantasypros",
+                source_mfl_id=None,
+                name_raw=name_raw,
+                name_normalized=normalize_name_for_matching(name_raw),
+                position=pos,
+                team=team,
+                rank=int(rank_match.group(2)),
+                value=None,
+            )
+        )
+
+    return out
+
+
 def parse_fantasypros_dynasty_overall(html: str, *, position: str | None = None) -> list[FantasyProsRankRow]:
     wanted = {position.upper()} if position else SUPPORTED_POSITIONS
     fallback_rank_by_pos = {"QB": 0, "RB": 0, "WR": 0, "TE": 0}
 
     rows: list[FantasyProsRankRow] = []
-    rows.extend(_parse_player_row_blocks(html, wanted=wanted, fallback_rank_by_pos=fallback_rank_by_pos))
+    rows.extend(_parse_ecr_data(html, wanted=wanted))
 
-    # Fallback parser for non-player-row/table variants.
+    # Legacy fallbacks in case FantasyPros changes formats again.
+    if not rows:
+        rows.extend(_parse_player_row_blocks(html, wanted=wanted, fallback_rank_by_pos=fallback_rank_by_pos))
+
     if not rows:
         rows.extend(_parse_tables(html, wanted=wanted, fallback_rank_by_pos=fallback_rank_by_pos))
 
