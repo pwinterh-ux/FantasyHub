@@ -43,6 +43,71 @@ def _norm_id(val: Any) -> Optional[str]:
     except Exception:
         return s
 
+
+def _load_draft_meta(mfl_ids: Iterable[str]) -> dict[str, dict]:
+    """
+    Load RosterDash-owned draft metadata keyed by canonical MFL id.
+
+    This table is intentionally separate from the MFL players table so
+    normal player-pool refreshes cannot overwrite draft-class metadata.
+    """
+    ids = sorted({
+        str(mid).strip()
+        for mid in mfl_ids
+        if mid not in (None, "") and str(mid).strip()
+    })
+
+    if not ids:
+        return {}
+
+    tbl = _reflect_table("player_draft_meta")
+    if tbl is None:
+        return {}
+
+    stmt = (
+        select(
+            tbl.c.mfl_id,
+            tbl.c.draft_year,
+            tbl.c.draft_round,
+            tbl.c.draft_pick,
+            tbl.c.draft_team,
+            tbl.c.is_udfa,
+            tbl.c.source,
+        )
+        .where(tbl.c.mfl_id.in_(ids))
+    )
+
+    out: dict[str, dict] = {}
+
+    for row in db.session.execute(stmt).mappings().all():
+        mid = str(row.get("mfl_id") or "").strip()
+
+        if not mid:
+            continue
+
+        out[mid] = {
+            "draft_year": (
+                int(row["draft_year"])
+                if row.get("draft_year") is not None
+                else None
+            ),
+            "draft_round": (
+                int(row["draft_round"])
+                if row.get("draft_round") is not None
+                else None
+            ),
+            "draft_pick": (
+                int(row["draft_pick"])
+                if row.get("draft_pick") is not None
+                else None
+            ),
+            "draft_team": row.get("draft_team"),
+            "is_udfa": bool(row.get("is_udfa")),
+            "source": row.get("source"),
+        }
+
+    return out
+
 @dataclass
 class ExpoRow:
     key: str                     # canonical key (mfl:<id>) or np:<name>|<pos>
@@ -297,6 +362,16 @@ def exposure_index():
     q = request.args.get("q")
     anchor = request.args.get("anchor")  # optional preselect player key (e.g., mfl:1234)
 
+    # Draft-class selection is a DISPLAY filter only.
+    # Exposure totals/league denominators are calculated before this is applied.
+    selected_draft_set: set[str] = set()
+
+    for raw in request.args.getlist("draft"):
+        value = str(raw or "").strip().lower()
+
+        if value == "unknown" or value.isdigit():
+            selected_draft_set.add(value)
+
     # gather both platforms
     mfl = _gather_mfl_holdings()
     sleeper = _gather_sleeper_holdings()
@@ -323,9 +398,111 @@ def exposure_index():
         "sleeper_count": sum(1 for h in r.holdings if h.get("platform") == "sleeper"),
     } for r in rows]
 
+    # ---------------------------------------------------------
+    # Draft metadata enrichment
+    #
+    # IMPORTANT:
+    # rows were already aggregated above across ALL leagues.
+    # Filtering below only determines which player cards render.
+    # It does not alter exposure counts, league denominators,
+    # platform counts, or exposure percentages.
+    # ---------------------------------------------------------
+    mfl_ids = [
+        r["key"].split(":", 1)[1]
+        for r in rows_payload
+        if str(r.get("key") or "").startswith("mfl:")
+    ]
+
+    draft_meta = _load_draft_meta(mfl_ids)
+
+    for r in rows_payload:
+        key = str(r.get("key") or "")
+        mid = (
+            key.split(":", 1)[1]
+            if key.startswith("mfl:")
+            else None
+        )
+
+        meta = draft_meta.get(mid or "", {})
+
+        r["mfl_id"] = mid
+        r["draft_year"] = meta.get("draft_year")
+        r["draft_round"] = meta.get("draft_round")
+        r["draft_pick"] = meta.get("draft_pick")
+        r["draft_team"] = meta.get("draft_team")
+        r["is_udfa"] = bool(meta.get("is_udfa"))
+        r["draft_source"] = meta.get("source")
+
+    # Build the checkbox menu from draft classes that are actually
+    # represented in the full aggregated exposure result.
+    draft_years = sorted(
+        {
+            int(r["draft_year"])
+            for r in rows_payload
+            if r.get("draft_year") is not None
+        },
+        reverse=True,
+    )
+
+    unknown_available = any(
+        r.get("draft_year") is None
+        for r in rows_payload
+    )
+
+    draft_options = [
+        {
+            "value": str(year),
+            "label": str(year),
+            "selected": str(year) in selected_draft_set,
+        }
+        for year in draft_years
+    ]
+
+    if unknown_available:
+        draft_options.append(
+            {
+                "value": "unknown",
+                "label": "Unknown",
+                "selected": "unknown" in selected_draft_set,
+            }
+        )
+
+    selected_labels = [
+        opt["label"]
+        for opt in draft_options
+        if opt["selected"]
+    ]
+
+    if not selected_labels:
+        draft_filter_label = "Draft Class"
+    elif len(selected_labels) == 1:
+        draft_filter_label = selected_labels[0]
+    else:
+        draft_filter_label = (
+            f"{selected_labels[0]} + {len(selected_labels) - 1}"
+        )
+
+    def _draft_visible(row: dict) -> bool:
+        if not selected_draft_set:
+            return True
+
+        year = row.get("draft_year")
+
+        if year is None:
+            return "unknown" in selected_draft_set
+
+        return str(year) in selected_draft_set
+
+    visible_rows = [
+        r
+        for r in rows_payload
+        if _draft_visible(r)
+    ]
+
     # header summary
     summary = {
         "total_players": len(rows_payload),
+        "visible_players": len(visible_rows),
         "total_holdings": sum(r["total"] for r in rows_payload),
         "unique_platforms": sorted({p for r in rows_payload for p in r["platforms"] if p}),
         "leagues_total": league_counts["total"],
@@ -335,7 +512,14 @@ def exposure_index():
 
     return render_template(
         "exposure/index.html",
-        rows=rows_payload,
+        rows=visible_rows,
         summary=summary,
-        filters={"pos": pos or "", "q": q or "", "anchor": anchor or ""},
+        filters={
+            "pos": pos or "",
+            "q": q or "",
+            "anchor": anchor or "",
+            "drafts": sorted(selected_draft_set),
+            "draft_options": draft_options,
+            "draft_label": draft_filter_label,
+        },
     )
