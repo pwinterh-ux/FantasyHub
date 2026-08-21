@@ -223,6 +223,96 @@
     margin-top: 12px; padding: 12px; border-radius: 12px;
     background: rgba(34,197,94,.12); border: 1px solid rgba(74,222,128,.28); color:#dcfce7;
   }
+
+  /* ---------- Passive asset refresh ---------- */
+  .asset-refresh-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 0 2px;
+    font-size: 12px;
+    color: rgba(226,232,240,.78);
+    white-space: nowrap;
+  }
+
+  .asset-refresh-summary.is-running {
+    color: #bae6fd;
+  }
+
+  .asset-refresh-summary.is-complete {
+    color: #bbf7d0;
+  }
+
+  .asset-refresh-summary.has-failures {
+    color: #fde68a;
+  }
+
+  .asset-sync-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 5px;
+    min-height: 18px;
+    font-size: 11px;
+    color: rgba(226,232,240,.62);
+  }
+
+  .asset-sync-status.is-queued {
+    color: rgba(226,232,240,.62);
+  }
+
+  .asset-sync-status.is-refreshing {
+    color: #bae6fd;
+  }
+
+  .asset-sync-status.is-success {
+    color: #86efac;
+  }
+
+  .asset-sync-status.is-failed {
+    color: #fca5a5;
+  }
+
+  .asset-sync-icon {
+    display: inline-flex;
+    width: 14px;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .asset-sync-icon.is-spinning {
+    animation: assetRefreshSpin .9s linear infinite;
+  }
+
+  @keyframes assetRefreshSpin {
+    to { transform: rotate(360deg); }
+  }
+
+  .asset-retry-btn {
+    appearance: none;
+    border: 0;
+    padding: 0;
+    margin: 0 0 0 2px;
+    background: transparent;
+    color: #7dd3fc;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .asset-retry-btn:hover {
+    color: #bae6fd;
+  }
+
+  .asset-retry-btn:disabled {
+    opacity: .55;
+    cursor: default;
+  }
+
 </style>
 
 <!-- Overlay -->
@@ -343,6 +433,7 @@
               data-league-year="{{ league.season }}"
               data-external-id="{{ league.external_id or '' }}"
               data-mfl-id="{{ league.external_id if league.platform == 'mfl' else '' }}"
+              data-synced-at="{{ league.synced_at or '' }}"
               data-details-url="{{ league.details_url }}"
               data-submit-url="{{ league.submit_url or '' }}"
               data-delete-url="{{ league.delete_url or '' }}"
@@ -681,7 +772,7 @@
       const sellQuery = r.name || r.player_id || '';
       const sellHref = `${baseOffersSearch}?q=${encodeURIComponent(sellQuery)}&mode=sell`;
       const displayName = escapeHtml(r.name || r.player_id || '—');
-      const rankLabel = (r.position_rank === null || r.position_rank === undefined || r.position_rank === '') ? 'NULL' : String(r.position_rank);
+      const rankLabel = (r.position_rank === null || r.position_rank === undefined || r.position_rank === '') ? '—' : String(r.position_rank);
 
       return `
         <tr class="${groupStart}">
@@ -1136,268 +1227,801 @@
     }
   });
 
-  // ---------- ASSETS REFRESH (MFL + Sleeper with correct labels) ----------
+  // ---------- PASSIVE ASSET REFRESH QUEUE ----------
+  //
+  // Refresh Assets is intentionally separate from the full Add League
+  // sync. Each saved league is refreshed independently using the
+  // existing single-league ASSETS endpoints.
+  //
+  // The page remains fully usable while the queue runs.
+  //
   const cfgEl = document.getElementById('leagueRefreshConfig');
   let endpoints = {};
-  try { endpoints = JSON.parse(cfgEl?.textContent || '{}') || {}; } catch {}
 
-  const refreshLink = document.getElementById('refreshAssetsLink');
-  const overlay = document.getElementById('syncOverlay');
-  const spinner = document.getElementById('syncSpinner');
-  const headline = document.getElementById('syncHeadline');
-  const leagueLabel = document.getElementById('syncLeagueLabel');
-  const phaseLabel = document.getElementById('syncPhaseLabel');
-  const detail = document.getElementById('syncDetail');
-  const progressBar = document.getElementById('syncProgressBar');
-  const retryBtn = document.getElementById('syncRetry');
-  const cancelBtn = document.getElementById('syncCancel');
-
-  if (overlay && overlay.parentElement && overlay.parentElement !== document.body) {
-    overlay.parentElement.removeChild(overlay);
-    document.body.appendChild(overlay);
+  try {
+    endpoints = JSON.parse(cfgEl?.textContent || '{}') || {};
+  } catch (err) {
+    console.error('[Assets Refresh] Invalid endpoint configuration.', err);
   }
 
-  function disableLink(){ if (refreshLink){ refreshLink.setAttribute('aria-disabled','true'); refreshLink.classList.add('is-disabled'); } }
-  function restoreLink(){ if (refreshLink){ refreshLink.removeAttribute('aria-disabled'); refreshLink.classList.remove('is-disabled'); } }
+  const refreshLink =
+    document.getElementById('refreshAssetsLink');
 
-  function resetActions(){
-    if (!retryBtn || !cancelBtn) return;
-    retryBtn.style.display = 'none';
-    cancelBtn.style.display = 'none';
-    retryBtn.onclick = null;
-    cancelBtn.onclick = null;
-    cancelBtn.textContent = 'Cancel';
+  const ASSET_REFRESH_CONCURRENCY = 2;
+
+  let assetRefreshRunning = false;
+
+
+  function ensureRefreshSummary() {
+    if (!refreshLink) return null;
+
+    let node =
+      document.getElementById('assetRefreshSummary');
+
+    if (node) return node;
+
+    node = document.createElement('span');
+    node.id = 'assetRefreshSummary';
+    node.className = 'asset-refresh-summary';
+    node.setAttribute('aria-live', 'polite');
+
+    refreshLink.insertAdjacentElement(
+      'afterend',
+      node
+    );
+
+    return node;
   }
 
-  function updateProgress(done, total){
-    if (!progressBar) return;
-    const pct = total ? Math.min(100, Math.round((done/total)*100)) : 0;
-    progressBar.style.width = pct + '%';
+
+  function setOverallStatus(
+    message,
+    state = ''
+  ) {
+    const node = ensureRefreshSummary();
+
+    if (!node) return;
+
+    node.textContent = message || '';
+
+    node.className =
+      'asset-refresh-summary'
+      + (state ? ` ${state}` : '');
   }
 
-  function promptRetry(message, allowRetry){
-    return new Promise(resolve => {
-      spinner.style.display = 'none';
-      headline.textContent = 'Refresh paused';
-      detail.textContent = message || 'An error occurred.';
-      resetActions();
-      if (allowRetry) {
-        retryBtn.style.display = 'inline-flex';
-        retryBtn.onclick = () => {
-          resetActions(); spinner.style.display = 'block'; detail.textContent = 'Retrying…'; resolve(true);
-        };
-      }
-      cancelBtn.style.display = 'inline-flex';
-      if (!allowRetry) cancelBtn.textContent = 'Close';
-      cancelBtn.onclick = () => { resetActions(); resolve(false); };
-    });
+
+  function syncDateFromRaw(raw) {
+    const value = String(raw || '').trim();
+
+    if (!value) return null;
+
+    let normalized =
+      value.replace(' ', 'T');
+
+    /*
+     * League.synced_at is currently written with datetime.utcnow(),
+     * which produces an ISO value without a timezone suffix.
+     * Treat that stored value as UTC in the browser.
+     */
+    if (
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(
+        normalized
+      )
+    ) {
+      normalized += 'Z';
+    }
+
+    const parsed =
+      new Date(normalized);
+
+    if (
+      Number.isNaN(
+        parsed.getTime()
+      )
+    ) {
+      return null;
+    }
+
+    return parsed;
   }
 
-  function gatherMflFromTable(){
-    const rows = Array.from(document.querySelectorAll('tr.league-row[data-platform="mfl"]'));
-    const out = [];
-    const seen = new Set();
+
+  function relativeSyncLabel(raw) {
+    const dt = syncDateFromRaw(raw);
+
+    if (!dt) {
+      return 'Not recently synced';
+    }
+
+    const seconds =
+      Math.max(
+        0,
+        Math.floor(
+          (Date.now() - dt.getTime()) / 1000
+        )
+      );
+
+    if (seconds < 60) {
+      return 'Synced just now';
+    }
+
+    const minutes =
+      Math.floor(seconds / 60);
+
+    if (minutes < 60) {
+      return `Synced ${minutes}m ago`;
+    }
+
+    const hours =
+      Math.floor(minutes / 60);
+
+    if (hours < 24) {
+      return `Synced ${hours}h ago`;
+    }
+
+    const days =
+      Math.floor(hours / 24);
+
+    return `Synced ${days}d ago`;
+  }
+
+
+  function ensureRowStatusNode(row) {
+    if (!row) return null;
+
+    let node =
+      row.querySelector(
+        '.asset-sync-status'
+      );
+
+    if (node) return node;
+
+    /*
+     * Put the passive status under the league name in the first cell.
+     * This avoids adding another table column and keeps the existing
+     * Leagues layout intact.
+     */
+    const firstCell =
+      row.querySelector('td');
+
+    if (!firstCell) return null;
+
+    node =
+      document.createElement('div');
+
+    node.className =
+      'asset-sync-status';
+
+    firstCell.appendChild(node);
+
+    return node;
+  }
+
+
+  function setRowStatus(
+    row,
+    state,
+    message,
+    retryHandler = null
+  ) {
+    const node =
+      ensureRowStatusNode(row);
+
+    if (!node) return;
+
+    node.className =
+      'asset-sync-status'
+      + (state ? ` is-${state}` : '');
+
+    let icon = '○';
+    let spinning = false;
+
+    if (state === 'refreshing') {
+      icon = '↻';
+      spinning = true;
+    }
+
+    else if (state === 'success') {
+      icon = '✓';
+    }
+
+    else if (state === 'failed') {
+      icon = '!';
+    }
+
+    node.replaceChildren();
+
+    const iconNode =
+      document.createElement('span');
+
+    iconNode.className =
+      'asset-sync-icon'
+      + (
+        spinning
+          ? ' is-spinning'
+          : ''
+      );
+
+    iconNode.textContent = icon;
+
+    node.appendChild(iconNode);
+
+    const label =
+      document.createElement('span');
+
+    label.textContent =
+      message || '';
+
+    node.appendChild(label);
+
+    if (
+      retryHandler &&
+      state === 'failed'
+    ) {
+      const retry =
+        document.createElement('button');
+
+      retry.type = 'button';
+      retry.className =
+        'asset-retry-btn';
+
+      retry.textContent =
+        'Retry';
+
+      retry.addEventListener(
+        'click',
+        async event => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          retry.disabled = true;
+
+          await retryHandler();
+        }
+      );
+
+      node.appendChild(retry);
+    }
+  }
+
+
+  function initializeRowSyncLabels() {
+    document
+      .querySelectorAll(
+        'tr.league-row'
+      )
+      .forEach(row => {
+        const syncedAt =
+          row.getAttribute(
+            'data-synced-at'
+          );
+
+        setRowStatus(
+          row,
+          '',
+          relativeSyncLabel(
+            syncedAt
+          )
+        );
+      });
+  }
+
+
+  function gatherAssetRefreshItems() {
+    const rows =
+      Array.from(
+        document.querySelectorAll(
+          'tr.league-row'
+        )
+      );
+
+    const items = [];
+
     for (const row of rows) {
-      const mflId = row.getAttribute('data-mfl-id') || '';
-      if (!mflId || seen.has(mflId)) continue;
-      seen.add(mflId);
-      out.push({
-        id: mflId,
-        year: row.getAttribute('data-league-year') || '',
-        name: row.getAttribute('data-league-name') || `MFL ${mflId}`,
-        display: `MFL — ${row.getAttribute('data-league-name') || 'League'} (${mflId})`
+      const platform =
+        (
+          row.getAttribute(
+            'data-platform'
+          ) || ''
+        ).toLowerCase();
+
+      if (
+        platform !== 'mfl' &&
+        platform !== 'sleeper'
+      ) {
+        continue;
+      }
+
+      const dbId =
+        row.getAttribute(
+          'data-db-id'
+        ) || '';
+
+      const externalId =
+        row.getAttribute(
+          'data-external-id'
+        ) || '';
+
+      const year =
+        row.getAttribute(
+          'data-league-year'
+        ) || '';
+
+      const name =
+        row.getAttribute(
+          'data-league-name'
+        ) || 'League';
+
+      const key =
+        row.getAttribute(
+          'data-league-row'
+        ) || `${platform}-${dbId}`;
+
+      if (
+        platform === 'mfl' &&
+        !externalId
+      ) {
+        continue;
+      }
+
+      if (
+        platform === 'sleeper' &&
+        !dbId
+      ) {
+        continue;
+      }
+
+      items.push({
+        platform,
+        dbId,
+        externalId,
+        year,
+        name,
+        key,
+        row,
       });
     }
-    return out;
+
+    return items;
   }
 
-  async function runMflAssetsPhase(league){
-    const body = new URLSearchParams();
-    body.append('league_id', league.id);
-    body.append('mfl_id', league.id);
-    body.append('phase', 'ASSETS');
-    if (league.year !== undefined && league.year !== null && String(league.year) !== '') {
-      body.append('year', league.year);
-    }
-    const resp = await fetch(endpoints.mflSyncOneUrl, {
-      method: 'POST',
-      body,
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Accept': 'application/json'
-      }
-    });
-    const text = await resp.text();
+
+  async function parseRefreshResponse(resp) {
+    const text =
+      await resp.text();
+
     let payload = {};
-    if (text) { try { payload = JSON.parse(text); } catch { const e = new Error('Refresh returned an invalid response.'); e.retryable = true; throw e; } }
-    if (!resp.ok || (payload && payload.ok === false)) {
-      const message = (payload && payload.error) ? payload.error : `Refresh failed (${resp.status})`;
-      const e = new Error(message);
-      e.retryable = payload && Object.prototype.hasOwnProperty.call(payload,'retryable') ? !!payload.retryable : resp.status >= 500;
-      throw e;
-    }
-    return payload || {};
-  }
 
-  function describeAssetsMetrics(m){
-    m = m || {};
-    const parts = [];
-    if (m.rosters_inserted) parts.push(`${m.rosters_inserted} roster spot${m.rosters_inserted === 1 ? '' : 's'}`);
-    if (m.picks_inserted) parts.push(`${m.picks_inserted} draft pick${m.picks_inserted === 1 ? '' : 's'}`);
-    if (m.teams_touched) parts.push(`${m.teams_touched} team${m.teams_touched === 1 ? '' : 's'} touched`);
-    return parts.join(' • ');
-  }
-
-  async function fetchSleeperSaved(yearStr){
-    const url = `${endpoints.sleeperListUrl}?year=${encodeURIComponent(yearStr || '')}`;
-    const res = await fetch(url, { headers: { 'Accept': 'application/json' }});
-    const data = await res.json();
-    if (!res.ok || !data || !Array.isArray(data.leagues)) {
-      const msg = (data && data.error) ? data.error : 'Unable to load saved Sleeper leagues.';
-      const e = new Error(msg); e.retryable = false; throw e;
-    }
-    return data.leagues.map(l => ({
-      id: l.id, sleeper_id: l.sleeper_id, year: l.year,
-      name: l.name || `League ${l.sleeper_id}`,
-      display: `Sleeper — ${l.name || 'League'} (${l.sleeper_id || l.id})`
-    }));
-  }
-
-  async function runSleeperAssetsPhase(league){
-    const body = new URLSearchParams();
-    body.append('league_id', league.id);
-    if (league.year !== undefined && league.year !== null && String(league.year) !== '') {
-      body.append('year', league.year);
-    }
-    const resp = await fetch(endpoints.sleeperSyncOneUrl, {
-      method: 'POST',
-      body,
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'Accept': 'application/json' },
-    });
-    const text = await resp.text();
-    let payload = {};
-    if (text) { try { payload = JSON.parse(text); } catch { const e = new Error('Refresh returned an invalid response.'); e.retryable = true; throw e; } }
-    if (!resp.ok || (payload && payload.ok === false)) {
-      const message = (payload && payload.error) ? payload.error : `Refresh failed (${resp.status})`;
-      const e = new Error(message);
-      e.retryable = payload && Object.prototype.hasOwnProperty.call(payload,'retryable') ? !!payload.retryable : resp.status >= 500;
-      throw e;
-    }
-    return payload || {};
-  }
-
-  const refreshLinkEl = document.getElementById('refreshAssetsLink');
-  if (refreshLinkEl) {
-    refreshLinkEl.addEventListener('click', async (e) => {
-      e.preventDefault();
-      if (!overlay || !window.fetch || !window.URLSearchParams) return;
-
-      overlay.style.display = 'flex';
-      overlay.setAttribute('aria-busy','true');
-      spinner.style.display = 'block';
-      headline.textContent = 'Preparing refresh…';
-      leagueLabel.textContent = '';
-      phaseLabel.textContent = '';
-      detail.textContent = 'Gathering leagues…';
-      resetActions();
-      updateProgress(0, 1);
-      document.getElementById('syncProgress').style.display = 'block';
-
-      disableLink();
-
+    if (text) {
       try {
-        const mflLeagues = gatherMflFromTable();
-        const firstRow = document.querySelector('tr.league-row');
-        const yearHint = firstRow ? (firstRow.getAttribute('data-league-year') || '') : '';
-        const sleeperLeagues = await fetchSleeperSaved(yearHint);
-
-        const total = mflLeagues.length + sleeperLeagues.length;
-        let done = 0;
-        updateProgress(0, Math.max(1,total));
-
-        if (mflLeagues.length) headline.textContent = 'Refreshing MFL assets…';
-
-        for (let i=0; i<mflLeagues.length; ) {
-          const lg = mflLeagues[i];
-          leagueLabel.textContent = lg.display;
-          phaseLabel.textContent = 'Assets';
-          detail.textContent = 'Working…';
-          spinner.style.display = 'block';
-          resetActions();
-          try {
-            const res = await runMflAssetsPhase(lg);
-            done += 1; updateProgress(done, total);
-            let summary = describeAssetsMetrics(res.metrics || {});
-            if (res.fallback_used) summary = summary ? `${summary} • Used fallback` : 'Used fallback data';
-            if (res.warnings && res.warnings.length) {
-              const warn = res.warnings.join('; ');
-              summary = summary ? `${summary} • Warnings: ${warn}` : `Warnings: ${warn}`;
-            }
-            detail.textContent = summary || 'Assets refreshed.';
-            spinner.style.display = 'none';
-            phaseLabel.textContent = 'Assets ✓';
-            await new Promise(r => setTimeout(r, 120));
-            spinner.style.display = 'block';
-            phaseLabel.textContent = 'Assets';
-            i += 1;
-          } catch (err) {
-            const retryable = err && Object.prototype.hasOwnProperty.call(err,'retryable') ? !!err.retryable : true;
-            const again = await promptRetry(err && err.message ? err.message : 'Refresh failed.', retryable);
-            if (!again) { overlay.style.display = 'none'; overlay.setAttribute('aria-busy','false'); restoreLink(); return; }
-          }
-        }
-
-        if (sleeperLeagues.length) headline.textContent = 'Refreshing Sleeper assets…';
-
-        for (let j=0; j<sleeperLeagues.length; ) {
-          const lg = sleeperLeagues[j];
-          leagueLabel.textContent = lg.display;
-          phaseLabel.textContent = 'Assets';
-          detail.textContent = 'Working…';
-          spinner.style.display = 'block';
-          resetActions();
-          try {
-            const res = await runSleeperAssetsPhase(lg);
-            done += 1; updateProgress(done, total);
-            let summary = describeAssetsMetrics(res.metrics || {});
-            if (res.fallback_used) summary = summary ? `${summary} • Used fallback` : 'Used fallback data';
-            if (res.warnings && res.warnings.length) {
-              const warn = res.warnings.join('; ');
-              summary = summary ? `${summary} • Warnings: ${warn}` : `Warnings: ${warn}`;
-            }
-            detail.textContent = summary || 'Assets refreshed.';
-            spinner.style.display = 'none';
-            phaseLabel.textContent = 'Assets ✓';
-            await new Promise(r => setTimeout(r, 120));
-            spinner.style.display = 'block';
-            phaseLabel.textContent = 'Assets';
-            j += 1;
-          } catch (err) {
-            const retryable = err && Object.prototype.hasOwnProperty.call(err,'retryable') ? !!err.retryable : true;
-            const again = await promptRetry(err && err.message ? err.message : 'Refresh failed.', retryable);
-            if (!again) { overlay.style.display = 'none'; overlay.setAttribute('aria-busy','false'); restoreLink(); return; }
-          }
-        }
-
-        spinner.style.display = 'block';
-        progressBar.style.width = '100%';
-        phaseLabel.textContent = '';
-        detail.textContent = 'Reloading leagues…';
-        headline.textContent = 'Refresh complete!';
-        overlay.setAttribute('aria-busy','false');
-        restoreLink();
-        setTimeout(() => { window.location.reload(); }, 800);
-      } catch (err) {
-        const retryable = err && Object.prototype.hasOwnProperty.call(err,'retryable') ? !!err.retryable : false;
-        const again = await promptRetry(err && err.message ? err.message : 'Refresh failed.', retryable);
-        if (!again) {
-          overlay.style.display = 'none';
-          overlay.setAttribute('aria-busy','false');
-        }
-        restoreLink();
+        payload =
+          JSON.parse(text);
       }
-    });
+      catch {
+        const error =
+          new Error(
+            'Refresh returned an invalid response.'
+          );
+
+        error.retryable = true;
+        throw error;
+      }
+    }
+
+    if (
+      !resp.ok ||
+      payload?.ok === false
+    ) {
+      const error =
+        new Error(
+          payload?.error ||
+          `Refresh failed (${resp.status})`
+        );
+
+      error.retryable =
+        Object.prototype.hasOwnProperty.call(
+          payload || {},
+          'retryable'
+        )
+          ? Boolean(payload.retryable)
+          : resp.status >= 500;
+
+      throw error;
+    }
+
+    return payload || {};
   }
+
+
+  async function refreshMflItem(item) {
+    if (!endpoints.mflSyncOneUrl) {
+      throw new Error(
+        'MFL asset refresh endpoint is unavailable.'
+      );
+    }
+
+    const body =
+      new URLSearchParams();
+
+    body.append(
+      'league_id',
+      item.externalId
+    );
+
+    body.append(
+      'mfl_id',
+      item.externalId
+    );
+
+    body.append(
+      'phase',
+      'ASSETS'
+    );
+
+    if (item.year) {
+      body.append(
+        'year',
+        item.year
+      );
+    }
+
+    const resp =
+      await fetch(
+        endpoints.mflSyncOneUrl,
+        {
+          method: 'POST',
+          body,
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type':
+              'application/x-www-form-urlencoded; charset=UTF-8',
+            'Accept':
+              'application/json',
+          },
+        }
+      );
+
+    return parseRefreshResponse(
+      resp
+    );
+  }
+
+
+  async function refreshSleeperItem(item) {
+    if (!endpoints.sleeperSyncOneUrl) {
+      throw new Error(
+        'Sleeper asset refresh endpoint is unavailable.'
+      );
+    }
+
+    const body =
+      new URLSearchParams();
+
+    body.append(
+      'league_id',
+      item.dbId
+    );
+
+    if (item.year) {
+      body.append(
+        'year',
+        item.year
+      );
+    }
+
+    const resp =
+      await fetch(
+        endpoints.sleeperSyncOneUrl,
+        {
+          method: 'POST',
+          body,
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type':
+              'application/x-www-form-urlencoded; charset=UTF-8',
+            'Accept':
+              'application/json',
+          },
+        }
+      );
+
+    return parseRefreshResponse(
+      resp
+    );
+  }
+
+
+  async function performAssetRefresh(item) {
+    if (item.platform === 'mfl') {
+      return refreshMflItem(item);
+    }
+
+    return refreshSleeperItem(item);
+  }
+
+
+  function markRefreshSuccess(item) {
+    const now =
+      new Date();
+
+    item.row.setAttribute(
+      'data-synced-at',
+      now.toISOString()
+    );
+
+    /*
+     * Details are cached by the league-row key.
+     * Clear that cache so a later reopen gets the refreshed roster.
+     */
+    try {
+      leagueDetailsCache.delete(
+        String(item.key)
+      );
+    }
+    catch {}
+
+    setRowStatus(
+      item.row,
+      'success',
+      'Updated just now'
+    );
+  }
+
+
+  async function retrySingleItem(item) {
+    setRowStatus(
+      item.row,
+      'refreshing',
+      'Refreshing…'
+    );
+
+    setOverallStatus(
+      `Retrying ${item.name}…`,
+      'is-running'
+    );
+
+    try {
+      await performAssetRefresh(item);
+
+      markRefreshSuccess(item);
+
+      setOverallStatus(
+        `${item.name} updated`,
+        'is-complete'
+      );
+    }
+
+    catch (err) {
+      console.error(
+        '[Assets Refresh] Retry failed:',
+        item.name,
+        err
+      );
+
+      setRowStatus(
+        item.row,
+        'failed',
+        'Failed',
+        () => retrySingleItem(item)
+      );
+
+      setOverallStatus(
+        `${item.name} failed`,
+        'has-failures'
+      );
+    }
+  }
+
+
+  async function refreshAllAssets() {
+    if (assetRefreshRunning) {
+      return;
+    }
+
+    const items =
+      gatherAssetRefreshItems();
+
+    if (!items.length) {
+      setOverallStatus(
+        'No leagues to refresh'
+      );
+
+      return;
+    }
+
+    assetRefreshRunning = true;
+
+    if (refreshLink) {
+      refreshLink.setAttribute(
+        'aria-disabled',
+        'true'
+      );
+
+      refreshLink.classList.add(
+        'is-disabled'
+      );
+
+      refreshLink.textContent =
+        '↻ Refreshing';
+    }
+
+    let nextIndex = 0;
+    let completed = 0;
+    let successes = 0;
+    let failures = 0;
+
+    const total =
+      items.length;
+
+
+    function updateOverall() {
+      let message =
+        `Refreshing ${completed} of ${total}`;
+
+      if (failures) {
+        message +=
+          ` · ${failures} failed`;
+      }
+
+      setOverallStatus(
+        message,
+        failures
+          ? 'has-failures'
+          : 'is-running'
+      );
+    }
+
+
+    for (const item of items) {
+      setRowStatus(
+        item.row,
+        'queued',
+        'Queued'
+      );
+    }
+
+    updateOverall();
+
+
+    async function worker() {
+      while (true) {
+        const index =
+          nextIndex++;
+
+        if (index >= total) {
+          return;
+        }
+
+        const item =
+          items[index];
+
+        setRowStatus(
+          item.row,
+          'refreshing',
+          'Refreshing…'
+        );
+
+        try {
+          await performAssetRefresh(
+            item
+          );
+
+          successes += 1;
+
+          markRefreshSuccess(
+            item
+          );
+        }
+
+        catch (err) {
+          failures += 1;
+
+          console.error(
+            '[Assets Refresh] Failed:',
+            item.name,
+            err
+          );
+
+          const detail =
+            err?.message
+              ? `Failed: ${err.message}`
+              : 'Failed';
+
+          setRowStatus(
+            item.row,
+            'failed',
+            detail,
+            () => retrySingleItem(item)
+          );
+        }
+
+        finally {
+          completed += 1;
+          updateOverall();
+        }
+      }
+    }
+
+
+    const workerCount =
+      Math.min(
+        ASSET_REFRESH_CONCURRENCY,
+        total
+      );
+
+    const workers = [];
+
+    for (
+      let i = 0;
+      i < workerCount;
+      i++
+    ) {
+      workers.push(
+        worker()
+      );
+    }
+
+
+    await Promise.all(
+      workers
+    );
+
+
+    if (failures) {
+      setOverallStatus(
+        `Assets refreshed · ${successes}/${total} successful · ${failures} failed`,
+        'has-failures'
+      );
+    }
+
+    else {
+      setOverallStatus(
+        `✓ Assets refreshed · ${successes}/${total}`,
+        'is-complete'
+      );
+    }
+
+
+    if (refreshLink) {
+      refreshLink.removeAttribute(
+        'aria-disabled'
+      );
+
+      refreshLink.classList.remove(
+        'is-disabled'
+      );
+
+      refreshLink.textContent =
+        'Refresh Assets';
+    }
+
+
+    assetRefreshRunning = false;
+  }
+
+
+  if (refreshLink) {
+    refreshLink.addEventListener(
+      'click',
+      event => {
+        event.preventDefault();
+
+        if (
+          refreshLink.getAttribute(
+            'aria-disabled'
+          ) === 'true'
+        ) {
+          return;
+        }
+
+        refreshAllAssets();
+      }
+    );
+  }
+
+
+  initializeRowSyncLabels();
+
 })();
 </script>
 {% endblock %}
