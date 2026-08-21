@@ -16,21 +16,108 @@
         </div>
       </div>
 
-      <div class="filters">
+      {% set pos = (filters.pos or '').upper() %}
+      <form
+        method="get"
+        action="{{ url_for('exposure.exposure_index') }}"
+        class="filters"
+        id="exposureFilters"
+      >
+        <input
+          type="hidden"
+          name="pos"
+          id="posFilter"
+          value="{{ filters.pos or '' }}"
+        >
+
         <div class="seg">
-          {% set pos = (filters.pos or '').upper() %}
-          <a href="{{ url_for('exposure.exposure_index', pos='') }}" class="seg-btn {{ 'is-active' if not pos }}">ALL</a>
-          <a href="{{ url_for('exposure.exposure_index', pos='QB', q=filters.q) }}" class="seg-btn {{ 'is-active' if pos=='QB' }}">QB</a>
-          <a href="{{ url_for('exposure.exposure_index', pos='RB', q=filters.q) }}" class="seg-btn {{ 'is-active' if pos=='RB' }}">RB</a>
-          <a href="{{ url_for('exposure.exposure_index', pos='WR', q=filters.q) }}" class="seg-btn {{ 'is-active' if pos=='WR' }}">WR</a>
-          <a href="{{ url_for('exposure.exposure_index', pos='TE', q=filters.q) }}" class="seg-btn {{ 'is-active' if pos=='TE' }}">TE</a>
+          <button
+            type="button"
+            class="seg-btn pos-filter-btn {{ 'is-active' if not pos }}"
+            onclick="document.getElementById('posFilter').value=''; this.form.submit();"
+          >ALL</button>
+
+          <button
+            type="button"
+            class="seg-btn pos-filter-btn {{ 'is-active' if pos=='QB' }}"
+            onclick="document.getElementById('posFilter').value='QB'; this.form.submit();"
+          >QB</button>
+
+          <button
+            type="button"
+            class="seg-btn pos-filter-btn {{ 'is-active' if pos=='RB' }}"
+            onclick="document.getElementById('posFilter').value='RB'; this.form.submit();"
+          >RB</button>
+
+          <button
+            type="button"
+            class="seg-btn pos-filter-btn {{ 'is-active' if pos=='WR' }}"
+            onclick="document.getElementById('posFilter').value='WR'; this.form.submit();"
+          >WR</button>
+
+          <button
+            type="button"
+            class="seg-btn pos-filter-btn {{ 'is-active' if pos=='TE' }}"
+            onclick="document.getElementById('posFilter').value='TE'; this.form.submit();"
+          >TE</button>
         </div>
-        <form method="get" action="{{ url_for('exposure.exposure_index') }}" class="search">
-          <input type="hidden" name="pos" value="{{ filters.pos or '' }}">
-          <input id="q" name="q" value="{{ filters.q or '' }}" placeholder="Search name or team…" />
-          <button class="apply">Apply</button>
-        </form>
-      </div>
+
+        <details class="draft-filter">
+          <summary class="draft-summary">
+            {{ filters.draft_label }} ▾
+          </summary>
+
+          <div class="draft-menu">
+            <div class="draft-menu-title">Draft Class</div>
+
+            <div class="draft-options">
+              {% for opt in filters.draft_options %}
+              <label class="draft-option">
+                <input
+                  type="checkbox"
+                  class="draft-check"
+                  name="draft"
+                  value="{{ opt.value }}"
+                  {{ 'checked' if opt.selected }}
+                >
+                <span>{{ opt.label }}</span>
+              </label>
+              {% endfor %}
+            </div>
+
+            <div class="draft-actions">
+              <button
+                type="submit"
+                class="draft-apply"
+              >Apply</button>
+
+              <button
+                type="button"
+                class="draft-clear"
+                onclick="
+                  this.closest('form')
+                    .querySelectorAll('.draft-check')
+                    .forEach(el => el.checked = false);
+                  this.closest('form').submit();
+                "
+              >Clear</button>
+            </div>
+          </div>
+        </details>
+
+        <div class="search">
+          <input
+            id="q"
+            name="q"
+            value="{{ filters.q or '' }}"
+            placeholder="Search name or team…"
+          >
+          <button
+            type="submit"
+            class="apply"
+          >Apply</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -40,7 +127,7 @@
       {% set overall_pct = ( (r.total * 100.0) / (summary.leagues_total or 1) ) | round(0, 'floor') %}
       {% set mfl_pct = ( (r.mfl_count * 100.0) / (summary.leagues_mfl or 1) ) | round(0, 'floor') %}
       {% set slp_pct = ( (r.sleeper_count * 100.0) / (summary.leagues_sleeper or 1) ) | round(0, 'floor') %}
-      <div class="card"
+      <div class="card{{ ' unknown-draft' if r.draft_year is none else '' }}"
            data-player-key="{{ r.key }}"
            data-base-total="{{ r.total }}"
            data-base-mfl="{{ r.mfl_count }}"
@@ -64,6 +151,13 @@
         </div>
 
         <div class="row-meta">
+          {% if r.draft_year is none %}
+          <span class="chip chip-draft is-unknown">Unknown class</span>
+          {% else %}
+          <span class="chip chip-draft">
+            {{ r.draft_year }}{% if r.is_udfa %} • UDFA{% endif %}
+          </span>
+          {% endif %}
           <span class="chip chip-total">Total {{ r.total }}/{{ summary.leagues_total }}</span>
           <span class="chip chip-mfl">🏈 MFL {{ r.mfl_count }}/{{ summary.leagues_mfl }} ({{ mfl_pct }}%)</span>
           <span class="chip chip-slp">⚡ Sleeper {{ r.sleeper_count }}/{{ summary.leagues_sleeper }} ({{ slp_pct }}%)</span>
@@ -109,9 +203,127 @@
   .hdr-row { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; }
   .hdr { font-size:22px; }
   .sub { font-size:12px; color:var(--mut); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .filters{ display:flex; gap:10px; align-items:center; }
+  .filters{
+    display:flex;
+    gap:10px;
+    align-items:center;
+    flex-wrap:wrap;
+  }
+
+  .draft-filter{
+    position:relative;
+  }
+
+  .draft-summary{
+    list-style:none;
+    cursor:pointer;
+    user-select:none;
+    border:1px solid rgba(255,255,255,.12);
+    background:#0b1220;
+    color:#eaf1f7;
+    border-radius:10px;
+    padding:8px 11px;
+    font-size:12px;
+    font-weight:700;
+    white-space:nowrap;
+  }
+
+  .draft-summary::-webkit-details-marker{
+    display:none;
+  }
+
+  .draft-menu{
+    position:absolute;
+    top:calc(100% + 7px);
+    right:0;
+    z-index:40;
+    min-width:210px;
+    border:1px solid rgba(255,255,255,.14);
+    border-radius:12px;
+    background:#0b1220;
+    box-shadow:0 18px 48px rgba(0,0,0,.45);
+    padding:10px;
+  }
+
+  .draft-menu-title{
+    font-size:11px;
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:.04em;
+    color:var(--mut);
+    margin-bottom:8px;
+  }
+
+  .draft-options{
+    display:grid;
+    gap:4px;
+    max-height:300px;
+    overflow:auto;
+    padding-right:3px;
+  }
+
+  .draft-option{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    cursor:pointer;
+    border-radius:8px;
+    padding:5px 6px;
+    color:#eaf1f7;
+    font-size:12px;
+  }
+
+  .draft-option:hover{
+    background:rgba(255,255,255,.06);
+  }
+
+  .draft-option input{
+    width:15px;
+    height:15px;
+  }
+
+  .draft-actions{
+    display:flex;
+    gap:7px;
+    margin-top:10px;
+    padding-top:9px;
+    border-top:1px solid rgba(255,255,255,.1);
+  }
+
+  .draft-apply,
+  .draft-clear{
+    flex:1;
+    border-radius:8px;
+    padding:7px 9px;
+    font-size:11px;
+    font-weight:800;
+    cursor:pointer;
+  }
+
+  .draft-apply{
+    border:0;
+    background:#22c55e;
+    color:#0b1220;
+  }
+
+  .draft-clear{
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(255,255,255,.05);
+    color:#eaf1f7;
+  }
   .seg{ background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1); padding:4px; border-radius:999px; display:flex; gap:4px; }
-  .seg-btn{ font-size:12px; padding:6px 10px; border-radius:999px; text-decoration:none; color:var(--fg); opacity:.85; }
+  .seg-btn{
+    font-size:12px;
+    padding:6px 10px;
+    border-radius:999px;
+    text-decoration:none;
+    color:var(--fg);
+    opacity:.85;
+    border:0;
+    background:transparent;
+    cursor:pointer;
+    font:inherit;
+  }
   .seg-btn.is-active{ background:#1f2937; opacity:1; }
   .search{ display:flex; gap:6px; }
   .search input{ border:1px solid rgba(255,255,255,.12); background:#0b1220; color:#eaf1f7; border-radius:10px; padding:8px 10px; width:240px; }
@@ -122,6 +334,9 @@
   @media (max-width:720px){ .grid { grid-template-columns: 1fr; } }
 
   .card{ border:1px solid var(--bd); border-radius:14px; background:rgba(10,12,14,.9); padding:10px; }
+  .card.unknown-draft{
+    border-color:rgba(245,158,11,.38);
+  }
   .row-top{ display:flex; align-items:center; gap:10px; }
 
   .pct{
@@ -150,6 +365,18 @@
   .row-meta{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
   .chip{ border:1px solid var(--bd); padding:2px 8px; border-radius:999px; font-size:11px; background:rgba(255,255,255,.04); white-space:nowrap; color:#eaf1f7; }
   .chip.clear{ cursor:pointer; }
+
+  .chip-draft{
+    font-weight:800;
+    background:rgba(59,130,246,.12);
+    border-color:rgba(59,130,246,.32);
+  }
+
+  .chip-draft.is-unknown{
+    color:#fde68a;
+    background:rgba(245,158,11,.12);
+    border-color:rgba(245,158,11,.42);
+  }
 
   .row-second{ margin-top:8px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .overlap{ display:inline-flex; align-items:center; gap:8px; font-size:13px; color:#eaf1f7; }
