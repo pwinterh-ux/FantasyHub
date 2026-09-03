@@ -2955,7 +2955,7 @@
     }
 
 
-    return cached.status;
+    return cached;
 
   }
 
@@ -2963,7 +2963,8 @@
   function cacheLiveStatus(
     leagueId,
     playerId,
-    status
+    status,
+    waiver
   ) {
 
     const key =
@@ -2979,8 +2980,8 @@
         checkedAt:
           Date.now(),
 
-        status:
-          status
+        status: status,
+        waiver: waiver || {}
       }
     );
 
@@ -3161,9 +3162,10 @@
 
         renderLiveStatus(
           statusCell,
-          cached,
+          cached.status,
           leagueId,
-          playerId
+          playerId,
+          cached.waiver
         );
 
         return;
@@ -3241,7 +3243,8 @@
       cacheLiveStatus(
         leagueId,
         playerId,
-        status
+        status,
+        payload.waiver
       );
 
 
@@ -3249,7 +3252,8 @@
         statusCell,
         status,
         leagueId,
-        playerId
+        playerId,
+        payload.waiver
       );
 
     }
@@ -4010,16 +4014,56 @@
   }
 
 
+  async function renderBbidAction(statusCell, leagueId, playerId, waiver) {
+    const actionCell = statusCell.closest("tr")?.querySelector(".fcfs-action-cell");
+    if (!actionCell) return;
+    const fallback = fcfsMflFallback(actionCell);
+    const balance = waiver.faab_balance == null ? "Unknown" : `$${waiver.faab_balance}`;
+    actionCell.innerHTML = `<div class="fcfs-controls"><div class="fcfs-loading">Loading drop options…</div></div>`;
+    try {
+      const candidates = await loadFcfsDropCandidates(leagueId);
+      const options = candidates.map(player => `<option value="${escapeHtml(player.player_id)}">${escapeHtml(fcfsDropOptionLabel(player))}</option>`).join("");
+      actionCell.innerHTML = `
+        <div class="fcfs-controls">
+          <label class="fcfs-drop-label">Bid amount · Available FAAB: ${escapeHtml(balance)}</label>
+          <input class="bbid-amount" type="number" min="0" step="${escapeHtml(waiver.faab_increment || "1")}" placeholder="0">
+          <label class="fcfs-drop-label">Drop player (optional)</label>
+          <select class="fcfs-drop-select"><option value="">None — no drop</option>${options}</select>
+          <div class="fcfs-control-row"><button type="button" class="waiver-btn bbid-submit">Submit waiver bid</button>${fallback}</div>
+          <div class="fcfs-result" aria-live="polite"></div>
+        </div>`;
+      actionCell.querySelector(".bbid-submit")?.addEventListener("click", async event => {
+        const button = event.currentTarget;
+        if (button.dataset.submitting === "1") return;
+        button.dataset.submitting = "1"; button.disabled = true; button.textContent = "Submitting…";
+        const resultNode = actionCell.querySelector(".fcfs-result");
+        try {
+          const response = await fetch("/waivers/api/bbid-add", {method:"POST", credentials:"same-origin", headers:{"Accept":"application/json","Content-Type":"application/json"}, body:JSON.stringify({league_id:Number(leagueId), add_player_id:Number(playerId), bid_amount:actionCell.querySelector(".bbid-amount")?.value || "0", drop_player_id:actionCell.querySelector(".fcfs-drop-select")?.value || null})});
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || !payload.ok) throw new Error(payload.message || payload.error || `MFL transaction failed (${response.status}).`);
+          actionCell.innerHTML = `<div class="fcfs-result success">✓ Waiver bid submitted</div>${fallback}`;
+        } catch (error) {
+          renderFcfsErrors(resultNode, ["The waiver bid was not confirmed. Check MFL before retrying.", error.message || "Network request failed."]);
+          button.textContent = "Check MFL";
+        }
+      });
+    } catch (error) {
+      actionCell.innerHTML = `<div class="fcfs-result error">${escapeHtml(error.message || "Drop options could not be loaded.")}</div>${fallback}`;
+    }
+  }
+
+
   function syncFcfsActionForLiveStatus(
     statusCell,
     classification,
     leagueId,
-    playerId
+    playerId,
+    waiver = {},
+    quickAction = null
   ) {
 
     if (
-      classification ===
-      "FREE_AGENT"
+      quickAction === "FCFS"
     ) {
 
       renderFcfsAction(
@@ -4034,9 +4078,16 @@
     }
 
 
-    resetFcfsAction(
-      statusCell
-    );
+    if (quickAction === "BBID") {
+      renderBbidAction(statusCell, leagueId, playerId, waiver);
+      return;
+    }
+    const actionCell = statusCell.closest("tr")?.querySelector(".fcfs-action-cell");
+    if (!waiver.waiver_type && actionCell) {
+      actionCell.innerHTML = `<div class="fcfs-result error">To use Waivers for this league, re-add the league so RosterDash can load its waiver settings.</div>`;
+      return;
+    }
+    resetFcfsAction(statusCell);
 
   }
 
@@ -4045,7 +4096,8 @@
     statusCell,
     status,
     leagueId,
-    playerId
+    playerId,
+    waiver = {}
   ) {
 
     const classification =
@@ -4143,7 +4195,9 @@
       statusCell,
       classification,
       leagueId,
-      playerId
+      playerId,
+      waiver,
+      status.quick_action || null
     );
 
 
