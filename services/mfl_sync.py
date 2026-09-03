@@ -159,6 +159,7 @@ def sync_league_info(
     franchise_meta: Dict[str, Dict[str, Any]] | Dict[str, Any],
     roster_slots: Optional[str] = None,
     ir_slots_max: Optional[int] = None,
+    waiver_settings: Optional[Dict[str, Any]] = None,
     *,
     commit: bool = True,
 ) -> Dict[str, int]:
@@ -167,6 +168,9 @@ def sync_league_info(
     """
     created = updated = roster_updated = 0
     ir_updated = 0
+    waiver_settings_updated = 0
+    waiver_orders_updated = 0
+    faab_balances_updated = 0
 
     for fid_raw, meta in (franchise_meta or {}).items():
         fid = _fid(fid_raw)
@@ -174,6 +178,14 @@ def sync_league_info(
         name  = (str(_get(meta, "name", "")).strip())
         owner = (str(_get(meta, "owner_name", _get(meta, "ownerName", ""))).strip())
         abbr  = (str(_get(meta, "abbrev", _get(meta, "abbreviation", ""))).strip())
+        waiver_sort_order = _get(meta, "waiver_sort_order")
+        if waiver_sort_order is not None:
+            try:
+                waiver_sort_order = int(waiver_sort_order)
+            except (TypeError, ValueError):
+                waiver_sort_order = None
+
+        faab_balance = _get(meta, "faab_balance")
 
         if not team:
             team = Team(
@@ -185,6 +197,12 @@ def sync_league_info(
                 team.owner_name = owner
             if hasattr(team, "abbrev") and abbr:
                 team.abbrev = abbr
+            if waiver_sort_order is not None:
+                team.waiver_sort_order = waiver_sort_order
+                waiver_orders_updated += 1
+            if faab_balance is not None:
+                team.faab_balance = faab_balance
+                faab_balances_updated += 1
             db.session.add(team)
             created += 1
             continue
@@ -198,6 +216,14 @@ def sync_league_info(
             changed = True
         if abbr and hasattr(team, "abbrev") and team.abbrev != abbr:
             team.abbrev = abbr
+            changed = True
+        if waiver_sort_order is not None and team.waiver_sort_order != waiver_sort_order:
+            team.waiver_sort_order = waiver_sort_order
+            waiver_orders_updated += 1
+            changed = True
+        if faab_balance is not None and team.faab_balance != faab_balance:
+            team.faab_balance = faab_balance
+            faab_balances_updated += 1
             changed = True
         if changed:
             updated += 1
@@ -216,6 +242,25 @@ def sync_league_info(
             league.ir_slots_max = ir_slots_max
             ir_updated = 1
 
+    # Waiver configuration from TYPE=league.
+    # Missing values do not erase previously stored settings.
+    if waiver_settings:
+        for field in (
+            "waiver_type",
+            "faab_starting_balance",
+            "faab_minimum",
+            "faab_increment",
+            "faab_fcfs_charge",
+            "max_waiver_rounds",
+            "bbid_conditional",
+        ):
+            value = waiver_settings.get(field)
+            if value is None:
+                continue
+            if getattr(league, field, None) != value:
+                setattr(league, field, value)
+                waiver_settings_updated += 1
+
     if commit:
         db.session.commit()
     else:
@@ -225,6 +270,9 @@ def sync_league_info(
         "teams_updated": updated,
         "roster_text_updated": roster_updated,
         "ir_slots_updated": ir_updated,
+        "waiver_settings_updated": waiver_settings_updated,
+        "waiver_orders_updated": waiver_orders_updated,
+        "faab_balances_updated": faab_balances_updated,
     }
 
 # ------------------------- Assets (rosters + picks) --------------------------
@@ -247,6 +295,7 @@ def sync_league_assets(
     """
     inserted_rosters = 0
     inserted_picks = 0
+    faab_balances_updated = 0
     touched_team_ids: list[int] = []
     roster_rows: list[Roster] = []
     pick_rows: list[DraftPick] = []
@@ -264,6 +313,7 @@ def sync_league_assets(
         player_ids = list(_iter_player_ids(fr))
         pick_items = list(_iter_picks(fr))  # CHANGED: yields (season, round, pick_number, original_team)
         name_hint = _get(fr, "name") or _get(fr, "team_name")
+        faab_balance = _get(fr, "faab_balance")
 
         normalized_franchises.append(
             {
@@ -271,6 +321,7 @@ def sync_league_assets(
                 "name_hint": name_hint,
                 "player_ids": player_ids,
                 "pick_items": pick_items,
+                "faab_balance": faab_balance,
             }
         )
 
@@ -303,8 +354,15 @@ def sync_league_assets(
         player_ids = payload["player_ids"]
         pick_items = payload["pick_items"]
         name_hint = payload["name_hint"]
+        faab_balance = payload["faab_balance"]
 
         team = _ensure_team(league.id, franchise_id, name_hint=name_hint)
+
+        # TYPE=assets carries current remaining FAAB.
+        # Fallback assets omit it, so preserve the existing DB value.
+        if faab_balance is not None and team.faab_balance != faab_balance:
+            team.faab_balance = faab_balance
+            faab_balances_updated += 1
 
         touched_team_ids.append(team.id)
 
@@ -353,6 +411,7 @@ def sync_league_assets(
         "teams_touched": len(unique_team_ids),
         "rosters_inserted": inserted_rosters,
         "picks_inserted": inserted_picks,
+        "faab_balances_updated": faab_balances_updated,
     }
 
 

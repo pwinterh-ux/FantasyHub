@@ -17,6 +17,7 @@ from services.mfl_parsers import (
     parse_assets,
     parse_standings,
     parse_league_info,           # (franchise_meta_map, roster_slots_text, league_base_url, ir_slots_max)
+    parse_league_waiver_settings,
     parse_rosters_fallback,      # used when assets is blocked
     parse_future_picks_fallback, # used when assets is blocked
     parse_pending_trades,        # parses export?TYPE=pendingTrades (open trades only)
@@ -377,6 +378,7 @@ def mfl_config():
     for rec in raw_found:
         lid = name = None
         fid = None
+        host = None
         yr = year
 
         if isinstance(rec, dict):
@@ -390,6 +392,7 @@ def mfl_config():
                 yr = year
             fid_val = rec.get("franchise_id") or rec.get("franchiseId")
             fid = _norm_fid(fid_val)
+            host = _normalize_host_candidate(rec.get("host"))
         else:
             try:
                 parts = list(rec)
@@ -410,7 +413,7 @@ def mfl_config():
         if not lid or not name:
             continue
 
-        found.append({"lid": lid, "name": name, "year": yr, "fid": fid})
+        found.append({"lid": lid, "name": name, "year": yr, "fid": fid, "host": host})
 
     # Opportunistically stamp league_host on existing rows if missing
     try:
@@ -442,6 +445,7 @@ def mfl_config():
                 "name": item["name"],
                 "year": yr,
                 "franchise_id": item["fid"],  # optional in template
+                "host": item.get("host") or host_by_lid.get(lid),
                 "checked": (lid, yr) in existing,
             })
 
@@ -555,6 +559,7 @@ def mfl_config_submit():
     # Maps for names and franchise ids coming from the form
     name_map: dict[str, str] = {}
     fid_map: dict[str, str | None] = {}
+    host_map: dict[str, str] = {}
     for key, val in request.form.items():
         if key.startswith("league_name_"):
             lid = key.replace("league_name_", "", 1)
@@ -562,6 +567,11 @@ def mfl_config_submit():
         elif key.startswith("franchise_id_"):
             lid = key.replace("franchise_id_", "", 1)
             fid_map[lid] = _norm_fid(val)
+        elif key.startswith("league_host_"):
+            lid = key.replace("league_host_", "", 1)
+            candidate = _normalize_host_candidate(val)
+            if candidate and candidate.lower().endswith(".myfantasyleague.com"):
+                host_map[lid] = candidate
 
     existing = League.query.filter_by(user_id=current_user.id, year=year).all()
     existing_ids = {lg.mfl_id for lg in existing}
@@ -620,6 +630,7 @@ def mfl_config_submit():
             year=year,
             synced_at=None,
             franchise_id=fid_map.get(lid),  # persist user's franchise id
+            league_host=host_map.get(lid),
         )
         db.session.add(league)
         db.session.flush()
@@ -627,12 +638,16 @@ def mfl_config_submit():
         created_leagues.append(league)
     db.session.commit()
 
-    # Update franchise_id for existing selected leagues too (user might have changed it)
+    # Update franchise_id / host for existing selected leagues too.
     for lg in to_resync:
         new_fid = fid_map.get(lg.mfl_id)
         if new_fid and new_fid != lg.franchise_id:
             current_app.logger.info("updating league %s franchise_id: %s -> %s", lg.mfl_id, lg.franchise_id, new_fid)
             lg.franchise_id = new_fid
+        new_host = host_map.get(lg.mfl_id)
+        if new_host and new_host != getattr(lg, "league_host", None):
+            current_app.logger.info("updating league %s host: %s -> %s", lg.mfl_id, getattr(lg, "league_host", None), new_host)
+            lg.league_host = new_host
     db.session.commit()
 
     # Targets to sync
@@ -740,9 +755,15 @@ def mfl_config_submit():
                 except Exception as e:
                     franchise_meta, roster_text, league_base_url, ir_slots_max = {}, None, None, None
                     out["errors"].append(f"parse_league_info:{e}")
+                try:
+                    waiver_settings = parse_league_waiver_settings(info_xml) if info_xml else {}
+                except Exception as e:
+                    waiver_settings = {}
+                    out["errors"].append(f"parse_league_waiver_settings:{e}")
                 out["franchise_meta"] = franchise_meta
                 out["roster_text"] = roster_text
                 out["ir_slots_max"] = ir_slots_max
+                out["waiver_settings"] = waiver_settings
                 out["resolved_host"] = spec["prefer_host"] or _host_only(league_base_url) or host_by_lid.get(lid) or host_key
 
                 # 2) assets (host first, fallback to API if blocked)
@@ -871,6 +892,7 @@ def mfl_config_submit():
                 lg,
                 bundle.get("franchise_meta") or {},
                 roster_slots=bundle.get("roster_text"),
+                waiver_settings=bundle.get("waiver_settings") or {},
             )
             db.session.commit()
         except Exception as e:
@@ -1010,6 +1032,12 @@ def mfl_config_sync_one():
                 franchise_meta, roster_text, league_base_url, ir_slots_max = {}, None, None, None
                 warnings.append(f"parse_league_info:{parse_err}")
 
+            try:
+                waiver_settings = parse_league_waiver_settings(info_xml) if info_xml else {}
+            except Exception as parse_err:
+                waiver_settings = {}
+                warnings.append(f"parse_league_waiver_settings:{parse_err}")
+
             resolved_host = (
                 _normalize_host_candidate(league_base_url)
                 or _normalize_host_candidate(getattr(league, "league_host", None))
@@ -1044,6 +1072,7 @@ def mfl_config_sync_one():
                     league,
                     franchise_meta or {},
                     roster_slots=roster_text,
+                    waiver_settings=waiver_settings,
                     commit=False,
                 )
                 standings_count = sync_league_standings(league, standings or [], commit=False)
@@ -1058,22 +1087,13 @@ def mfl_config_sync_one():
                 "teams_created": metrics_info.get("teams_created", 0),
                 "teams_updated": metrics_info.get("teams_updated", 0),
                 "roster_text_updated": metrics_info.get("roster_text_updated", 0),
+                "waiver_settings_updated": metrics_info.get("waiver_settings_updated", 0),
+                "waiver_orders_updated": metrics_info.get("waiver_orders_updated", 0),
                 "standings_updated": standings_count,
             }
         else:  # ASSETS
-            # 0) Always fetch league info first so Team names exist before asset upserts
-            info_xml = api_client.get_league_info(league_id, api_cookie)
-            try:
-                franchise_meta, roster_text, league_base_url, ir_slots_max = (
-                    parse_league_info(info_xml) if info_xml else ({}, None, None, None)
-                )
-            except Exception as parse_err:
-                franchise_meta, roster_text, league_base_url, ir_slots_max = {}, None, None, None
-                warnings.append(f"parse_league_info:{parse_err}")
-
-            if ir_slots_max is not None:
-                league.ir_slots_max = ir_slots_max
-
+            # FAST already populated league/team metadata. Keep ASSETS lean:
+            # one TYPE=assets request for rosters, picks, and current FAAB.
             resolved_host = getattr(league, "league_host", None)
             data_client, data_cookie, host_used_initial = _resolve_client(resolved_host)
 
@@ -1088,9 +1108,6 @@ def mfl_config_sync_one():
 
             metrics_assets: dict = {}
             try:
-                # Ensure team rows (with real names) exist/update before rosters/picks
-                sync_league_info(league, franchise_meta or {}, roster_slots=roster_text, commit=False)
-
                 metrics_assets = sync_league_assets(league, assets_payload or [], commit=False)
                 league.synced_at = datetime.utcnow()
                 db.session.commit()
@@ -1103,6 +1120,7 @@ def mfl_config_sync_one():
                 "teams_touched": metrics_assets.get("teams_touched", 0),
                 "rosters_inserted": metrics_assets.get("rosters_inserted", 0),
                 "picks_inserted": metrics_assets.get("picks_inserted", 0),
+                "faab_balances_updated": metrics_assets.get("faab_balances_updated", 0),
             }
 
         current_app.logger.info(

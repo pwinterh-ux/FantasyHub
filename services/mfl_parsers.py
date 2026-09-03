@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional, Any
 from urllib.parse import urlparse
@@ -21,6 +22,7 @@ class FranchiseAssets:
     franchise_id: str
     player_ids: List[int]
     draft_picks: List[DraftPickT]
+    faab_balance: Optional[Decimal] = None
 
 
 @dataclass
@@ -73,6 +75,24 @@ def _safe_int(x: Any, default: int = 0) -> int:
         except Exception:
             return default
 
+
+def _safe_decimal(x: Any) -> Optional[Decimal]:
+    if x in (None, ""):
+        return None
+    try:
+        return Decimal(str(x).strip())
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+def _safe_bool(x: Any) -> Optional[bool]:
+    if x in (None, ""):
+        return None
+    value = str(x).strip().lower()
+    if value in {"1", "true", "yes", "y"}:
+        return True
+    if value in {"0", "false", "no", "n"}:
+        return False
+    return None
 
 def _fid(x: Any) -> str:
     s = str(x or "").strip()
@@ -287,7 +307,21 @@ def parse_league_info(xml: bytes) -> tuple[dict[str, dict], str | None, str | No
         name = (fr.get("name") or "").strip()
         owner = (fr.get("owner_name") or fr.get("ownerName") or "").strip()
         abbr = (fr.get("abbrev") or fr.get("abbreviation") or "").strip()
-        meta[_fid(fid)] = {"name": name, "owner_name": owner, "abbrev": abbr}
+        waiver_sort_raw = fr.get("waiverSortOrder")
+        waiver_sort_order = (
+            _safe_int(waiver_sort_raw, 0)
+            if waiver_sort_raw not in (None, "")
+            else None
+        )
+        faab_balance = _safe_decimal(fr.get("bbidAvailableBalance"))
+
+        meta[_fid(fid)] = {
+            "name": name,
+            "owner_name": owner,
+            "abbrev": abbr,
+            "waiver_sort_order": waiver_sort_order,
+            "faab_balance": faab_balance,
+        }
 
     # 2) lineup
     lineup_str = _extract_lineup_string(root)
@@ -318,6 +352,29 @@ def parse_league_info(xml: bytes) -> tuple[dict[str, dict], str | None, str | No
     print(f"[parse_league_info] parsed ir_slots_max={ir_slots_max} (from raw={repr(raw_ir)})")
 
     return meta, lineup_str, base_url, ir_slots_max
+
+
+def parse_league_waiver_settings(xml: bytes) -> dict[str, Any]:
+    """Extract nullable waiver configuration from an MFL TYPE=league payload."""
+    root = ET.fromstring(xml)
+    league_el = root if (root.tag or "").lower() == "league" else root.find(".//league")
+    if league_el is None:
+        return {}
+
+    attrs = league_el.attrib or {}
+    return {
+        "waiver_type": (attrs.get("currentWaiverType") or "").strip() or None,
+        "faab_starting_balance": _safe_decimal(attrs.get("bbidSeasonLimit")),
+        "faab_minimum": _safe_decimal(attrs.get("bbidMinimum")),
+        "faab_increment": _safe_decimal(attrs.get("bbidIncrement")),
+        "faab_fcfs_charge": _safe_decimal(attrs.get("bbidFCFSCharge")),
+        "max_waiver_rounds": (
+            _safe_int(attrs.get("maxWaiverRounds"), 0)
+            if attrs.get("maxWaiverRounds") not in (None, "")
+            else None
+        ),
+        "bbid_conditional": _safe_bool(attrs.get("bbidConditional")),
+    }
 
 
 def _extract_lineup_string(root: ET.Element) -> Optional[str]:
@@ -473,7 +530,21 @@ def parse_assets(xml_bytes: bytes) -> List[FranchiseAssets]:
                 if parsed:
                     picks.append(parsed)
 
-        result.append(FranchiseAssets(franchise_id=fid, player_ids=player_ids, draft_picks=picks))
+        blind_bidding_el = fr.find(".//blindBiddingDollars")
+        faab_balance = (
+            _safe_decimal(blind_bidding_el.get("amount"))
+            if blind_bidding_el is not None
+            else None
+        )
+
+        result.append(
+            FranchiseAssets(
+                franchise_id=fid,
+                player_ids=player_ids,
+                draft_picks=picks,
+                faab_balance=faab_balance,
+            )
+        )
 
     return result
 

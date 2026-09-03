@@ -150,6 +150,15 @@ class League(db.Model):
     # IR configuration (nullable: treat None as zero slots)
     ir_slots_max = db.Column(db.Integer, nullable=True)
 
+    # Waiver / blind-bidding configuration (nullable for legacy leagues)
+    waiver_type = db.Column(db.String(32), nullable=True)
+    faab_starting_balance = db.Column(db.Numeric(10, 2), nullable=True)
+    faab_minimum = db.Column(db.Numeric(10, 2), nullable=True)
+    faab_increment = db.Column(db.Numeric(10, 2), nullable=True)
+    faab_fcfs_charge = db.Column(db.Numeric(10, 2), nullable=True)
+    max_waiver_rounds = db.Column(db.Integer, nullable=True)
+    bbid_conditional = db.Column(db.Boolean, nullable=True)
+
     # relationships
     user = db.relationship("User", back_populates="leagues")
     teams = db.relationship(
@@ -221,6 +230,10 @@ class Team(db.Model):
     points_against = db.Column(db.Integer, nullable=True)
     standing = db.Column(db.Integer, nullable=True)
     current_opponent_id = db.Column(db.String(50), nullable=True)  # opponent franchise id, e.g., "0002"
+
+    # Waiver state (nullable for legacy leagues / non-waiver usage)
+    faab_balance = db.Column(db.Numeric(10, 2), nullable=True)
+    waiver_sort_order = db.Column(db.Integer, nullable=True)
 
     league = db.relationship("League", back_populates="teams")
 

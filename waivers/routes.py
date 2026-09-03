@@ -7,6 +7,7 @@ from flask_login import current_user, login_required
 
 from models import League, Player
 from services.waivers_service import (
+    perform_blind_bid_add,
     perform_fcfs_add,
     get_fcfs_drop_candidates,
     get_dynasty_targets,
@@ -618,6 +619,253 @@ def api_fcfs_add():
             **result,
             "ok": True,
             "message": "Added",
+        }
+    )
+
+
+@waivers_bp.route(
+    "/api/bbid-add",
+    methods=["POST"],
+)
+@login_required
+def api_bbid_add():
+    """
+    Execute one non-conditional MFL blind-bid waiver request.
+
+    Expected JSON:
+        {
+            "league_id": 203,
+            "add_player_id": 17465,
+            "bid_amount": 17,
+            "drop_player_id": 16629
+        }
+
+    drop_player_id may be null/empty.
+
+    IMPORTANT:
+      - This is the quick-claim, non-conditional BBID path.
+      - No second playerStatus check occurs here.
+      - ROUND is not used.
+      - REPLACE is not used.
+      - MFL's blindBidWaiverRequest response is authoritative.
+      - No local roster or FAAB mutation occurs after success.
+    """
+
+    payload = (
+        request.get_json(
+            silent=True
+        )
+        or {}
+    )
+
+    league_id = payload.get(
+        "league_id"
+    )
+
+    add_player_id = payload.get(
+        "add_player_id"
+    )
+
+    bid_amount = payload.get(
+        "bid_amount"
+    )
+
+    drop_player_id = payload.get(
+        "drop_player_id"
+    )
+
+    if league_id in (
+        None,
+        "",
+    ):
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        "league_id is required."
+                    ),
+                    "errors": [
+                        "league_id is required."
+                    ],
+                }
+            ),
+            400,
+        )
+
+    if add_player_id in (
+        None,
+        "",
+    ):
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        "add_player_id is required."
+                    ),
+                    "errors": [
+                        "add_player_id is required."
+                    ],
+                }
+            ),
+            400,
+        )
+
+    if bid_amount in (
+        None,
+        "",
+    ):
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        "bid_amount is required."
+                    ),
+                    "errors": [
+                        "bid_amount is required."
+                    ],
+                }
+            ),
+            400,
+        )
+
+    try:
+        league_id_int = int(
+            league_id
+        )
+
+    except (TypeError, ValueError):
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        "league_id must be an integer."
+                    ),
+                    "errors": [
+                        "league_id must be an integer."
+                    ],
+                }
+            ),
+            400,
+        )
+
+    try:
+        result = perform_blind_bid_add(
+            current_user,
+            league_id_int,
+            add_player_id,
+            bid_amount,
+            drop_player_id,
+        )
+
+    except LookupError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "message": str(exc),
+                    "errors": [
+                        str(exc)
+                    ],
+                }
+            ),
+            404,
+        )
+
+    except ValueError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "message": str(exc),
+                    "errors": [
+                        str(exc)
+                    ],
+                }
+            ),
+            400,
+        )
+
+    except RuntimeError as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "message": str(exc),
+                    "errors": [
+                        str(exc)
+                    ],
+                }
+            ),
+            502,
+        )
+
+    except Exception as exc:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "message": str(exc),
+                    "errors": [
+                        str(exc)
+                    ],
+                }
+            ),
+            500,
+        )
+
+    # MFL understood the transaction request but declined it.
+    if not result.get(
+        "ok"
+    ):
+        errors = [
+            str(error)
+            for error in (
+                result.get(
+                    "errors"
+                )
+                or []
+            )
+            if str(error).strip()
+        ]
+
+        message = str(
+            result.get(
+                "message"
+            )
+            or (
+                "\n".join(errors)
+                if errors
+                else "MFL transaction failed."
+            )
+        )
+
+        return (
+            jsonify(
+                {
+                    **result,
+                    "ok": False,
+                    "message": message,
+                    "errors": errors,
+                }
+            ),
+            409,
+        )
+
+    return jsonify(
+        {
+            **result,
+            "ok": True,
+            "message": (
+                "Waiver bid submitted"
+            ),
         }
     )
 

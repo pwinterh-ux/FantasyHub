@@ -6,6 +6,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, Any
 from urllib.parse import unquote_plus
@@ -549,6 +550,304 @@ class MFLClient:
 
         return result
 
+
+    def submit_blind_bid_waiver(
+        self,
+        league_id: str,
+        bids: list[Dict[str, Any]],
+        cookie: str,
+        *,
+        round_number: Optional[int] = None,
+        franchise_id: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Add one or more MFL blind-bid waiver requests.
+
+        Proven MFL import request shape:
+
+            TYPE=blindBidWaiverRequest
+            L=<league id>
+            ROUND=<round or blank>
+            PICKS=<player id>_<amount>_<drop player id>,...
+            REPLACE=
+            FRANCHISE_ID=<owner franchise id>
+
+        A missing drop player is serialized as MFL player id 0000.
+
+        IMPORTANT:
+        This state-changing import follows the same authenticated POST
+        transaction pattern as the existing FCFS implementation and is
+        intentionally NEVER retried.
+        """
+
+        league_id_s = str(
+            league_id or ""
+        ).strip()
+
+        if not league_id_s:
+            raise ValueError(
+                "league_id is required."
+            )
+
+        if not bids:
+            raise ValueError(
+                "At least one blind-bid waiver request is required."
+            )
+
+        franchise_id_s = str(
+            franchise_id or ""
+        ).strip()
+
+        if not franchise_id_s:
+            raise ValueError(
+                "franchise_id is required for blind-bid waiver requests."
+            )
+
+        normalized_picks: list[str] = []
+
+        for index, bid in enumerate(
+            bids,
+            start=1,
+        ):
+            if not isinstance(
+                bid,
+                dict,
+            ):
+                raise ValueError(
+                    f"Bid {index} must be a dictionary."
+                )
+
+            player_id_s = str(
+                bid.get("player_id") or ""
+            ).strip()
+
+            if (
+                not player_id_s
+                or not player_id_s.isdigit()
+            ):
+                raise ValueError(
+                    f"Bid {index} requires a numeric MFL player_id."
+                )
+
+            raw_amount = bid.get(
+                "amount"
+            )
+
+            if raw_amount in (
+                None,
+                "",
+            ):
+                raise ValueError(
+                    f"Bid {index} requires an amount."
+                )
+
+            try:
+                amount = Decimal(
+                    str(raw_amount).strip()
+                )
+
+            except (
+                InvalidOperation,
+                ValueError,
+                TypeError,
+            ) as exc:
+                raise ValueError(
+                    f"Bid {index} has an invalid amount."
+                ) from exc
+
+            if (
+                not amount.is_finite()
+                or amount < 0
+            ):
+                raise ValueError(
+                    f"Bid {index} amount must be zero or greater."
+                )
+
+            amount_s = format(
+                amount,
+                "f",
+            )
+
+            if "." in amount_s:
+                amount_s = (
+                    amount_s
+                    .rstrip("0")
+                    .rstrip(".")
+                )
+
+            if not amount_s:
+                amount_s = "0"
+
+            drop_player_id_s = str(
+                bid.get("drop_player_id")
+                or "0000"
+            ).strip()
+
+            if not drop_player_id_s:
+                drop_player_id_s = "0000"
+
+            if not drop_player_id_s.isdigit():
+                raise ValueError(
+                    f"Bid {index} has an invalid drop_player_id."
+                )
+
+            normalized_picks.append(
+                "_".join(
+                    (
+                        player_id_s,
+                        amount_s,
+                        drop_player_id_s,
+                    )
+                )
+            )
+
+        round_value = ""
+
+        if round_number is not None:
+            try:
+                round_i = int(
+                    round_number
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ) as exc:
+                raise ValueError(
+                    "round_number must be a positive integer."
+                ) from exc
+
+            if round_i < 1:
+                raise ValueError(
+                    "round_number must be a positive integer."
+                )
+
+            round_value = str(
+                round_i
+            )
+
+        # Match the exact parameter shape proven through MFL's
+        # own Import Test Form.
+        payload: Dict[str, Any] = {
+            "TYPE": "blindBidWaiverRequest",
+            "L": league_id_s,
+            "ROUND": round_value,
+            "PICKS": ",".join(
+                normalized_picks
+            ),
+            "REPLACE": "",
+            "FRANCHISE_ID": franchise_id_s,
+        }
+
+        # Authenticate this transaction the same way as the other
+        # authenticated MFL API calls: host cookie plus owner/API params.
+        user_id = self._extract_user_id(
+            cookie
+        )
+
+        if user_id:
+            payload["MFL_USER_ID"] = (
+                user_id
+            )
+
+        try:
+            apikey = current_app.config.get(
+                "MFL_APIKEY"
+            )
+
+            if apikey:
+                payload["APIKEY"] = (
+                    apikey
+                )
+
+        except Exception:
+            pass
+
+        headers = {
+            **DEFAULT_HEADERS,
+            **self._cookie_header(cookie),
+        }
+
+        # Use the league-specific wwwXX host represented by this client.
+        url = (
+            f"{self.base.rstrip('/')}/import"
+        )
+
+        ctx: Dict[str, Any] = {
+            "operation": "blindBidWaiverRequest",
+            "league_id": league_id_s,
+            "bid_count": len(
+                normalized_picks
+            ),
+            "has_round": (
+                round_number is not None
+            ),
+            "franchise_id": franchise_id_s,
+        }
+
+        if context:
+            ctx.update(
+                context
+            )
+
+        _rl.wait()
+
+        start = time.time()
+
+        started_at = datetime.now(
+            timezone.utc
+        )
+
+        try:
+            # STATE-CHANGING REQUEST.
+            # Match the existing authenticated MFL import transaction
+            # pattern used by FCFS. Never retry this request.
+            response = requests.post(
+                url,
+                params=payload,
+                headers=headers,
+                timeout=self.timeout,
+            )
+
+        except requests.RequestException as exc:
+            raise RuntimeError(
+                f"MFL blind-bid waiver request failed: {exc}"
+            ) from exc
+
+        elapsed_ms = int(
+            (time.time() - start) * 1000
+        )
+
+        _log_http_safe(
+            "POST import:blindBidWaiverRequest",
+            response,
+            elapsed_ms,
+            include_body=True,
+            context=ctx,
+            started_at=started_at,
+        )
+
+        self._raise_for_status(
+            response
+        )
+
+        result = (
+            self._parse_fcfs_import_response(
+                response.content
+            )
+        )
+
+        if result.get("ok"):
+            result["message"] = (
+                "Waiver bid submitted"
+            )
+
+        result["http_status"] = (
+            response.status_code
+        )
+
+        return result
 
     # ---------------------------- Internals ----------------------------------
 

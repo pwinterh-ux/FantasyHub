@@ -594,6 +594,34 @@ def get_live_player_status(
     if league is None:
         raise LookupError("League not found for this user")
 
+    # Waiver settings and current FAAB are already synchronized locally.
+    # Include them with live playerStatus so the browser can decide which
+    # quick action to render without making another MFL request.
+    franchise_id = str(
+        league.franchise_id or ""
+    ).strip()
+
+    team = None
+
+    if franchise_id:
+        team = (
+            Team.query
+            .filter_by(
+                league_id=league.id,
+                mfl_id=franchise_id,
+            )
+            .first()
+        )
+
+    def decimal_text(value):
+        if value is None:
+            return None
+
+        return format(
+            value,
+            "f",
+        )
+
     normalized_ids = []
 
     for raw_id in player_ids or []:
@@ -645,6 +673,49 @@ def get_live_player_status(
                 "checked_at_utc": datetime.now(
                     timezone.utc
                 ).isoformat(),
+                "waiver": {
+                    "waiver_type": (
+                        league.waiver_type
+                    ),
+                    "bbid_conditional": (
+                        league.bbid_conditional
+                    ),
+                    "faab_starting_balance": (
+                        decimal_text(
+                            league.faab_starting_balance
+                        )
+                    ),
+                    "faab_minimum": (
+                        decimal_text(
+                            league.faab_minimum
+                        )
+                    ),
+                    "faab_increment": (
+                        decimal_text(
+                            league.faab_increment
+                        )
+                    ),
+                    "faab_fcfs_charge": (
+                        decimal_text(
+                            league.faab_fcfs_charge
+                        )
+                    ),
+                    "max_waiver_rounds": (
+                        league.max_waiver_rounds
+                    ),
+                    "faab_balance": (
+                        decimal_text(
+                            team.faab_balance
+                        )
+                        if team is not None
+                        else None
+                    ),
+                    "waiver_sort_order": (
+                        team.waiver_sort_order
+                        if team is not None
+                        else None
+                    ),
+                },
                 "statuses": statuses,
             }
 
@@ -1935,4 +2006,496 @@ def perform_fcfs_add(
         # service response helps keep future callers from assuming
         # we refreshed assets after the write.
         "local_roster_refreshed": False,
+    }
+# ------------------------- BBID transaction execution ------------------------
+
+
+def perform_blind_bid_add(
+    user,
+    league_id: int,
+    add_player_id,
+    bid_amount,
+    drop_player_id=None,
+) -> dict[str, Any]:
+    """
+    Submit one non-conditional MFL blind-bid waiver request.
+
+    This is the quick-claim BBID path. It intentionally DOES NOT:
+      - support conditional BBID leagues;
+      - use ROUND;
+      - use REPLACE;
+      - call playerStatus again;
+      - refresh MFL assets after success;
+      - mutate local FAAB or roster state;
+      - retry with another authentication cookie after a write attempt.
+
+    The caller is responsible for performing the immediately preceding
+    live playerStatus check. MFL's transaction response remains the
+    authoritative final result.
+    """
+
+    from datetime import timedelta
+    from decimal import Decimal, InvalidOperation
+
+    # --------------------------------------------------------
+    # League ownership/current-season validation.
+    # --------------------------------------------------------
+    try:
+        league_id_int = int(
+            league_id
+        )
+    except (TypeError, ValueError):
+        raise ValueError(
+            "Invalid league ID."
+        )
+
+    current_year = datetime.now(
+        timezone.utc
+    ).year
+
+    league = (
+        League.query
+        .filter(
+            League.id == league_id_int,
+            League.user_id == user.id,
+            League.year == current_year,
+        )
+        .first()
+    )
+
+    if league is None:
+        raise LookupError(
+            f"{current_year} league not found for this user."
+        )
+
+    # --------------------------------------------------------
+    # Require the new waiver settings.
+    # --------------------------------------------------------
+    waiver_type = str(
+        getattr(
+            league,
+            "waiver_type",
+            None,
+        )
+        or ""
+    ).strip().upper()
+
+    if not waiver_type:
+        raise ValueError(
+            "Waiver settings are not available for this league."
+        )
+
+    if waiver_type not in {
+        "BBID",
+        "BBID_FCFS",
+    }:
+        raise ValueError(
+            "This league does not use blind-bid waivers."
+        )
+
+    conditional = getattr(
+        league,
+        "bbid_conditional",
+        None,
+    )
+
+    if conditional is None:
+        raise ValueError(
+            "Blind-bid waiver settings are incomplete for this league."
+        )
+
+    if bool(conditional):
+        raise ValueError(
+            "Conditional blind-bid waivers are not supported "
+            "by quick claims yet."
+        )
+
+    # --------------------------------------------------------
+    # Require the same fresh roster snapshot used by FCFS.
+    # --------------------------------------------------------
+    if league.synced_at is None:
+        raise ValueError(
+            "Roster refresh required before submitting a waiver bid."
+        )
+
+    now_naive_utc = datetime.utcnow()
+    synced_at = league.synced_at
+
+    if getattr(
+        synced_at,
+        "tzinfo",
+        None,
+    ) is not None:
+        synced_at = (
+            synced_at
+            .astimezone(
+                timezone.utc
+            )
+            .replace(
+                tzinfo=None
+            )
+        )
+
+    if (
+        now_naive_utc
+        - synced_at
+        > timedelta(hours=4)
+    ):
+        raise ValueError(
+            "Roster refresh required before submitting a waiver bid."
+        )
+
+    # --------------------------------------------------------
+    # Identify the user's synced team.
+    # BBID needs this even when there is no drop because current
+    # available FAAB is stored on Team.
+    # --------------------------------------------------------
+    franchise_id = str(
+        league.franchise_id or ""
+    ).strip()
+
+    if not franchise_id:
+        raise LookupError(
+            "Your franchise could not be identified for this league."
+        )
+
+    team = (
+        Team.query
+        .filter_by(
+            league_id=league.id,
+            mfl_id=franchise_id,
+        )
+        .first()
+    )
+
+    if team is None:
+        raise LookupError(
+            "Your synced team roster could not be found."
+        )
+
+    # --------------------------------------------------------
+    # Validate bid amount using Decimal.
+    # --------------------------------------------------------
+    raw_bid = str(
+        bid_amount
+        if bid_amount is not None
+        else ""
+    ).strip()
+
+    if not raw_bid:
+        raise ValueError(
+            "A waiver bid amount is required."
+        )
+
+    try:
+        bid = Decimal(
+            raw_bid
+        )
+    except (
+        InvalidOperation,
+        ValueError,
+        TypeError,
+    ) as exc:
+        raise ValueError(
+            "Invalid waiver bid amount."
+        ) from exc
+
+    if (
+        not bid.is_finite()
+        or bid < 0
+    ):
+        raise ValueError(
+            "Waiver bid must be zero or greater."
+        )
+
+    faab_balance_raw = getattr(
+        team,
+        "faab_balance",
+        None,
+    )
+
+    if faab_balance_raw is None:
+        raise ValueError(
+            "Current FAAB balance is not available for this league."
+        )
+
+    try:
+        faab_balance = Decimal(
+            str(
+                faab_balance_raw
+            )
+        )
+    except (
+        InvalidOperation,
+        ValueError,
+        TypeError,
+    ) as exc:
+        raise ValueError(
+            "Current FAAB balance is invalid."
+        ) from exc
+
+    minimum_raw = getattr(
+        league,
+        "faab_minimum",
+        None,
+    )
+
+    minimum = None
+
+    if minimum_raw is not None:
+        try:
+            minimum = Decimal(
+                str(
+                    minimum_raw
+                )
+            )
+        except (
+            InvalidOperation,
+            ValueError,
+            TypeError,
+        ) as exc:
+            raise ValueError(
+                "League minimum waiver bid is invalid."
+            ) from exc
+
+    if (
+        minimum is not None
+        and bid < minimum
+    ):
+        raise ValueError(
+            f"Waiver bid must be at least {format(minimum, 'f')}."
+        )
+
+    if bid > faab_balance:
+        raise ValueError(
+            "Waiver bid exceeds your current FAAB balance."
+        )
+
+    # Do not guess at bbidIncrement semantics here.
+    # MFL remains authoritative for any additional bid constraint.
+
+    # --------------------------------------------------------
+    # Resolve player being added.
+    # --------------------------------------------------------
+    add_player = _resolve_fcfs_player(
+        add_player_id
+    )
+
+    if add_player is None:
+        raise LookupError(
+            "Add player not found."
+        )
+
+    add_mfl_id = str(
+        add_player.mfl_id or ""
+    ).strip()
+
+    if (
+        not add_mfl_id
+        or not str(
+            add_player.name or ""
+        ).strip()
+    ):
+        raise ValueError(
+            "Add player is not mapped to the MFL player pool."
+        )
+
+    # --------------------------------------------------------
+    # Optional drop.
+    # Never trust a browser-supplied player ID without verifying
+    # that the player is actually on this user's synced roster.
+    # --------------------------------------------------------
+    drop_player = None
+    drop_mfl_id = None
+
+    if drop_player_id not in (
+        None,
+        "",
+        "none",
+        "NONE",
+        0,
+        "0",
+    ):
+        drop_player = _resolve_fcfs_player(
+            drop_player_id
+        )
+
+        if drop_player is None:
+            raise LookupError(
+                "Drop player not found."
+            )
+
+        drop_mfl_id = str(
+            drop_player.mfl_id or ""
+        ).strip()
+
+        if (
+            not drop_mfl_id
+            or not str(
+                drop_player.name or ""
+            ).strip()
+        ):
+            raise ValueError(
+                "Drop player is not mapped to the MFL player pool."
+            )
+
+        if drop_mfl_id == add_mfl_id:
+            raise ValueError(
+                "The add and drop player cannot be the same player."
+            )
+
+        membership = (
+            Roster.query
+            .filter_by(
+                team_id=team.id,
+                player_id=drop_player.id,
+            )
+            .first()
+        )
+
+        if membership is None:
+            raise ValueError(
+                "The selected drop player is not on your roster "
+                "in this league."
+            )
+
+    # --------------------------------------------------------
+    # Authentication.
+    #
+    # Use the exact ordering already proven by playerStatus/FCFS:
+    #   1. league wwwXX host + matching cookie
+    #   2. API host + API cookie fallback
+    #
+    # Select exactly ONE before the write. Never replay a bid
+    # using a second candidate.
+    # --------------------------------------------------------
+    auth_candidates = list(
+        _player_status_candidates(
+            user,
+            league,
+        )
+    )
+
+    if not auth_candidates:
+        raise RuntimeError(
+            "No usable MFL authentication cookie is available. "
+            "Please re-link the MFL account."
+        )
+
+    client, cookie, auth_source = (
+        auth_candidates[0]
+    )
+
+    # --------------------------------------------------------
+    # REAL WRITE.
+    #
+    # No ROUND.
+    # No REPLACE.
+    # No retry.
+    # --------------------------------------------------------
+    result = client.submit_blind_bid_waiver(
+        league_id=league.mfl_id,
+        bids=[
+            {
+                "player_id": add_mfl_id,
+                "amount": bid,
+                "drop_player_id": (
+                    drop_mfl_id
+                    if drop_mfl_id
+                    else None
+                ),
+            }
+        ],
+        cookie=cookie,
+        context={
+            "operation": (
+                "waivers_perform_blind_bid_add"
+            ),
+            "rosterdash_league_id": (
+                league.id
+            ),
+        },
+    )
+
+    errors = [
+        str(error)
+        for error in (
+            result.get("errors")
+            or []
+        )
+        if str(error).strip()
+    ]
+
+    ok = bool(
+        result.get("ok")
+    )
+
+    message = str(
+        result.get("message")
+        or (
+            "Waiver bid submitted"
+            if ok
+            else "MFL transaction failed."
+        )
+    )
+
+    return {
+        "ok": ok,
+        "message": (
+            "Waiver bid submitted"
+            if ok
+            else message
+        ),
+        "errors": errors,
+        "mfl_status": (
+            result.get("status")
+        ),
+        "http_status": (
+            result.get("http_status")
+        ),
+        "waiver_type": waiver_type,
+        "bid_amount": format(
+            bid,
+            "f",
+        ),
+        "faab_balance_before": format(
+            faab_balance,
+            "f",
+        ),
+        "league": {
+            "league_id": league.id,
+            "mfl_id": league.mfl_id,
+            "name": league.name,
+            "year": league.year,
+        },
+        "add_player": {
+            "player_id": add_player.id,
+            "mfl_id": add_mfl_id,
+            "name": add_player.name,
+            "position": add_player.position,
+        },
+        "drop_player": (
+            {
+                "player_id": (
+                    drop_player.id
+                ),
+                "mfl_id": (
+                    drop_mfl_id
+                ),
+                "name": (
+                    drop_player.name
+                ),
+                "position": (
+                    drop_player.position
+                ),
+            }
+            if drop_player
+            else None
+        ),
+        "auth_source": auth_source,
+
+        # A pending BBID does not mean the roster or FAAB balance
+        # should be mutated locally.
+        "local_roster_refreshed": False,
+        "local_faab_updated": False,
     }
