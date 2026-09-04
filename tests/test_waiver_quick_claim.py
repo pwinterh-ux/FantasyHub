@@ -149,3 +149,90 @@ def test_blank_bid_is_zero_and_faab_is_enforced():
         validate_bbid_amount("1001", 1000)
     with pytest.raises(ValueError, match="Invalid"):
         validate_bbid_amount("three", 1000)
+
+
+def test_waiver_confirmation_ui_guards_both_transaction_posts():
+    source = open("templates/waivers/index.html", encoding="utf-8").read()
+    assert 'id="waiverConfirmMask"' in source
+    assert 'action: "Immediate FA add"' in source
+    assert 'button: "Confirm Add"' in source
+    assert 'action: "FAAB bid"' in source
+    assert 'button: "Confirm FAAB Bid"' in source
+    assert 'drop: selectedDrop ? selected.textContent.trim() : "No drop"' in source
+    assert 'const amount = actionCell.querySelector(".bbid-amount")?.value || "0"' in source
+    assert 'confirmSubmit.addEventListener("click"' in source
+    assert "submit();" in source
+    assert 'onConfirm: () => submitFcfsAdd' in source
+    assert 'onConfirm: async () =>' in source
+    assert source.count('fetch("/waivers/api/bbid-add"') == 1
+    assert source.count('"/waivers/api/fcfs-add"') == 1
+
+
+def test_my_leagues_best_available_links_to_real_waivers_flow():
+    source = open("templates/my_leagues.html", encoding="utf-8").read()
+    assert "url_for('waivers.index')" in source
+    assert "?player_id=${encodeURIComponent(player.player_id)}&league_id=${encodeURIComponent(leagueId)}" in source
+    assert "Demo flow only" not in source
+    assert "js-best-available-add" not in source
+    assert "/waivers/api/fcfs-add" not in source
+    assert "/waivers/api/bbid-add" not in source
+
+
+def test_tools_hub_activates_mfl_only_waivers():
+    source = open("templates/tools/index.html", encoding="utf-8").read()
+    assert "href=\"{{ url_for('waivers.index') }}\"" in source
+    assert 'data-tool="Waivers"' in source
+    assert 'data-mfl-only="1"' in source
+    assert "Waivers (coming soon)" not in source
+    assert "Find dynasty targets across your leagues" in source
+
+
+def test_waivers_deep_link_and_sync_notice_are_safe_server_inputs(app):
+    ready = SimpleNamespace(id=7, waiver_type="FCFS")
+    legacy = SimpleNamespace(id=8, waiver_type=None)
+    owned = SimpleNamespace(id=7)
+    player = SimpleNamespace(id=44)
+    league_query = Mock()
+    league_query.filter_by.side_effect = [
+        Mock(all=Mock(return_value=[ready, legacy])),
+        Mock(first=Mock(return_value=owned)),
+    ]
+    player_query = Mock()
+    player_query.filter_by.return_value.first.return_value = player
+
+    with app.test_request_context("/?player_id=44&league_id=7"), patch.object(
+        routes, "current_user", SimpleNamespace(id=1)
+    ), patch.object(routes.League, "query", league_query), patch.object(
+        routes.Player, "query", player_query
+    ), patch.object(routes, "render_template", return_value="rendered") as render:
+        assert routes.index.__wrapped__() == "rendered"
+
+    context = render.call_args.kwargs
+    assert context["needs_waiver_sync"] is True
+    assert context["waiver_deep_link"] == {"player_id": 44, "league_id": 7}
+    assert league_query.filter_by.call_args_list[1].kwargs["user_id"] == 1
+
+
+def test_invalid_or_unowned_deep_link_falls_back(app):
+    league_query = Mock()
+    league_query.filter_by.side_effect = [
+        Mock(all=Mock(return_value=[])),
+        Mock(first=Mock(return_value=None)),
+    ]
+    player_query = Mock()
+    player_query.filter_by.return_value.first.return_value = SimpleNamespace(id=44)
+    with app.test_request_context("/?player_id=44&league_id=999"), patch.object(
+        routes, "current_user", SimpleNamespace(id=1)
+    ), patch.object(routes.League, "query", league_query), patch.object(
+        routes.Player, "query", player_query
+    ), patch.object(routes, "render_template", return_value="rendered") as render:
+        routes.index.__wrapped__()
+    assert render.call_args.kwargs["waiver_deep_link"] is None
+
+
+def test_sync_notice_copy_and_deep_link_do_not_write():
+    source = open("templates/waivers/index.html", encoding="utf-8").read()
+    assert "Some leagues need a one-time league sync before RosterDash can determine their waiver rules." in source
+    assert "In Add/Delete Leagues, select those leagues and choose Sync selected." in source
+    assert "if (CONFIG.deepLink)" in source
+    assert "loadDeepLinkedPlayer" in source
