@@ -3,6 +3,7 @@ from __future__ import annotations
 from models import DynastyRankConsensusCurrent
 
 import json
+import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any
@@ -406,6 +407,49 @@ def _player_status_candidates(user, league: League):
                 api_cookie,
                 "api.myfantasyleague.com",
             )
+
+
+def _resolve_waiver_transaction_client(user, league: League):
+    """Resolve one authenticated client for an FCFS/BBID write.
+
+    Authentication may fall back, but a waiver transaction's destination
+    must always remain the league's own MFL host.
+    """
+    league_host = _normalize_host(getattr(league, "league_host", None))
+    if not league_host or not re.fullmatch(
+        r"www\d+\.myfantasyleague\.com",
+        league_host,
+        flags=re.IGNORECASE,
+    ):
+        raise RuntimeError(
+            "MFL waiver transaction requires a valid league-specific wwwXX host."
+        )
+
+    league_host = league_host.lower()
+    host_cookies = {
+        str(host).lower(): cookie
+        for host, cookie in _user_host_cookies(user).items()
+    }
+
+    cookie = host_cookies.get(league_host)
+    auth_source = "host_cookie"
+    if not str(cookie or "").strip():
+        cookie = getattr(user, "mfl_cookie_api", None)
+        auth_source = "api_cookie"
+    if not str(cookie or "").strip():
+        cookie = getattr(user, "session_key", None)
+        auth_source = "legacy_session"
+    if not str(cookie or "").strip():
+        raise RuntimeError(
+            "No usable MFL authentication cookie is available. "
+            "Please re-link the MFL account."
+        )
+
+    client = MFLClient(
+        year=league.year,
+        base_url=f"https://{league_host}/{league.year}/",
+    )
+    return client, str(cookie), auth_source
 
 
 def _classify_mfl_player_status(raw_status: str) -> dict[str, Any]:
@@ -1940,44 +1984,13 @@ def perform_fcfs_add(
             )
 
     # --------------------------------------------------------
-    # Authentication.
-    #
-    # Prefer the API-scoped cookie because fcfsWaiver posts to
-    # api.myfantasyleague.com.
-    #
-    # If it is unavailable, reuse the first proven cookie candidate
-    # from the existing live-status authentication helper.
-    #
-    # IMPORTANT: once submit_fcfs_waiver() has been called, we do
-    # NOT try another cookie. A write request must never be replayed
-    # automatically.
+    # Authentication may fall back; the transaction host may not.
     # --------------------------------------------------------
 
-    # Use the same authentication ordering already proven by the
-    # immediately preceding live playerStatus request:
-    #
-    #   1. league wwwXX host + matching host cookie
-    #   2. api.myfantasyleague.com + API cookie fallback
-    #
-    # IMPORTANT:
-    # We select exactly ONE candidate before the write. If the FCFS POST
-    # fails or its response is ambiguous, we never replay the transaction
-    # with another cookie/host.
-    auth_candidates = list(
-        _player_status_candidates(
-            user,
-            league,
-        )
-    )
-
-    if not auth_candidates:
-        raise RuntimeError(
-            "No usable MFL authentication cookie is available. "
-            "Please re-link the MFL account."
-        )
-
+    # Select exactly one cookie before the write. If the FCFS POST fails or
+    # its response is ambiguous, never replay it with another cookie.
     client, cookie, auth_source = (
-        auth_candidates[0]
+        _resolve_waiver_transaction_client(user, league)
     )
 
     # --------------------------------------------------------
@@ -2003,6 +2016,8 @@ def perform_fcfs_add(
             "rosterdash_league_id": (
                 league.id
             ),
+            "intended_transaction_host": _normalize_host(league.league_host),
+            "auth_source": auth_source,
         },
     )
 
@@ -2400,28 +2415,11 @@ def perform_blind_bid_add(
     # --------------------------------------------------------
     # Authentication.
     #
-    # Use the exact ordering already proven by playerStatus/FCFS:
-    #   1. league wwwXX host + matching cookie
-    #   2. API host + API cookie fallback
-    #
-    # Select exactly ONE before the write. Never replay a bid
-    # using a second candidate.
+    # Authentication may fall back; the transaction host may not. Select
+    # exactly one combination before the write and never replay the bid.
     # --------------------------------------------------------
-    auth_candidates = list(
-        _player_status_candidates(
-            user,
-            league,
-        )
-    )
-
-    if not auth_candidates:
-        raise RuntimeError(
-            "No usable MFL authentication cookie is available. "
-            "Please re-link the MFL account."
-        )
-
     client, cookie, auth_source = (
-        auth_candidates[0]
+        _resolve_waiver_transaction_client(user, league)
     )
 
     # --------------------------------------------------------
@@ -2453,6 +2451,8 @@ def perform_blind_bid_add(
             "rosterdash_league_id": (
                 league.id
             ),
+            "intended_transaction_host": _normalize_host(league.league_host),
+            "auth_source": auth_source,
         },
     )
 
