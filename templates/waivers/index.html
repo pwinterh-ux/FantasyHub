@@ -15,6 +15,13 @@
     <div class="phase-pill">Targets · MFL</div>
   </section>
 
+  {% if needs_waiver_sync %}
+    <section class="waiver-panel waiver-sync-notice" role="status">
+      <strong>Some leagues need a one-time league sync before RosterDash can determine their waiver rules.</strong>
+      <div>In Add/Delete Leagues, select those leagues and choose Sync selected. After that, your normal Refresh Assets workflow is enough.</div>
+    </section>
+  {% endif %}
+
   {% if not has_mfl_leagues %}
 
     <section class="waiver-panel empty-panel">
@@ -281,6 +288,26 @@
 
 </div>
 
+<div id="waiverConfirmMask" class="waiver-confirm-mask" hidden>
+  <section class="waiver-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="waiverConfirmTitle">
+    <div class="waiver-confirm-head">
+      <h3 id="waiverConfirmTitle">Confirm acquisition</h3>
+      <button type="button" class="waiver-confirm-close" aria-label="Close">×</button>
+    </div>
+    <dl class="waiver-confirm-review">
+      <div><dt>Add</dt><dd id="waiverConfirmAdd"></dd></div>
+      <div><dt>Drop</dt><dd id="waiverConfirmDrop"></dd></div>
+      <div><dt>League</dt><dd id="waiverConfirmLeague"></dd></div>
+      <div id="waiverConfirmBidRow" hidden><dt>FAAB Bid</dt><dd id="waiverConfirmBid"></dd></div>
+      <div><dt>Action</dt><dd id="waiverConfirmAction"></dd></div>
+    </dl>
+    <div class="waiver-confirm-actions">
+      <button type="button" class="waiver-btn waiver-confirm-cancel">Cancel</button>
+      <button type="button" class="waiver-btn primary" id="waiverConfirmSubmit"></button>
+    </div>
+  </section>
+</div>
+
 
 {% if has_mfl_leagues %}
 
@@ -290,6 +317,7 @@
   "searchUrl": {{ url_for("waivers.api_search") | tojson }},
   "playerUrlTemplate": {{ url_for("waivers.api_player", player_id=999999) | tojson }},
   "liveStatusUrl": {{ url_for("waivers.api_live_status") | tojson }}
+  ,"deepLink": {{ waiver_deep_link | tojson }}
 }
 </script>
 
@@ -361,6 +389,21 @@
     font-size: 11px;
     white-space: nowrap;
   }
+
+  .waiver-sync-notice { color: #fde68a; border-color: rgba(245,158,11,.35); }
+  .waiver-sync-notice div { margin-top: 6px; font-size: 13px; line-height: 1.45; }
+  .waiver-confirm-mask { position: fixed; inset: 0; z-index: 10020; padding: 20px; background: rgba(2,6,23,.78); display: flex; align-items: center; justify-content: center; }
+  .waiver-confirm-mask[hidden] { display: none; }
+  .waiver-confirm-dialog { width: min(480px, 100%); border: 1px solid var(--waiver-border); border-radius: 14px; padding: 18px; background: #0b1220; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+  .waiver-confirm-head, .waiver-confirm-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .waiver-confirm-head h3 { margin: 0; }
+  .waiver-confirm-close { border: 0; background: transparent; color: var(--waiver-muted); cursor: pointer; font-size: 24px; }
+  .waiver-confirm-review { margin: 16px 0; }
+  .waiver-confirm-review > div { display: grid; grid-template-columns: 90px 1fr; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--waiver-border); }
+  .waiver-confirm-review dt { color: var(--waiver-muted); }
+  .waiver-confirm-review dd { margin: 0; font-weight: 800; }
+  .waiver-confirm-actions { justify-content: flex-end; }
+  tr.deep-link-league { background: rgba(56,189,248,.10); outline: 1px solid rgba(56,189,248,.35); }
 
 
   .search-panel {
@@ -1384,6 +1427,46 @@
     document.getElementById(
       "targetReasonFilter"
     );
+
+  const confirmMask = document.getElementById("waiverConfirmMask");
+  const confirmSubmit = document.getElementById("waiverConfirmSubmit");
+  let pendingConfirmation = null;
+
+  function closeConfirmation() {
+    if (confirmSubmit?.dataset.submitting === "1") return;
+    pendingConfirmation = null;
+    confirmMask.hidden = true;
+  }
+
+  function openConfirmation(options) {
+    pendingConfirmation = options.onConfirm;
+    document.getElementById("waiverConfirmAdd").textContent = options.add;
+    document.getElementById("waiverConfirmDrop").textContent = options.drop || "No drop";
+    document.getElementById("waiverConfirmLeague").textContent = options.league;
+    document.getElementById("waiverConfirmAction").textContent = options.action;
+    const bidRow = document.getElementById("waiverConfirmBidRow");
+    bidRow.hidden = options.bid === undefined;
+    document.getElementById("waiverConfirmBid").textContent = options.bid === undefined ? "" : `$${options.bid || "0"}`;
+    confirmSubmit.textContent = options.button;
+    confirmSubmit.disabled = false;
+    confirmSubmit.dataset.submitting = "0";
+    confirmMask.hidden = false;
+    confirmSubmit.focus();
+  }
+
+  confirmMask.querySelectorAll(".waiver-confirm-cancel, .waiver-confirm-close").forEach(button => button.addEventListener("click", closeConfirmation));
+  confirmMask.addEventListener("click", event => { if (event.target === confirmMask) closeConfirmation(); });
+  document.addEventListener("keydown", event => { if (event.key === "Escape" && !confirmMask.hidden) closeConfirmation(); });
+  confirmSubmit.addEventListener("click", () => {
+    if (!pendingConfirmation || confirmSubmit.dataset.submitting === "1") return;
+    const submit = pendingConfirmation;
+    pendingConfirmation = null;
+    confirmSubmit.dataset.submitting = "1";
+    confirmSubmit.disabled = true;
+    confirmSubmit.textContent = "Submitting…";
+    confirmMask.hidden = true;
+    submit();
+  });
 
 
   let targetPayload = null;
@@ -2610,8 +2693,17 @@
       payload.availability || {};
 
 
-    const availableLeagues =
-      availability.available_leagues || [];
+    const availableLeagues = [...(availability.available_leagues || [])];
+    if (String(CONFIG.deepLink?.player_id) === String(player.id)) {
+      const requestedRosteredLeague = (availability.rostered_leagues || []).find(
+        league => String(league.league_id) === String(CONFIG.deepLink?.league_id)
+      );
+      if (requestedRosteredLeague) availableLeagues.unshift(requestedRosteredLeague);
+      availableLeagues.sort((a, b) =>
+        (String(b.league_id) === String(CONFIG.deepLink?.league_id)) -
+        (String(a.league_id) === String(CONFIG.deepLink?.league_id))
+      );
+    }
 
 
     const availableCount =
@@ -2705,6 +2797,10 @@
             <tr
               data-league-id="${escapeHtml(league.league_id)}"
               data-player-id="${escapeHtml(player.id)}"
+              data-league-name="${escapeHtml(league.name)}"
+              data-player-name="${escapeHtml(player.name)}"
+              data-player-meta="${escapeHtml([player.position, player.team].filter(Boolean).join(" · "))}"
+              class="${String(CONFIG.deepLink?.league_id) === String(league.league_id) ? "deep-link-league" : ""}"
             >
 
               <td>
@@ -3567,7 +3663,8 @@
   async function submitFcfsAdd(
     actionCell,
     leagueId,
-    playerId
+    playerId,
+    confirmedDrop
   ) {
 
     const button =
@@ -3631,10 +3728,7 @@
     }
 
 
-    const selectedDrop =
-      String(
-        select.value || ""
-      ).trim();
+    const selectedDrop = String(confirmedDrop ?? select.value ?? "").trim();
 
 
     try {
@@ -3926,12 +4020,19 @@
         button.addEventListener(
           "click",
           () => {
-
-            submitFcfsAdd(
-              actionCell,
-              leagueId,
-              playerId
-            );
+            const row = actionCell.closest("tr");
+            const select = actionCell.querySelector(".fcfs-drop-select");
+            const selected = select.options[select.selectedIndex];
+            const selectedDrop = String(select.value || "").trim();
+            const playerMeta = row.dataset.playerMeta ? ` (${row.dataset.playerMeta})` : "";
+            openConfirmation({
+              add: `${row.dataset.playerName || "Player"}${playerMeta}`,
+              drop: selectedDrop ? selected.textContent.trim() : "No drop",
+              league: row.dataset.leagueName || "League",
+              action: "Immediate FA add",
+              button: "Confirm Add",
+              onConfirm: () => submitFcfsAdd(actionCell, leagueId, playerId, selectedDrop)
+            });
 
           }
         );
@@ -4032,31 +4133,45 @@
           <div class="fcfs-control-row"><button type="button" class="waiver-btn bbid-submit">Submit FAAB bid</button>${fallback}</div>
           <div class="fcfs-result" aria-live="polite"></div>
         </div>`;
-      actionCell.querySelector(".bbid-submit")?.addEventListener("click", async event => {
+      actionCell.querySelector(".bbid-submit")?.addEventListener("click", event => {
         const button = event.currentTarget;
-        if (button.dataset.submitting === "1") return;
-        button.dataset.submitting = "1"; button.disabled = true; button.textContent = "Submitting…";
-        const resultNode = actionCell.querySelector(".fcfs-result");
-        try {
-          const response = await fetch("/waivers/api/bbid-add", {method:"POST", credentials:"same-origin", headers:{"Accept":"application/json","Content-Type":"application/json"}, body:JSON.stringify({league_id:Number(leagueId), add_player_id:Number(playerId), bid_amount:actionCell.querySelector(".bbid-amount")?.value || "0", drop_player_id:actionCell.querySelector(".fcfs-drop-select")?.value || null})});
-          const payload = await response.json().catch(() => ({}));
-          if (!response.ok || !payload.ok) {
-            const error = new Error(payload.message || payload.error || `MFL transaction failed (${response.status}).`);
-            error.definiteRejection = response.status === 400;
-            throw error;
+        const row = actionCell.closest("tr");
+        const amount = actionCell.querySelector(".bbid-amount")?.value || "0";
+        const select = actionCell.querySelector(".fcfs-drop-select");
+        const dropId = select?.value || null;
+        const dropLabel = dropId ? select.options[select.selectedIndex].textContent.trim() : "No drop";
+        const playerMeta = row.dataset.playerMeta ? ` (${row.dataset.playerMeta})` : "";
+        openConfirmation({
+          add: `${row.dataset.playerName || "Player"}${playerMeta}`,
+          drop: dropLabel,
+          league: row.dataset.leagueName || "League",
+          bid: amount,
+          action: "FAAB bid",
+          button: "Confirm FAAB Bid",
+          onConfirm: async () => {
+            if (button.dataset.submitting === "1") return;
+            button.dataset.submitting = "1"; button.disabled = true; button.textContent = "Submitting…";
+            const resultNode = actionCell.querySelector(".fcfs-result");
+            try {
+              const response = await fetch("/waivers/api/bbid-add", {method:"POST", credentials:"same-origin", headers:{"Accept":"application/json","Content-Type":"application/json"}, body:JSON.stringify({league_id:Number(leagueId), add_player_id:Number(playerId), bid_amount:amount, drop_player_id:dropId})});
+              const payload = await response.json().catch(() => ({}));
+              if (!response.ok || !payload.ok) {
+                const error = new Error(payload.message || payload.error || `MFL transaction failed (${response.status}).`);
+                error.definiteRejection = response.status === 400;
+                throw error;
+              }
+              actionCell.innerHTML = `<div class="fcfs-result success">✓ FAAB bid submitted</div>${fallback}`;
+            } catch (error) {
+              if (error.definiteRejection) {
+                renderFcfsErrors(resultNode, [error.message || "The FAAB bid was rejected."]);
+                button.dataset.submitting = "0"; button.disabled = false; button.textContent = "Submit FAAB bid";
+              } else {
+                renderFcfsErrors(resultNode, ["The FAAB bid was not confirmed. Check MFL before retrying.", error.message || "Network request failed."]);
+                button.textContent = "Check MFL";
+              }
+            }
           }
-          actionCell.innerHTML = `<div class="fcfs-result success">✓ FAAB bid submitted</div>${fallback}`;
-        } catch (error) {
-          if (error.definiteRejection) {
-            renderFcfsErrors(resultNode, [error.message || "The FAAB bid was rejected."]);
-            button.dataset.submitting = "0";
-            button.disabled = false;
-            button.textContent = "Submit FAAB bid";
-          } else {
-            renderFcfsErrors(resultNode, ["The FAAB bid was not confirmed. Check MFL before retrying.", error.message || "Network request failed."]);
-            button.textContent = "Check MFL";
-          }
-        }
+        });
       });
     } catch (error) {
       actionCell.innerHTML = `<div class="fcfs-result error">${escapeHtml(error.message || "Drop options could not be loaded.")}</div>${fallback}`;
@@ -4484,14 +4599,32 @@
   );
 
 
-  /*
-   * Targets is the default Waivers view.
-   */
-  setWaiverView(
-    "targets"
-  );
+  async function loadDeepLinkedPlayer() {
+    try {
+      const response = await fetch(playerUrl(CONFIG.deepLink.player_id), {headers: {"Accept": "application/json"}});
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || "Player could not be loaded.");
+      const availability = payload.availability || {};
+      renderPlayers([{
+        ...payload.player,
+        available_count: availability.available_count,
+        total_leagues: availability.total_leagues
+      }]);
+      resultsSub.textContent = "Player selected from My Leagues";
+      const card = resultsNode.querySelector(".player-card");
+      if (card) await togglePlayer(card);
+    } catch (error) {
+      renderSearchMessage(error.message || "Player could not be loaded.", true);
+    }
+  }
 
-  loadTargets();
+  if (CONFIG.deepLink) {
+    setWaiverView("search");
+    loadDeepLinkedPlayer();
+  } else {
+    setWaiverView("targets");
+    loadTargets();
+  }
 
 })();
 </script>

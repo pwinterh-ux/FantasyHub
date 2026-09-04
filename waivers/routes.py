@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import jsonify, render_template, request
 from flask_login import current_user, login_required
@@ -28,7 +28,41 @@ def index():
 
     The template is added in the next implementation step.
     """
-    return render_template("waivers/index.html")
+    current_year = datetime.now(timezone.utc).year
+    leagues = League.query.filter_by(
+        user_id=current_user.id,
+        year=current_year,
+    ).all()
+
+    needs_waiver_sync = any(
+        not str(league.waiver_type or "").strip()
+        for league in leagues
+    )
+
+    deep_link = None
+    player_id = request.args.get("player_id", type=int)
+    league_id = request.args.get("league_id", type=int)
+
+    # Both values must resolve together. In particular, scope the league query
+    # to the signed-in user before exposing its database id to the browser.
+    if player_id and league_id:
+        player = Player.query.filter_by(id=player_id).first()
+        league = League.query.filter_by(
+            id=league_id,
+            user_id=current_user.id,
+            year=current_year,
+        ).first()
+        if player is not None and league is not None:
+            deep_link = {
+                "player_id": player.id,
+                "league_id": league.id,
+            }
+
+    return render_template(
+        "waivers/index.html",
+        needs_waiver_sync=needs_waiver_sync,
+        waiver_deep_link=deep_link,
+    )
 
 
 

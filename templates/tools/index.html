@@ -92,7 +92,7 @@
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
       <div>
         <h2>Tools Hub</h2>
-        <div class="sub">Kickoff for IR Optimizer, lineup helpers, Exposures, and Waivers (coming soon).</div>
+        <div class="sub">Kickoff for IR Optimizer, lineup helpers, Exposures, and Waivers.</div>
       </div>
       {# removed the "Hidden page (no nav link)" pill #}
     </div>
@@ -233,15 +233,14 @@
       </div>
     </div>
 
-    <!-- Waivers (Coming Soon) -->
-    <div class="card is-disabled">
-      <div class="badge">Coming Soon</div>
+    <!-- Waivers (MFL Only) -->
+    <div class="card {% if not has_mfl_leagues %}is-disabled{% endif %}">
+      <div class="badge">MFL Only</div>
       <div class="card-inner">
         <h3>Waivers</h3>
-        <div class="desc">Targets, FAAB guidance, and league-aware availability. Module under active development.</div>
+        <div class="desc">Find dynasty targets across your leagues, check live FA/FAAB status, and submit supported acquisitions from one screen.</div>
         <div class="actions">
-          <button class="btn" disabled>Open</button>
-          <span class="pill">ETA: TBD</span>
+          <a class="btn open-tool" data-tool="Waivers" href="{{ url_for('waivers.index') }}" data-mfl-only="1">Open</a>
         </div>
       </div>
     </div>
