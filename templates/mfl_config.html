@@ -125,6 +125,7 @@
             <!-- Pass values back on submit (no extra API call needed on POST) -->
             <input type="hidden" name="league_name_{{ lg.id }}" value="{{ lg.name }}">
             <input type="hidden" name="franchise_id_{{ lg.id }}" value="{{ lg.franchise_id or '' }}">
+            <input type="hidden" name="league_host_{{ lg.id }}" value="{{ lg.host or '' }}">
           </label>
         {% endfor %}
       </div>

@@ -1,0 +1,4636 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="waivers-page">
+
+  <section class="waiver-header">
+    <div>
+      <h2>Waivers</h2>
+      <div class="waiver-sub">
+        Find the best available dynasty targets across your current-season leagues, or search for any player.
+      </div>
+    </div>
+
+    <div class="phase-pill">Targets · MFL</div>
+  </section>
+
+  {% if needs_waiver_sync %}
+    <section class="waiver-panel waiver-sync-notice" role="status">
+      <strong>Some leagues need a one-time league sync before RosterDash can determine their waiver rules.</strong>
+      <div>In Add/Delete Leagues, select those leagues and choose Sync selected. After that, your normal Refresh Assets workflow is enough.</div>
+    </section>
+  {% endif %}
+
+  {% if not has_mfl_leagues %}
+
+    <section class="waiver-panel empty-panel">
+      <h3>No MFL leagues linked</h3>
+      <p>Waiver Search currently uses your synced MFL leagues.</p>
+    </section>
+
+  {% else %}
+
+    <nav
+      class="waiver-tabs"
+      aria-label="Waiver views"
+    >
+      <button
+        id="waiverTargetsTab"
+        type="button"
+        class="waiver-tab is-active"
+        data-waiver-view-tab="targets"
+        aria-selected="true"
+      >
+        Targets
+      </button>
+
+      <button
+        id="waiverSearchTab"
+        type="button"
+        class="waiver-tab"
+        data-waiver-view-tab="search"
+        aria-selected="false"
+      >
+        Player Search
+      </button>
+    </nav>
+
+
+    <div
+      id="waiverTargetsView"
+      class="waiver-view"
+      data-waiver-view="targets"
+    >
+
+      <section class="waiver-panel targets-toolbar">
+
+        <div class="target-filter-block">
+          <div class="target-filter-label">
+            Position
+          </div>
+
+          <div
+            class="target-position-filters"
+            id="targetPositionFilters"
+          >
+            <button
+              type="button"
+              class="target-filter-chip is-active"
+              data-target-position="ALL"
+            >
+              All
+            </button>
+
+            <button
+              type="button"
+              class="target-filter-chip"
+              data-target-position="QB"
+            >
+              QB
+            </button>
+
+            <button
+              type="button"
+              class="target-filter-chip"
+              data-target-position="RB"
+            >
+              RB
+            </button>
+
+            <button
+              type="button"
+              class="target-filter-chip"
+              data-target-position="WR"
+            >
+              WR
+            </button>
+
+            <button
+              type="button"
+              class="target-filter-chip"
+              data-target-position="TE"
+            >
+              TE
+            </button>
+          </div>
+        </div>
+
+
+        <div class="target-filter-block">
+          <label
+            for="targetReasonFilter"
+            class="target-filter-label"
+          >
+            Reason
+          </label>
+
+          <select
+            id="targetReasonFilter"
+            class="target-select"
+          >
+            <option value="dynasty_rank">
+              Dynasty Rank
+            </option>
+          </select>
+        </div>
+
+
+        <div class="target-filter-block">
+          <label
+            for="targetSort"
+            class="target-filter-label"
+          >
+            Sort
+          </label>
+
+          <select
+            id="targetSort"
+            class="target-select"
+          >
+            <option value="position_rank" selected>
+              Positional Rank
+            </option>
+
+            <option value="top3">
+              Most Top-3 Leagues
+            </option>
+
+            <option value="top5">
+              Most Top-5 Leagues
+            </option>
+
+            <option value="unrostered">
+              Most Unrostered
+            </option>
+          </select>
+        </div>
+
+      </section>
+
+
+      <section
+        id="waiverTargetFreshness"
+        class="target-freshness"
+        hidden
+      ></section>
+
+
+      <section class="waiver-panel results-panel">
+
+        <div class="results-head">
+
+          <div>
+            <h3>Best Targets</h3>
+
+            <div
+              id="waiverTargetsSub"
+              class="waiver-sub"
+            >
+              Loading current-season targets…
+            </div>
+          </div>
+
+
+          <div
+            id="waiverTargetsSpinner"
+            class="mini-spinner"
+            aria-label="Loading targets"
+          ></div>
+
+        </div>
+
+
+        <div id="waiverTargetsResults"></div>
+
+      </section>
+
+    </div>
+
+
+    <div
+      id="waiverSearchView"
+      class="waiver-view"
+      data-waiver-view="search"
+      hidden
+    >
+
+      <section class="waiver-panel search-panel">
+
+        <label
+          for="waiverPlayerSearch"
+          class="search-label"
+        >
+          Player search
+        </label>
+
+        <div class="search-row">
+
+          <input
+            id="waiverPlayerSearch"
+            type="search"
+            placeholder="Search player name…"
+            autocomplete="off"
+            spellcheck="false"
+          >
+
+          <button
+            id="waiverSearchButton"
+            type="button"
+            class="waiver-btn primary"
+          >
+            Search
+          </button>
+
+        </div>
+
+        <div class="search-help">
+          Search uses RosterDash's local player and roster data.
+          Live MFL checks occur when a player is expanded.
+        </div>
+
+      </section>
+
+
+      <section class="waiver-panel results-panel">
+
+        <div class="results-head">
+
+          <div>
+            <h3>Players</h3>
+
+            <div
+              id="waiverResultsSub"
+              class="waiver-sub"
+            >
+              Enter at least 2 characters to search.
+            </div>
+          </div>
+
+          <div
+            id="waiverSearchSpinner"
+            class="mini-spinner"
+            hidden
+            aria-label="Searching"
+          ></div>
+
+        </div>
+
+        <div id="waiverResults"></div>
+
+      </section>
+
+    </div>
+
+    </section>
+
+  {% endif %}
+
+</div>
+
+<div id="waiverConfirmMask" class="waiver-confirm-mask" hidden>
+  <section class="waiver-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="waiverConfirmTitle">
+    <div class="waiver-confirm-head">
+      <h3 id="waiverConfirmTitle">Confirm FA Add</h3>
+      <button type="button" class="waiver-confirm-close" aria-label="Close">×</button>
+    </div>
+    <dl class="waiver-confirm-review">
+      <div><dt>Add</dt><dd id="waiverConfirmAdd"></dd></div>
+      <div><dt>Drop</dt><dd id="waiverConfirmDrop"></dd></div>
+      <div><dt>League</dt><dd id="waiverConfirmLeague"></dd></div>
+      <div id="waiverConfirmBidRow" hidden><dt>Bid</dt><dd id="waiverConfirmBid"></dd></div>
+    </dl>
+    <div class="waiver-confirm-actions">
+      <button type="button" class="waiver-btn waiver-confirm-cancel">Cancel</button>
+      <button type="button" class="waiver-btn primary" id="waiverConfirmSubmit"></button>
+    </div>
+  </section>
+</div>
+
+
+{% if has_mfl_leagues %}
+
+<script id="waiverConfig" type="application/json">
+{
+  "targetsUrl": {{ url_for("waivers.api_targets") | tojson }},
+  "searchUrl": {{ url_for("waivers.api_search") | tojson }},
+  "playerUrlTemplate": {{ url_for("waivers.api_player", player_id=999999) | tojson }},
+  "liveStatusUrl": {{ url_for("waivers.api_live_status") | tojson }}
+  ,"deepLink": {{ waiver_deep_link | tojson }}
+}
+</script>
+
+{% endif %}
+
+
+<style>
+
+  .waivers-page {
+    --waiver-fg: #eaf1f7;
+    --waiver-muted: #aeb7c3;
+    --waiver-border: rgba(255,255,255,.12);
+    --waiver-bg: rgba(10,12,16,.88);
+    --waiver-bg-soft: rgba(255,255,255,.04);
+
+    max-width: 1150px;
+    margin: 22px auto;
+    padding: 0 12px;
+
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+
+  .waiver-header,
+  .waiver-panel {
+    background: var(--waiver-bg);
+    border: 1px solid var(--waiver-border);
+    border-radius: 14px;
+    padding: 16px;
+  }
+
+
+  .waiver-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+
+  .waiver-header h2,
+  .results-head h3 {
+    margin: 0;
+  }
+
+
+  .waiver-header h2 {
+    font-size: 23px;
+  }
+
+
+  .waiver-sub,
+  .search-help {
+    color: var(--waiver-muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+
+  .phase-pill {
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(56,189,248,.35);
+    background: rgba(56,189,248,.10);
+    color: #bae6fd;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .waiver-sync-notice { color: #fde68a; border-color: rgba(245,158,11,.35); }
+  .waiver-sync-notice div { margin-top: 6px; font-size: 13px; line-height: 1.45; }
+  .waiver-confirm-mask { position: fixed; inset: 0; z-index: 10020; padding: 20px; background: rgba(2,6,23,.78); display: flex; align-items: center; justify-content: center; }
+  .waiver-confirm-mask[hidden] { display: none; }
+  .waiver-confirm-dialog { width: min(380px, calc(100vw - 32px)); border: 1px solid var(--waiver-border); border-radius: 12px; padding: 14px; background: #0b1220; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+  .waiver-confirm-head, .waiver-confirm-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .waiver-confirm-head h3 { margin: 0; font-size: 17px; }
+  .waiver-confirm-close { border: 0; padding: 0 2px; background: transparent; color: var(--waiver-muted); cursor: pointer; font-size: 22px; line-height: 1; }
+  .waiver-confirm-review { margin: 10px 0 12px; }
+  .waiver-confirm-review > div { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 4px 0; }
+  .waiver-confirm-review > div[hidden] { display: none; }
+  .waiver-confirm-review dt { color: var(--waiver-muted); font-size: 12px; }
+  .waiver-confirm-review dd { margin: 0; font-size: 13px; font-weight: 700; }
+  .waiver-confirm-actions { justify-content: flex-end; }
+  tr.deep-link-league { background: rgba(56,189,248,.10); outline: 1px solid rgba(56,189,248,.35); }
+
+
+  .search-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+
+  .search-label {
+    color: var(--waiver-fg);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+
+  .search-row {
+    display: flex;
+    gap: 8px;
+  }
+
+
+  #waiverPlayerSearch {
+    flex: 1;
+    min-width: 0;
+
+    color: var(--waiver-fg);
+    background: #0b1220;
+
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 11px;
+
+    padding: 11px 12px;
+    font-size: 15px;
+    outline: none;
+  }
+
+
+  #waiverPlayerSearch:focus {
+    border-color: rgba(56,189,248,.65);
+    box-shadow: 0 0 0 3px rgba(56,189,248,.10);
+  }
+
+
+  .waiver-btn {
+    cursor: pointer;
+
+    border-radius: 10px;
+    padding: 8px 11px;
+
+    font-size: 12px;
+    font-weight: 700;
+
+    border: 1px solid rgba(255,255,255,.14);
+
+    color: var(--waiver-fg);
+    background: rgba(255,255,255,.06);
+
+    text-decoration: none;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+  }
+
+
+  .waiver-btn:hover {
+    background: rgba(255,255,255,.11);
+  }
+
+
+  .waiver-btn.primary {
+    background: rgba(34,197,94,.16);
+    border-color: rgba(34,197,94,.38);
+    color: #dcfce7;
+  }
+
+
+  .waiver-btn.mfl {
+    background: rgba(56,189,248,.12);
+    border-color: rgba(56,189,248,.32);
+    color: #dbeafe;
+  }
+
+
+  .waiver-btn:disabled {
+    opacity: .55;
+    cursor: default;
+  }
+
+
+  .results-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+
+  .player-list {
+    display: grid;
+    gap: 8px;
+  }
+
+
+  /*
+   * Each result is now one accordion item:
+   *
+   *   player-summary
+   *   player-details
+   *
+   * This gives us room later for:
+   * League | Window | Space | Drop | Bid | Submit
+   */
+  .player-card {
+    border: 1px solid var(--waiver-border);
+    border-radius: 12px;
+
+    background: var(--waiver-bg-soft);
+
+    overflow: hidden;
+  }
+
+
+  .player-summary {
+    width: 100%;
+
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    align-items: center;
+    gap: 14px;
+
+    padding: 12px 14px;
+
+    border: 0;
+    background: transparent;
+
+    text-align: left;
+    cursor: pointer;
+
+    color: inherit;
+  }
+
+
+  .player-summary:hover {
+    background: rgba(255,255,255,.035);
+  }
+
+
+  .player-card.is-open > .player-summary {
+    background: rgba(56,189,248,.055);
+    border-bottom: 1px solid rgba(255,255,255,.10);
+  }
+
+
+  .player-main {
+    min-width: 0;
+  }
+
+
+  .player-name {
+    color: var(--waiver-fg);
+    font-weight: 800;
+    font-size: 14px;
+  }
+
+
+  .player-meta {
+    color: var(--waiver-muted);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+
+
+  .unrostered-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    color: #86efac;
+    font-size: 13px;
+    font-weight: 800;
+
+    white-space: nowrap;
+  }
+
+
+  .unrostered-wrap.none {
+    color: var(--waiver-muted);
+  }
+
+
+  .unrostered-count {
+    font-size: 15px;
+  }
+
+
+  .accordion-caret {
+    display: inline-block;
+
+    width: 8px;
+    height: 8px;
+
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+
+    transform: rotate(45deg);
+    transition: transform .16s ease;
+
+    margin-top: -4px;
+  }
+
+
+  .player-card.is-open .accordion-caret {
+    transform: rotate(225deg);
+    margin-top: 5px;
+  }
+
+
+  .player-details[hidden] {
+    display: none;
+  }
+
+
+  .player-details {
+    padding: 14px;
+
+    background:
+      radial-gradient(
+        120% 120% at 10% 0%,
+        rgba(10,12,14,.92),
+        rgba(6,8,10,.96)
+      );
+  }
+
+
+  .details-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    gap: 10px;
+    flex-wrap: wrap;
+
+    margin-bottom: 10px;
+  }
+
+
+  .details-summary-main {
+    color: #dcfce7;
+    font-size: 12px;
+  }
+
+
+  .details-summary-note {
+    color: var(--waiver-muted);
+    font-size: 11px;
+  }
+
+
+  .league-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+
+  .league-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 650px;
+  }
+
+
+  .league-table th,
+  .league-table td {
+    padding: 9px 10px;
+
+    text-align: left;
+    vertical-align: middle;
+
+    border-bottom: 1px solid rgba(255,255,255,.09);
+  }
+
+
+  .league-table th {
+    color: #cbd5e1;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+
+
+  .league-table td {
+    color: #eaf1f7;
+    font-size: 12px;
+  }
+
+
+  .league-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+
+  .league-table tbody tr:hover {
+    background: rgba(255,255,255,.025);
+  }
+
+
+  .league-name {
+    color: #eaf1f7;
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+
+  .availability-rank {
+    color: #bae6fd;
+    font-size: 12px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+
+  .league-meta {
+    color: var(--waiver-muted);
+    font-size: 11px;
+    margin-top: 2px;
+  }
+
+
+  .live-status-cell {
+    min-width: 135px;
+  }
+
+
+  .live-status-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+
+  .status-chip {
+    display: inline-flex;
+    align-items: center;
+
+    padding: 4px 8px;
+
+    border-radius: 999px;
+
+    border: 1px solid rgba(255,255,255,.14);
+
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+
+  .status-chip.fa {
+    color: #dcfce7;
+    background: rgba(34,197,94,.12);
+    border-color: rgba(34,197,94,.32);
+  }
+
+
+  .status-chip.locked {
+    color: #fef3c7;
+    background: rgba(245,158,11,.10);
+    border-color: rgba(245,158,11,.32);
+  }
+
+
+  .status-chip.rostered {
+    color: #fecaca;
+    background: rgba(239,68,68,.10);
+    border-color: rgba(239,68,68,.30);
+  }
+
+
+  .status-chip.unknown {
+    color: #d1d5db;
+  }
+
+
+  .live-refresh {
+    cursor: pointer;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 26px;
+    height: 26px;
+
+    border-radius: 8px;
+
+    border: 1px solid rgba(255,255,255,.12);
+    background: rgba(255,255,255,.045);
+
+    color: #cbd5e1;
+
+    font-size: 13px;
+  }
+
+
+  .live-refresh:hover {
+    background: rgba(255,255,255,.09);
+  }
+
+
+  .live-refresh:disabled {
+    opacity: .55;
+    cursor: default;
+  }
+
+
+  .empty-message,
+  .error-message {
+    border: 1px dashed rgba(255,255,255,.15);
+    border-radius: 10px;
+
+    padding: 18px;
+
+    color: var(--waiver-muted);
+    text-align: center;
+
+    font-size: 13px;
+  }
+
+
+  .error-message {
+    color: #fecaca;
+    border-color: rgba(248,113,113,.32);
+    background: rgba(248,113,113,.07);
+  }
+
+
+  .mini-spinner {
+    width: 22px;
+    height: 22px;
+
+    border-radius: 50%;
+
+    border: 3px solid rgba(255,255,255,.18);
+    border-top-color: #38bdf8;
+
+    animation: waiverSpin .8s linear infinite;
+  }
+
+
+  @keyframes waiverSpin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+
+  @media (max-width: 700px) {
+
+    .search-row {
+      flex-direction: column;
+    }
+
+
+    .waiver-btn.primary {
+      width: 100%;
+    }
+
+
+    .player-summary {
+      gap: 8px;
+      padding: 11px;
+    }
+
+
+    .unrostered-wrap {
+      font-size: 11px;
+    }
+
+
+    .unrostered-count {
+      font-size: 13px;
+    }
+
+  }
+
+
+
+  /* ========================================================
+     Waiver Targets view
+     ======================================================== */
+
+  .waiver-tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+
+  .waiver-tab {
+    appearance: none;
+    cursor: pointer;
+
+    border: 1px solid var(--waiver-border);
+    border-radius: 11px;
+
+    padding: 9px 14px;
+
+    background: rgba(255,255,255,.035);
+    color: var(--waiver-muted);
+
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+
+  .waiver-tab:hover {
+    background: rgba(255,255,255,.075);
+    color: var(--waiver-fg);
+  }
+
+
+  .waiver-tab.is-active {
+    color: #e0f2fe;
+    background: rgba(56,189,248,.12);
+    border-color: rgba(56,189,248,.38);
+  }
+
+
+  .waiver-view {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+
+  .waiver-view[hidden] {
+    display: none;
+  }
+
+
+  .targets-toolbar {
+    display: flex;
+    align-items: flex-end;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+
+
+  .target-filter-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+
+  .target-filter-label {
+    color: var(--waiver-muted);
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+
+
+  .target-position-filters {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+
+  .target-filter-chip {
+    appearance: none;
+    cursor: pointer;
+
+    border: 1px solid rgba(255,255,255,.13);
+    border-radius: 999px;
+
+    padding: 6px 10px;
+
+    color: var(--waiver-muted);
+    background: rgba(255,255,255,.035);
+
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+
+  .target-filter-chip:hover {
+    color: var(--waiver-fg);
+    background: rgba(255,255,255,.075);
+  }
+
+
+  .target-filter-chip.is-active {
+    color: #dcfce7;
+    border-color: rgba(34,197,94,.34);
+    background: rgba(34,197,94,.12);
+  }
+
+
+  .target-select {
+    min-width: 165px;
+
+    color: var(--waiver-fg);
+    background: #0b1220;
+
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 9px;
+
+    padding: 7px 9px;
+
+    font-size: 12px;
+  }
+
+
+  .target-freshness {
+    border: 1px solid rgba(245,158,11,.30);
+    border-radius: 11px;
+
+    padding: 10px 12px;
+
+    color: #fde68a;
+    background: rgba(245,158,11,.08);
+
+    font-size: 12px;
+  }
+
+
+  .target-freshness.is-fresh {
+    color: #bbf7d0;
+    border-color: rgba(34,197,94,.28);
+    background: rgba(34,197,94,.07);
+  }
+
+
+  .target-groups {
+    display: grid;
+    gap: 18px;
+  }
+
+
+  .target-group {
+    display: grid;
+    gap: 8px;
+  }
+
+
+  .target-group + .target-group {
+    border-top: 1px solid rgba(255,255,255,.09);
+    padding-top: 16px;
+  }
+
+
+  .target-group-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    gap: 10px;
+
+    padding: 0 2px;
+  }
+
+
+  .target-group-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+
+  .target-group-title h4 {
+    margin: 0;
+
+    color: var(--waiver-fg);
+    font-size: 16px;
+  }
+
+
+  .target-group-count {
+    color: var(--waiver-muted);
+    font-size: 11px;
+  }
+
+
+  .target-player-card .player-summary {
+    grid-template-columns:
+      minmax(185px,1fr)
+      minmax(330px,auto);
+  }
+
+
+  .target-player-meta {
+    margin-top: 3px;
+
+    display: flex;
+    gap: 7px;
+    flex-wrap: wrap;
+
+    color: var(--waiver-muted);
+    font-size: 11px;
+  }
+
+
+  .target-reason {
+    color: #bae6fd;
+  }
+
+
+  .target-stats {
+    display: grid;
+
+    grid-template-columns:
+      repeat(3, minmax(76px, auto))
+      18px;
+
+    align-items: center;
+    gap: 10px;
+
+    text-align: center;
+  }
+
+
+  .target-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+
+    min-width: 64px;
+  }
+
+
+  .target-stat strong {
+    color: var(--waiver-fg);
+    font-size: 13px;
+  }
+
+
+  .target-stat span {
+    color: var(--waiver-muted);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+
+
+  .target-stat.unrostered strong {
+    color: #86efac;
+  }
+
+
+  .target-view-all {
+    appearance: none;
+    cursor: pointer;
+
+    border: 1px dashed rgba(255,255,255,.15);
+    border-radius: 10px;
+
+    padding: 9px 12px;
+
+    width: 100%;
+
+    color: #bae6fd;
+    background: rgba(56,189,248,.035);
+
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+
+  .target-view-all:hover {
+    background: rgba(56,189,248,.08);
+  }
+
+
+  @media (max-width: 820px) {
+
+    .target-player-card .player-summary {
+      grid-template-columns: 1fr;
+    }
+
+
+    .target-stats {
+      grid-template-columns:
+        repeat(3, minmax(62px,1fr))
+        16px;
+
+      text-align: left;
+    }
+
+
+    .target-stat {
+      min-width: 0;
+    }
+
+  }
+
+
+  @media (max-width: 560px) {
+
+    .targets-toolbar {
+      align-items: stretch;
+      gap: 12px;
+    }
+
+
+    .target-filter-block {
+      width: 100%;
+    }
+
+
+    .target-select {
+      width: 100%;
+    }
+
+
+    .target-stats {
+      grid-template-columns:
+        repeat(3, minmax(0,1fr))
+        18px;
+    }
+
+
+    .target-stats .accordion-caret {
+      grid-column: 4;
+      grid-row: 1;
+    }
+
+  }
+
+
+
+  /* ------------------------- FCFS rapid add ------------------------- */
+
+  .fcfs-action-cell {
+    min-width: 245px;
+  }
+
+  .fcfs-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 225px;
+  }
+
+  .fcfs-control-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .fcfs-drop-label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    opacity: .76;
+  }
+
+  .fcfs-drop-select {
+    width: 100%;
+    min-width: 210px;
+    max-width: 310px;
+    padding: 7px 8px;
+    border-radius: 7px;
+    border: 1px solid rgba(148, 163, 184, .28);
+    background: rgba(15, 23, 42, .86);
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+  }
+
+  .fcfs-submit {
+    white-space: nowrap;
+  }
+
+  .fcfs-loading {
+    font-size: 12px;
+    opacity: .72;
+  }
+
+  .fcfs-result {
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  .fcfs-result.success {
+    font-weight: 800;
+  }
+
+  .fcfs-result.error {
+    max-width: 320px;
+  }
+
+  .fcfs-error-item + .fcfs-error-item {
+    margin-top: 5px;
+  }
+
+  .fcfs-added {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 7px;
+  }
+
+  .fcfs-added-label {
+    font-weight: 900;
+  }
+
+
+</style>
+
+
+{% if has_mfl_leagues %}
+
+<script>
+(function () {
+
+  const configNode =
+    document.getElementById("waiverConfig");
+
+  if (!configNode) {
+    return;
+  }
+
+
+  const CONFIG =
+    JSON.parse(
+      configNode.textContent || "{}"
+    );
+
+
+  const searchInput =
+    document.getElementById(
+      "waiverPlayerSearch"
+    );
+
+
+  const searchButton =
+    document.getElementById(
+      "waiverSearchButton"
+    );
+
+
+  const resultsNode =
+    document.getElementById(
+      "waiverResults"
+    );
+
+
+  const resultsSub =
+    document.getElementById(
+      "waiverResultsSub"
+    );
+
+
+  const searchSpinner =
+    document.getElementById(
+      "waiverSearchSpinner"
+    );
+
+
+
+  const targetsTab =
+    document.getElementById(
+      "waiverTargetsTab"
+    );
+
+  const searchTab =
+    document.getElementById(
+      "waiverSearchTab"
+    );
+
+  const targetsView =
+    document.getElementById(
+      "waiverTargetsView"
+    );
+
+  const searchView =
+    document.getElementById(
+      "waiverSearchView"
+    );
+
+  const targetsNode =
+    document.getElementById(
+      "waiverTargetsResults"
+    );
+
+  const targetsSub =
+    document.getElementById(
+      "waiverTargetsSub"
+    );
+
+  const targetsSpinner =
+    document.getElementById(
+      "waiverTargetsSpinner"
+    );
+
+  const targetFreshness =
+    document.getElementById(
+      "waiverTargetFreshness"
+    );
+
+  const targetPositionFilters =
+    document.getElementById(
+      "targetPositionFilters"
+    );
+
+  const targetSort =
+    document.getElementById(
+      "targetSort"
+    );
+
+  const targetReasonFilter =
+    document.getElementById(
+      "targetReasonFilter"
+    );
+
+  const confirmMask = document.getElementById("waiverConfirmMask");
+  const confirmSubmit = document.getElementById("waiverConfirmSubmit");
+  let pendingConfirmation = null;
+
+  function closeConfirmation() {
+    if (confirmSubmit?.dataset.submitting === "1") return;
+    pendingConfirmation = null;
+    confirmMask.hidden = true;
+  }
+
+  function openConfirmation(options) {
+    pendingConfirmation = options.onConfirm;
+    document.getElementById("waiverConfirmTitle").textContent = options.title;
+    document.getElementById("waiverConfirmAdd").textContent = options.add;
+    document.getElementById("waiverConfirmDrop").textContent = options.drop || "No drop";
+    document.getElementById("waiverConfirmLeague").textContent = options.league;
+    const bidRow = document.getElementById("waiverConfirmBidRow");
+    bidRow.hidden = options.bid === undefined;
+    document.getElementById("waiverConfirmBid").textContent = options.bid === undefined ? "" : `$${options.bid || "0"}`;
+    confirmSubmit.textContent = options.button;
+    confirmSubmit.disabled = false;
+    confirmSubmit.dataset.submitting = "0";
+    confirmMask.hidden = false;
+    confirmSubmit.focus();
+  }
+
+  confirmMask.querySelectorAll(".waiver-confirm-cancel, .waiver-confirm-close").forEach(button => button.addEventListener("click", closeConfirmation));
+  confirmMask.addEventListener("click", event => { if (event.target === confirmMask) closeConfirmation(); });
+  document.addEventListener("keydown", event => { if (event.key === "Escape" && !confirmMask.hidden) closeConfirmation(); });
+  confirmSubmit.addEventListener("click", () => {
+    if (!pendingConfirmation || confirmSubmit.dataset.submitting === "1") return;
+    const submit = pendingConfirmation;
+    pendingConfirmation = null;
+    confirmSubmit.dataset.submitting = "1";
+    confirmSubmit.disabled = true;
+    confirmSubmit.textContent = "Submitting…";
+    confirmMask.hidden = true;
+    submit();
+  });
+
+
+  let targetPayload = null;
+
+  let activeTargetPosition =
+    "ALL";
+
+  let targetsLoaded =
+    false;
+
+  /*
+   * Map local Player.id -> target metadata.
+   * This lets the existing accordion continue using the same
+   * /api/player endpoint while Targets keeps its own portfolio
+   * metrics in memory.
+   */
+  const targetPlayerMeta =
+    new Map();
+
+
+  let searchTimer = null;
+  let searchSequence = 0;
+
+  // Only one player's accordion stays open at a time.
+  let openPlayerId = null;
+
+  /*
+   * Live MFL verification:
+   *
+   * - expanding a player automatically checks every league where the
+   *   local roster snapshot says the player is unrostered
+   * - only a few browser requests run concurrently
+   * - successful results are cached in this browser tab for 10 minutes
+   * - the manual refresh button always bypasses the cache
+   */
+  const LIVE_CACHE_TTL_MS =
+    10 * 60 * 1000;
+
+  const LIVE_MAX_CONCURRENT =
+    4;
+
+  const liveStatusCache =
+    new Map();
+
+
+  function escapeHtml(value) {
+
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+
+  }
+
+
+  function playerUrl(playerId) {
+
+    return CONFIG.playerUrlTemplate.replace(
+      "999999",
+      encodeURIComponent(
+        String(playerId)
+      )
+    );
+
+  }
+
+
+  /*
+   * Turn the existing host-aware league home URL:
+   *
+   * https://www43.myfantasyleague.com/2026/home/38972
+   *
+   * into:
+   *
+   * https://www43.myfantasyleague.com/2026/add_drop?L=38972
+   *
+   * This preserves the correct MFL host for every league.
+   */
+  function mflAddDropUrl(league) {
+
+    const homeUrl =
+      league.home_url || "";
+
+    if (!homeUrl) {
+      return "";
+    }
+
+
+    try {
+
+      const parsed =
+        new URL(homeUrl);
+
+
+      const year =
+        encodeURIComponent(
+          String(league.year || "")
+        );
+
+
+      const mflId =
+        encodeURIComponent(
+          String(league.mfl_id || "")
+        );
+
+
+      if (!year || !mflId) {
+        return "";
+      }
+
+
+      return (
+        `${parsed.origin}/${year}/add_drop?L=${mflId}`
+      );
+
+    }
+    catch (error) {
+
+      return "";
+
+    }
+
+  }
+
+
+
+  function setWaiverView(viewName) {
+
+    const isTargets =
+      viewName === "targets";
+
+    targetsView.hidden =
+      !isTargets;
+
+    searchView.hidden =
+      isTargets;
+
+    targetsTab.classList.toggle(
+      "is-active",
+      isTargets
+    );
+
+    searchTab.classList.toggle(
+      "is-active",
+      !isTargets
+    );
+
+    targetsTab.setAttribute(
+      "aria-selected",
+      isTargets
+        ? "true"
+        : "false"
+    );
+
+    searchTab.setAttribute(
+      "aria-selected",
+      isTargets
+        ? "false"
+        : "true"
+    );
+
+  }
+
+
+  function targetPlayerId(player) {
+
+    const raw =
+      player.player_id ||
+      player.mfl_id ||
+      "";
+
+    return String(raw);
+
+  }
+
+
+  function targetRankValue(player) {
+
+    const raw =
+      Number(
+        player.positional_rank
+      );
+
+    return Number.isFinite(raw)
+      ? raw
+      : 999999;
+
+  }
+
+
+  function sortTargetPlayers(players) {
+
+    const sorted =
+      [...players];
+
+    const mode =
+      targetSort?.value ||
+      "position_rank";
+
+    sorted.sort(
+      (a, b) => {
+
+        const top3A =
+          Number(
+            a.top3_league_count || 0
+          );
+
+        const top3B =
+          Number(
+            b.top3_league_count || 0
+          );
+
+        const top5A =
+          Number(
+            a.target_league_count || 0
+          );
+
+        const top5B =
+          Number(
+            b.target_league_count || 0
+          );
+
+        const unrosteredA =
+          Number(
+            a.unrostered_count || 0
+          );
+
+        const unrosteredB =
+          Number(
+            b.unrostered_count || 0
+          );
+
+        const rankA =
+          targetRankValue(a);
+
+        const rankB =
+          targetRankValue(b);
+
+
+        if (mode === "position_rank") {
+
+          return (
+            rankA - rankB
+            || top3B - top3A
+            || top5B - top5A
+          );
+
+        }
+
+
+        if (mode === "top5") {
+
+          return (
+            top5B - top5A
+            || top3B - top3A
+            || rankA - rankB
+          );
+
+        }
+
+
+        if (mode === "unrostered") {
+
+          return (
+            unrosteredB - unrosteredA
+            || top3B - top3A
+            || top5B - top5A
+            || rankA - rankB
+          );
+
+        }
+
+
+        return (
+          top3B - top3A
+          || top5B - top5A
+          || rankA - rankB
+          || unrosteredB - unrosteredA
+        );
+
+      }
+    );
+
+    return sorted;
+
+  }
+
+
+  function renderTargetCard(
+    player,
+    totalLeagues
+  ) {
+
+    const playerId =
+      targetPlayerId(player);
+
+    if (!playerId) {
+      return "";
+    }
+
+    const position =
+      String(
+        player.position ||
+        "—"
+      );
+
+    const positionalRank =
+      player.positional_rank
+        ? `${position}${player.positional_rank}`
+        : `${position}—`;
+
+    const top3 =
+      Number(
+        player.top3_league_count || 0
+      );
+
+    const top5 =
+      Number(
+        player.target_league_count || 0
+      );
+
+    const unrostered =
+      Number(
+        player.unrostered_count || 0
+      );
+
+    targetPlayerMeta.set(
+      playerId,
+      player
+    );
+
+    return `
+      <div
+        class="player-card target-player-card"
+        data-player-id="${escapeHtml(playerId)}"
+        data-loaded="0"
+      >
+
+        <button
+          type="button"
+          class="player-summary"
+          aria-expanded="false"
+        >
+
+          <div class="player-main">
+
+            <div class="player-name">
+              ${escapeHtml(
+                player.name ||
+                "Unknown Player"
+              )}
+            </div>
+
+            <div class="target-player-meta">
+
+              <span>
+                ${escapeHtml(
+                  player.team ||
+                  "FA"
+                )}
+              </span>
+
+              <span>·</span>
+
+              <span>
+                ${escapeHtml(
+                  positionalRank
+                )}
+              </span>
+
+              <span>·</span>
+
+              <span class="target-reason">
+                Dynasty Rank
+              </span>
+
+            </div>
+
+          </div>
+
+
+          <div class="target-stats">
+
+            <div class="target-stat">
+              <strong>${top3}</strong>
+              <span>Top 3</span>
+            </div>
+
+            <div class="target-stat">
+              <strong>${top5}</strong>
+              <span>Top 5</span>
+            </div>
+
+            <div class="target-stat unrostered">
+              <strong>
+                ${unrostered}/${totalLeagues}
+              </strong>
+              <span>Unrostered</span>
+            </div>
+
+            <span
+              class="accordion-caret"
+              aria-hidden="true"
+            ></span>
+
+          </div>
+
+        </button>
+
+
+        <div
+          class="player-details"
+          hidden
+        ></div>
+
+      </div>
+    `;
+
+  }
+
+
+  function bindTargetPlayerCards(root) {
+
+    root
+      .querySelectorAll(
+        ".player-summary"
+      )
+      .forEach(button => {
+
+        button.addEventListener(
+          "click",
+          () => {
+
+            const card =
+              button.closest(
+                ".player-card"
+              );
+
+            togglePlayer(card);
+
+          }
+        );
+
+      });
+
+  }
+
+
+  function updateTargetPositionButtons() {
+
+    if (!targetPositionFilters) {
+      return;
+    }
+
+    targetPositionFilters
+      .querySelectorAll(
+        "[data-target-position]"
+      )
+      .forEach(button => {
+
+        button.classList.toggle(
+          "is-active",
+          button.dataset.targetPosition ===
+            activeTargetPosition
+        );
+
+      });
+
+  }
+
+
+  function renderTargetGroups() {
+
+    if (
+      !targetPayload ||
+      !targetsNode
+    ) {
+      return;
+    }
+
+    const positions =
+      targetPayload.positions ||
+      [];
+
+    const totalLeagues =
+      Number(
+        targetPayload.total_leagues || 0
+      );
+
+    const allMode =
+      activeTargetPosition ===
+      "ALL";
+
+    const groups =
+      positions.filter(group => {
+
+        if (allMode) {
+          return true;
+        }
+
+        return (
+          String(group.position) ===
+          activeTargetPosition
+        );
+
+      });
+
+
+    if (!groups.length) {
+
+      targetsNode.innerHTML = `
+        <div class="empty-message">
+          No targets found for this position.
+        </div>
+      `;
+
+      return;
+    }
+
+
+    targetPlayerMeta.clear();
+
+
+    const html =
+      groups
+        .map(group => {
+
+          const position =
+            String(
+              group.position || ""
+            );
+
+          const allPlayers =
+            sortTargetPlayers(
+              group.players || []
+            );
+
+          /*
+           * All Positions:
+           * show the strongest 10 at each position.
+           *
+           * Position-specific view:
+           * show the full union for that position.
+           */
+          const shownPlayers =
+            allMode
+              ? allPlayers.slice(0, 10)
+              : allPlayers;
+
+          const cards =
+            shownPlayers
+              .map(player =>
+                renderTargetCard(
+                  player,
+                  totalLeagues
+                )
+              )
+              .join("");
+
+
+          const viewAll =
+            (
+              allMode &&
+              allPlayers.length > shownPlayers.length
+            )
+              ? `
+                <button
+                  type="button"
+                  class="target-view-all"
+                  data-view-all-position="${escapeHtml(position)}"
+                >
+                  View all ${allPlayers.length}
+                  ${escapeHtml(position)} targets
+                </button>
+              `
+              : "";
+
+
+          return `
+            <section
+              class="target-group"
+              data-target-group="${escapeHtml(position)}"
+            >
+
+              <div class="target-group-head">
+
+                <div class="target-group-title">
+                  <h4>
+                    ${escapeHtml(position)}
+                  </h4>
+
+                  <span class="target-group-count">
+                    ${allPlayers.length}
+                    unique target${
+                      allPlayers.length === 1
+                        ? ""
+                        : "s"
+                    }
+                  </span>
+                </div>
+
+              </div>
+
+
+              <div class="player-list">
+                ${cards}
+              </div>
+
+              ${viewAll}
+
+            </section>
+          `;
+
+        })
+        .join("");
+
+
+    targetsNode.innerHTML = `
+      <div class="target-groups">
+        ${html}
+      </div>
+    `;
+
+
+    bindTargetPlayerCards(
+      targetsNode
+    );
+
+
+    targetsNode
+      .querySelectorAll(
+        "[data-view-all-position]"
+      )
+      .forEach(button => {
+
+        button.addEventListener(
+          "click",
+          () => {
+
+            activeTargetPosition =
+              button.dataset.viewAllPosition;
+
+            updateTargetPositionButtons();
+
+            renderTargetGroups();
+
+            targetsNode.scrollIntoView({
+              behavior: "smooth",
+              block: "start"
+            });
+
+          }
+        );
+
+      });
+
+  }
+
+
+  function renderTargetFreshness(
+    freshness
+  ) {
+
+    if (!targetFreshness) {
+      return;
+    }
+
+    const leagueCount =
+      Number(
+        freshness.league_count || 0
+      );
+
+    const staleCount =
+      Number(
+        freshness.stale_count || 0
+      );
+
+
+    targetFreshness.hidden =
+      false;
+
+
+    if (
+      freshness.transaction_ready
+    ) {
+
+      targetFreshness.classList.add(
+        "is-fresh"
+      );
+
+      targetFreshness.textContent =
+        `${leagueCount}/${leagueCount} current-season leagues have a recent roster refresh.`;
+
+      return;
+    }
+
+
+    targetFreshness.classList.remove(
+      "is-fresh"
+    );
+
+    targetFreshness.textContent =
+      `${staleCount} of ${leagueCount} leagues are stale. `
+      + "Targets remain browseable, but refresh assets before submitting transactions.";
+
+  }
+
+
+  async function loadTargets(
+    force = false
+  ) {
+
+    if (
+      targetsLoaded &&
+      !force
+    ) {
+      return;
+    }
+
+
+    targetsSpinner.hidden =
+      false;
+
+    targetsSub.textContent =
+      "Loading current-season targets…";
+
+
+    try {
+
+      const response =
+        await fetch(
+          CONFIG.targetsUrl,
+          {
+            headers: {
+              "Accept":
+                "application/json"
+            }
+          }
+        );
+
+
+      const payload =
+        await response.json();
+
+
+      if (
+        !response.ok ||
+        !payload.ok
+      ) {
+
+        const message =
+          payload.message ||
+          payload.error ||
+          `Targets request failed (${response.status})`;
+
+        throw new Error(
+          message
+        );
+
+      }
+
+
+      targetPayload =
+        payload.targets || {};
+
+      targetsLoaded =
+        true;
+
+
+      const positionGroups =
+        targetPayload.positions ||
+        [];
+
+      const totalTargets =
+        positionGroups.reduce(
+          (sum, group) =>
+            sum +
+            Number(
+              group.count || 0
+            ),
+          0
+        );
+
+
+      const year =
+        targetPayload.year || "";
+
+      const leagues =
+        Number(
+          targetPayload.total_leagues || 0
+        );
+
+
+      targetsSub.textContent =
+        `${year} · ${leagues} leagues · `
+        + `${totalTargets} unique targets · `
+        + "Top 5 available per position in each league";
+
+
+      renderTargetFreshness(
+        payload.freshness || {}
+      );
+
+
+      renderTargetGroups();
+
+    }
+    catch (error) {
+
+      targetsLoaded =
+        false;
+
+      targetPayload =
+        null;
+
+      targetsSub.textContent =
+        "Targets unavailable";
+
+      targetsNode.innerHTML = `
+        <div class="error-message">
+          ${escapeHtml(
+            error.message ||
+            "Could not load waiver targets."
+          )}
+        </div>
+      `;
+
+      if (targetFreshness) {
+        targetFreshness.hidden =
+          true;
+      }
+
+    }
+    finally {
+
+      targetsSpinner.hidden =
+        true;
+
+    }
+
+  }
+
+
+  function renderSearchMessage(
+    message,
+    isError = false
+  ) {
+
+    resultsNode.innerHTML = `
+      <div class="${
+        isError
+          ? "error-message"
+          : "empty-message"
+      }">
+        ${escapeHtml(message)}
+      </div>
+    `;
+
+  }
+
+
+  function renderPlayers(players) {
+
+    openPlayerId = null;
+
+
+    if (!players.length) {
+
+      renderSearchMessage(
+        "No matching players found."
+      );
+
+      return;
+    }
+
+
+    const html =
+      players
+        .map(player => {
+
+          const available =
+            Number(
+              player.available_count || 0
+            );
+
+
+          const total =
+            Number(
+              player.total_leagues || 0
+            );
+
+
+          const availabilityClass =
+            available > 0
+              ? ""
+              : "none";
+
+
+          return `
+            <div
+              class="player-card"
+              data-player-id="${escapeHtml(player.id)}"
+              data-loaded="0"
+            >
+
+              <button
+                type="button"
+                class="player-summary"
+                aria-expanded="false"
+              >
+
+                <div class="player-main">
+
+                  <div class="player-name">
+                    ${escapeHtml(
+                      player.name ||
+                      "Unknown Player"
+                    )}
+                  </div>
+
+                  <div class="player-meta">
+                    ${escapeHtml(
+                      player.position ||
+                      "—"
+                    )}
+                    ·
+                    ${escapeHtml(
+                      player.team ||
+                      "FA"
+                    )}
+                    ·
+                    MFL
+                    ${escapeHtml(
+                      player.mfl_id ||
+                      player.id
+                    )}
+                  </div>
+
+                </div>
+
+
+                <div class="unrostered-wrap ${availabilityClass}">
+
+                  <span class="unrostered-count">
+                    ${available}/${total}
+                  </span>
+
+                  <span>
+                    Unrostered
+                  </span>
+
+                  <span
+                    class="accordion-caret"
+                    aria-hidden="true"
+                  ></span>
+
+                </div>
+
+              </button>
+
+
+              <div
+                class="player-details"
+                hidden
+              ></div>
+
+            </div>
+          `;
+
+        })
+        .join("");
+
+
+    resultsNode.innerHTML = `
+      <div class="player-list">
+        ${html}
+      </div>
+    `;
+
+
+    resultsNode
+      .querySelectorAll(
+        ".player-summary"
+      )
+      .forEach(button => {
+
+        button.addEventListener(
+          "click",
+          () => {
+
+            const card =
+              button.closest(
+                ".player-card"
+              );
+
+
+            togglePlayer(card);
+
+          }
+        );
+
+      });
+
+  }
+
+
+  function collapseCard(card) {
+
+    if (!card) {
+      return;
+    }
+
+
+    const details =
+      card.querySelector(
+        ".player-details"
+      );
+
+
+    const summary =
+      card.querySelector(
+        ".player-summary"
+      );
+
+
+    card.classList.remove(
+      "is-open"
+    );
+
+
+    details.hidden = true;
+
+
+    summary.setAttribute(
+      "aria-expanded",
+      "false"
+    );
+
+  }
+
+
+  async function togglePlayer(card) {
+
+    if (!card) {
+      return;
+    }
+
+
+    const playerId =
+      String(
+        card.dataset.playerId
+      );
+
+
+    const details =
+      card.querySelector(
+        ".player-details"
+      );
+
+
+    const summary =
+      card.querySelector(
+        ".player-summary"
+      );
+
+
+    const isCurrentlyOpen =
+      card.classList.contains(
+        "is-open"
+      );
+
+
+    /*
+     * Accordion behavior:
+     * opening one player closes the previous player.
+     */
+    document
+      .querySelectorAll(
+        ".player-card.is-open"
+      )
+      .forEach(otherCard => {
+
+        if (otherCard !== card) {
+          collapseCard(otherCard);
+        }
+
+      });
+
+
+    if (isCurrentlyOpen) {
+
+      collapseCard(card);
+
+      openPlayerId = null;
+
+      return;
+
+    }
+
+
+    card.classList.add(
+      "is-open"
+    );
+
+
+    details.hidden = false;
+
+
+    summary.setAttribute(
+      "aria-expanded",
+      "true"
+    );
+
+
+    openPlayerId =
+      playerId;
+
+
+    /*
+     * If this player was already loaded, keep the cached local
+     * league details for this search result.
+     */
+    if (
+      card.dataset.loaded === "1"
+    ) {
+      return;
+    }
+
+
+    details.innerHTML = `
+      <div class="empty-message">
+        Loading league availability…
+      </div>
+    `;
+
+
+    await loadPlayerDetails(
+      card,
+      playerId
+    );
+
+  }
+
+
+  async function loadPlayerDetails(
+    card,
+    playerId
+  ) {
+
+    const details =
+      card.querySelector(
+        ".player-details"
+      );
+
+
+    try {
+
+      const response =
+        await fetch(
+          playerUrl(playerId),
+          {
+            headers: {
+              "Accept":
+                "application/json"
+            }
+          }
+        );
+
+
+      const payload =
+        await response.json();
+
+
+      if (
+        !response.ok ||
+        !payload.ok
+      ) {
+
+        throw new Error(
+          payload.error ||
+          `Player request failed (${response.status})`
+        );
+
+      }
+
+
+      card.dataset.loaded = "1";
+
+
+      renderPlayerDetails(
+        details,
+        payload
+      );
+
+    }
+    catch (error) {
+
+      details.innerHTML = `
+        <div class="error-message">
+          ${escapeHtml(
+            error.message ||
+            "Player availability could not be loaded."
+          )}
+        </div>
+      `;
+
+    }
+
+  }
+
+
+  function renderPlayerDetails(
+    details,
+    payload
+  ) {
+
+    const player =
+      payload.player || {};
+
+
+    const availability =
+      payload.availability || {};
+
+
+    const availableLeagues = [...(availability.available_leagues || [])];
+    if (String(CONFIG.deepLink?.player_id) === String(player.id)) {
+      const requestedRosteredLeague = (availability.rostered_leagues || []).find(
+        league => String(league.league_id) === String(CONFIG.deepLink?.league_id)
+      );
+      if (requestedRosteredLeague) availableLeagues.unshift(requestedRosteredLeague);
+      availableLeagues.sort((a, b) =>
+        (String(b.league_id) === String(CONFIG.deepLink?.league_id)) -
+        (String(a.league_id) === String(CONFIG.deepLink?.league_id))
+      );
+    }
+
+
+    const availableCount =
+      Number(
+        availability.available_count || 0
+      );
+
+
+    const totalLeagues =
+      Number(
+        availability.total_leagues || 0
+      );
+
+
+    /*
+     * Targets includes the player's league-specific availability rank.
+     * Player Search may not have target metadata, in which case the
+     * league simply displays "Outside Top 5".
+     */
+    const targetMeta =
+      targetPlayerMeta.get(
+        String(player.id)
+      ) || null;
+
+
+    const targetLeagueRanks =
+      new Map();
+
+
+    (
+      targetMeta?.target_leagues ||
+      []
+    ).forEach(item => {
+
+      targetLeagueRanks.set(
+        String(item.league_id),
+        item
+      );
+
+    });
+
+
+    if (!availableLeagues.length) {
+
+      details.innerHTML = `
+        <div class="empty-message">
+          This player is rostered in all
+          ${totalLeagues}
+          synced MFL leagues.
+        </div>
+      `;
+
+      return;
+    }
+
+
+    const rows =
+      availableLeagues
+        .map(league => {
+
+          const addDropUrl =
+            mflAddDropUrl(
+              league
+            );
+
+
+          const targetLeague =
+            targetLeagueRanks.get(
+              String(league.league_id)
+            );
+
+
+          let availabilityRank =
+            "Outside Top 5";
+
+
+          if (
+            targetLeague &&
+            targetLeague.available_rank
+          ) {
+
+            availabilityRank =
+              `#${targetLeague.available_rank} ${
+                player.position || ""
+              }`;
+
+          }
+
+
+          return `
+            <tr
+              data-league-id="${escapeHtml(league.league_id)}"
+              data-player-id="${escapeHtml(player.id)}"
+              data-league-name="${escapeHtml(league.name)}"
+              data-player-name="${escapeHtml(player.name)}"
+              data-player-meta="${escapeHtml([player.position, player.team].filter(Boolean).join(" · "))}"
+              class="${String(CONFIG.deepLink?.league_id) === String(league.league_id) ? "deep-link-league" : ""}"
+            >
+
+              <td>
+
+                <div class="league-name">
+                  ${escapeHtml(
+                    league.name
+                  )}
+                </div>
+
+                <div class="league-meta">
+                  MFL
+                  ${escapeHtml(
+                    league.mfl_id
+                  )}
+                </div>
+
+              </td>
+
+
+              <td>
+                <span
+                  class="${
+                    targetLeague
+                      ? "availability-rank"
+                      : "league-meta"
+                  }"
+                >
+                  ${escapeHtml(availabilityRank)}
+                </span>
+              </td>
+
+
+              <td class="live-status-cell">
+
+                <div class="live-status-wrap">
+
+                  <button
+                    type="button"
+                    class="waiver-btn check-live"
+                    data-league-id="${escapeHtml(league.league_id)}"
+                    data-player-id="${escapeHtml(player.id)}"
+                  >
+                    Check Live
+                  </button>
+
+                </div>
+
+              </td>
+
+
+              <td
+                class="fcfs-action-cell"
+                data-mfl-url="${escapeHtml(
+                  addDropUrl || ""
+                )}"
+              >
+
+                ${
+                  addDropUrl
+                    ? `
+                      <a
+                        class="waiver-btn mfl"
+                        href="${escapeHtml(addDropUrl)}"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open MFL ↗
+                      </a>
+                    `
+                    : `
+                      <button
+                        type="button"
+                        class="waiver-btn"
+                        disabled
+                      >
+                        Link unavailable
+                      </button>
+                    `
+                }
+
+              </td>
+
+            </tr>
+          `;
+
+        })
+        .join("");
+
+
+    details.innerHTML = `
+
+      <div class="details-summary">
+
+        <div class="details-summary-main">
+          <strong>
+            ${availableCount}/${totalLeagues}
+          </strong>
+          synced MFL leagues show
+          ${escapeHtml(player.name || "this player")}
+          as unrostered.
+        </div>
+
+        <div class="details-summary-note">
+          Live status is checked league-by-league only when requested.
+        </div>
+
+      </div>
+
+
+      <div class="league-table-wrap">
+
+        <table class="league-table">
+
+          <thead>
+            <tr>
+              <th>League</th>
+              <th>Avail Rank</th>
+              <th>Live Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            ${rows}
+          </tbody>
+
+        </table>
+
+      </div>
+    `;
+
+
+    bindLiveButtons(
+      details
+    );
+
+    /*
+     * The local availability result appears immediately.
+     * Then live MFL statuses fill in progressively.
+     */
+    queueAutomaticLiveChecks(
+      details
+    );
+
+  }
+
+
+  function bindLiveButtons(root) {
+
+    root
+      .querySelectorAll(
+        ".check-live"
+      )
+      .forEach(button => {
+
+        button.addEventListener(
+          "click",
+          () => {
+            checkLive(
+              button,
+              {
+                force: false
+              }
+            );
+          }
+        );
+
+      });
+
+
+    root
+      .querySelectorAll(
+        ".live-refresh"
+      )
+      .forEach(button => {
+
+        button.addEventListener(
+          "click",
+          () => {
+            checkLive(
+              button,
+              {
+                force: true
+              }
+            );
+          }
+        );
+
+      });
+
+  }
+
+
+  function liveCacheKey(
+    leagueId,
+    playerId
+  ) {
+
+    return (
+      String(leagueId)
+      + ":"
+      + String(playerId)
+    );
+
+  }
+
+
+  function getCachedLiveStatus(
+    leagueId,
+    playerId
+  ) {
+
+    const key =
+      liveCacheKey(
+        leagueId,
+        playerId
+      );
+
+
+    const cached =
+      liveStatusCache.get(
+        key
+      );
+
+
+    if (!cached) {
+      return null;
+    }
+
+
+    const age =
+      Date.now()
+      - cached.checkedAt;
+
+
+    if (
+      age >
+      LIVE_CACHE_TTL_MS
+    ) {
+
+      liveStatusCache.delete(
+        key
+      );
+
+      return null;
+
+    }
+
+
+    return cached;
+
+  }
+
+
+  function cacheLiveStatus(
+    leagueId,
+    playerId,
+    status,
+    waiver
+  ) {
+
+    const key =
+      liveCacheKey(
+        leagueId,
+        playerId
+      );
+
+
+    liveStatusCache.set(
+      key,
+      {
+        checkedAt:
+          Date.now(),
+
+        status: status,
+        waiver: waiver || {}
+      }
+    );
+
+  }
+
+
+  async function queueAutomaticLiveChecks(
+    root
+  ) {
+
+    const buttons =
+      Array.from(
+        root.querySelectorAll(
+          ".check-live"
+        )
+      );
+
+
+    if (!buttons.length) {
+      return;
+    }
+
+
+    /*
+     * Show immediately that every row has been queued.
+     * Workers will progressively turn these into
+     * Checking... and then status badges.
+     */
+    buttons.forEach(
+      button => {
+
+        button.disabled =
+          true;
+
+        button.textContent =
+          "Queued…";
+
+      }
+    );
+
+
+    let nextIndex = 0;
+
+
+    async function worker() {
+
+      while (true) {
+
+        const index =
+          nextIndex++;
+
+
+        if (
+          index >=
+          buttons.length
+        ) {
+          return;
+        }
+
+
+        const button =
+          buttons[index];
+
+
+        /*
+         * The user may have started another search and replaced
+         * the DOM while this queue was running.
+         */
+        if (
+          !document.documentElement.contains(
+            button
+          )
+        ) {
+          continue;
+        }
+
+
+        await checkLive(
+          button,
+          {
+            force: false
+          }
+        );
+
+      }
+
+    }
+
+
+    const workerCount =
+      Math.min(
+        LIVE_MAX_CONCURRENT,
+        buttons.length
+      );
+
+
+    const workers =
+      [];
+
+
+    for (
+      let i = 0;
+      i < workerCount;
+      i++
+    ) {
+
+      workers.push(
+        worker()
+      );
+
+    }
+
+
+    await Promise.all(
+      workers
+    );
+
+  }
+
+
+  async function checkLive(
+    button,
+    options = {}
+  ) {
+
+    const force =
+      Boolean(
+        options.force
+      );
+
+
+    const leagueId =
+      Number(
+        button.dataset.leagueId
+      );
+
+
+    const playerId =
+      Number(
+        button.dataset.playerId
+      );
+
+
+    const row =
+      button.closest("tr");
+
+
+    if (!row) {
+      return;
+    }
+
+
+    const statusCell =
+      row.querySelector(
+        ".live-status-cell"
+      );
+
+
+    if (!statusCell) {
+      return;
+    }
+
+
+    /*
+     * Automatic expansion checks reuse a recent result.
+     * Manual refresh (force=true) always asks MFL again.
+     */
+    if (!force) {
+
+      const cached =
+        getCachedLiveStatus(
+          leagueId,
+          playerId
+        );
+
+
+      if (cached) {
+
+        renderLiveStatus(
+          statusCell,
+          cached.status,
+          leagueId,
+          playerId,
+          cached.waiver
+        );
+
+        return;
+
+      }
+
+    }
+
+
+    statusCell.innerHTML = `
+      <div class="live-status-wrap">
+        <button
+          type="button"
+          class="waiver-btn"
+          disabled
+        >
+          Checking…
+        </button>
+      </div>
+    `;
+
+
+    try {
+
+      const response =
+        await fetch(
+          CONFIG.liveStatusUrl,
+          {
+            method:
+              "POST",
+
+            headers: {
+              "Accept":
+                "application/json",
+
+              "Content-Type":
+                "application/json"
+            },
+
+            body:
+              JSON.stringify({
+                league_id:
+                  leagueId,
+
+                player_ids:
+                  [playerId]
+              })
+          }
+        );
+
+
+      const payload =
+        await response.json();
+
+
+      if (
+        !response.ok ||
+        !payload.ok
+      ) {
+
+        throw new Error(
+          payload.error ||
+          `MFL check failed (${response.status})`
+        );
+
+      }
+
+
+      const status =
+        payload.statuses?.[
+          String(playerId)
+        ] || {};
+
+
+      cacheLiveStatus(
+        leagueId,
+        playerId,
+        status,
+        payload.waiver
+      );
+
+
+      renderLiveStatus(
+        statusCell,
+        status,
+        leagueId,
+        playerId,
+        payload.waiver
+      );
+
+    }
+    catch (error) {
+
+      statusCell.innerHTML = `
+        <div class="live-status-wrap">
+
+          <span
+            class="status-chip unknown"
+            title="${escapeHtml(
+              error.message ||
+              "Live check failed"
+            )}"
+          >
+            Check Failed
+          </span>
+
+          <button
+            type="button"
+            class="live-refresh"
+            data-league-id="${escapeHtml(
+              leagueId
+            )}"
+            data-player-id="${escapeHtml(
+              playerId
+            )}"
+            title="Check again"
+            aria-label="Check live status again"
+          >
+            ↻
+          </button>
+
+        </div>
+      `;
+
+
+      bindLiveButtons(
+        statusCell
+      );
+
+    }
+
+  }
+
+
+
+  // -----------------------------------------------------------------
+  // FCFS rapid-add workflow.
+  //
+  // Drop options come from the locally-synced roster.
+  // The FCFS POST does not perform another playerStatus request.
+  // MFL's transaction response is the final authority.
+  // -----------------------------------------------------------------
+
+  const fcfsDropCache =
+    new Map();
+
+
+  const fcfsDropRequests =
+    new Map();
+
+
+  function fcfsMflFallback(
+    actionCell
+  ) {
+
+    const url =
+      actionCell?.dataset?.mflUrl ||
+      "";
+
+
+    if (!url) {
+      return "";
+    }
+
+
+    return `
+      <a
+        class="waiver-btn mfl"
+        href="${escapeHtml(url)}"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Open MFL ↗
+      </a>
+    `;
+
+  }
+
+
+  async function loadFcfsDropCandidates(
+    leagueId
+  ) {
+
+    const key =
+      String(leagueId);
+
+
+    if (
+      fcfsDropCache.has(
+        key
+      )
+    ) {
+
+      return fcfsDropCache.get(
+        key
+      );
+
+    }
+
+
+    if (
+      fcfsDropRequests.has(
+        key
+      )
+    ) {
+
+      return fcfsDropRequests.get(
+        key
+      );
+
+    }
+
+
+    const requestPromise =
+      fetch(
+        `/waivers/api/league/${
+          encodeURIComponent(key)
+        }/drop-candidates`,
+        {
+          method: "GET",
+          credentials: "same-origin",
+          headers: {
+            "Accept": "application/json"
+          }
+        }
+      )
+      .then(
+        async response => {
+
+          let payload = {};
+
+          try {
+
+            payload =
+              await response.json();
+
+          }
+          catch (error) {
+
+            payload = {};
+
+          }
+
+
+          if (
+            !response.ok ||
+            !payload.ok
+          ) {
+
+            const errors =
+              Array.isArray(
+                payload.errors
+              )
+                ? payload.errors
+                : [];
+
+
+            throw new Error(
+              errors.length
+                ? errors.join("\n")
+                : (
+                    payload.error ||
+                    payload.message ||
+                    "Drop candidates could not be loaded."
+                  )
+            );
+
+          }
+
+
+          const candidates =
+            Array.isArray(
+              payload.candidates
+            )
+              ? payload.candidates
+              : [];
+
+
+          fcfsDropCache.set(
+            key,
+            candidates
+          );
+
+
+          return candidates;
+
+        }
+      )
+      .finally(
+        () => {
+
+          fcfsDropRequests.delete(
+            key
+          );
+
+        }
+      );
+
+
+    fcfsDropRequests.set(
+      key,
+      requestPromise
+    );
+
+
+    return requestPromise;
+
+  }
+
+
+  function fcfsDropOptionLabel(
+    player
+  ) {
+
+    const rank =
+      player.rank_label ||
+      "Unranked";
+
+
+    const name =
+      player.name ||
+      "Unknown player";
+
+
+    const position =
+      player.position ||
+      "";
+
+
+    const team =
+      player.team ||
+      "";
+
+
+    const extra =
+      [
+        position,
+        team
+      ]
+      .filter(Boolean)
+      .join(" · ");
+
+
+    return (
+      `${rank} — ${name}`
+      + (
+          extra
+            ? ` (${extra})`
+            : ""
+        )
+    );
+
+  }
+
+
+  function renderFcfsErrors(
+    resultNode,
+    errors
+  ) {
+
+    if (!resultNode) {
+      return;
+    }
+
+
+    const normalized =
+      (
+        Array.isArray(errors)
+          ? errors
+          : [errors]
+      )
+      .map(
+        error =>
+          String(
+            error || ""
+          ).trim()
+      )
+      .filter(Boolean);
+
+
+    resultNode.className =
+      "fcfs-result error";
+
+
+    resultNode.innerHTML =
+      normalized
+        .map(
+          error => `
+            <div class="fcfs-error-item">
+              ${escapeHtml(error)}
+            </div>
+          `
+        )
+        .join("");
+
+  }
+
+
+  async function submitFcfsAdd(
+    actionCell,
+    leagueId,
+    playerId,
+    confirmedDrop
+  ) {
+
+    const button =
+      actionCell.querySelector(
+        ".fcfs-submit"
+      );
+
+
+    const select =
+      actionCell.querySelector(
+        ".fcfs-drop-select"
+      );
+
+
+    const resultNode =
+      actionCell.querySelector(
+        ".fcfs-result"
+      );
+
+
+    if (
+      !button ||
+      !select
+    ) {
+      return;
+    }
+
+
+    if (
+      button.dataset.submitting ===
+      "1"
+    ) {
+      return;
+    }
+
+
+    button.dataset.submitting =
+      "1";
+
+
+    button.disabled =
+      true;
+
+
+    const originalText =
+      button.textContent;
+
+
+    button.textContent =
+      "Adding…";
+
+
+    if (resultNode) {
+
+      resultNode.className =
+        "fcfs-result";
+
+      resultNode.innerHTML =
+        "";
+
+    }
+
+
+    const selectedDrop = String(confirmedDrop ?? select.value ?? "").trim();
+
+
+    try {
+
+      const response =
+        await fetch(
+          "/waivers/api/fcfs-add",
+          {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Accept": "application/json",
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(
+              {
+                league_id:
+                  Number(
+                    leagueId
+                  ),
+
+                add_player_id:
+                  Number(
+                    playerId
+                  ),
+
+                drop_player_id:
+                  selectedDrop
+                    ? Number(
+                        selectedDrop
+                      )
+                    : null
+              }
+            )
+          }
+        );
+
+
+      let payload = {};
+
+      try {
+
+        payload =
+          await response.json();
+
+      }
+      catch (error) {
+
+        payload = {};
+
+      }
+
+
+      if (
+        response.ok &&
+        payload.ok
+      ) {
+
+        actionCell.innerHTML = `
+          <div class="fcfs-added">
+
+            <div
+              class="fcfs-result success"
+            >
+              <span class="fcfs-added-label">
+                ✓ Added
+              </span>
+            </div>
+
+            ${
+              fcfsMflFallback(
+                actionCell
+              )
+            }
+
+          </div>
+        `;
+
+
+        return;
+
+      }
+
+
+      let errors =
+        Array.isArray(
+          payload.errors
+        )
+          ? payload.errors
+          : [];
+
+
+      if (!errors.length) {
+
+        errors = [
+          (
+            payload.message ||
+            payload.error ||
+            `MFL transaction failed${
+              response.status
+                ? ` (${response.status})`
+                : ""
+            }.`
+          )
+        ];
+
+      }
+
+
+      renderFcfsErrors(
+        resultNode,
+        errors
+      );
+
+
+      button.dataset.submitting =
+        "0";
+
+      button.disabled =
+        false;
+
+      button.textContent =
+        originalText;
+
+    }
+    catch (error) {
+
+      /*
+       * An ambiguous network failure must not cause an automatic
+       * resubmit. MFL may already have processed the transaction.
+       */
+
+      renderFcfsErrors(
+        resultNode,
+        [
+          (
+            "Transaction response was not received. "
+            + "Check MFL before retrying."
+          ),
+          (
+            error.message ||
+            "Network request failed."
+          )
+        ]
+      );
+
+
+      button.textContent =
+        "Check MFL";
+
+
+      /*
+       * Leave disabled because transaction state is unknown.
+       */
+
+    }
+
+  }
+
+
+  async function renderFcfsAction(
+    statusCell,
+    leagueId,
+    playerId
+  ) {
+
+    const row =
+      statusCell.closest(
+        "tr"
+      );
+
+
+    const actionCell =
+      row?.querySelector(
+        ".fcfs-action-cell"
+      );
+
+
+    if (!actionCell) {
+      return;
+    }
+
+
+    const fallback =
+      fcfsMflFallback(
+        actionCell
+      );
+
+
+    actionCell.innerHTML = `
+      <div class="fcfs-controls">
+
+        <div class="fcfs-loading">
+          Loading drop options…
+        </div>
+
+        ${
+          fallback
+            ? `
+                <div class="fcfs-control-row">
+                  ${fallback}
+                </div>
+              `
+            : ""
+        }
+
+      </div>
+    `;
+
+
+    try {
+
+      const candidates =
+        await loadFcfsDropCandidates(
+          leagueId
+        );
+
+
+      const options =
+        candidates
+          .map(
+            player => `
+              <option
+                value="${escapeHtml(
+                  player.player_id
+                )}"
+              >
+                ${escapeHtml(
+                  fcfsDropOptionLabel(
+                    player
+                  )
+                )}
+              </option>
+            `
+          )
+          .join("");
+
+
+      actionCell.innerHTML = `
+        <div class="fcfs-controls">
+
+          <label
+            class="fcfs-drop-label"
+          >
+            Drop player
+          </label>
+
+          <select
+            class="fcfs-drop-select"
+          >
+            <option value="">
+              None — add without drop
+            </option>
+
+            ${options}
+
+          </select>
+
+          <div class="fcfs-control-row">
+
+            <button
+              type="button"
+              class="waiver-btn fcfs-submit"
+            >
+              Perform FCFS Add
+            </button>
+
+            ${fallback}
+
+          </div>
+
+          <div
+            class="fcfs-result"
+            aria-live="polite"
+          ></div>
+
+        </div>
+      `;
+
+
+      const button =
+        actionCell.querySelector(
+          ".fcfs-submit"
+        );
+
+
+      if (button) {
+
+        button.addEventListener(
+          "click",
+          () => {
+            const row = actionCell.closest("tr");
+            const select = actionCell.querySelector(".fcfs-drop-select");
+            const selected = select.options[select.selectedIndex];
+            const selectedDrop = String(select.value || "").trim();
+            const playerMeta = row.dataset.playerMeta ? ` (${row.dataset.playerMeta})` : "";
+            openConfirmation({
+              title: "Confirm FA Add",
+              add: `${row.dataset.playerName || "Player"}${playerMeta}`,
+              drop: selectedDrop ? selected.textContent.trim() : "No drop",
+              league: row.dataset.leagueName || "League",
+              button: "Confirm Add",
+              onConfirm: () => submitFcfsAdd(actionCell, leagueId, playerId, selectedDrop)
+            });
+
+          }
+        );
+
+      }
+
+    }
+    catch (error) {
+
+      actionCell.innerHTML = `
+        <div class="fcfs-controls">
+
+          <div
+            class="fcfs-result error"
+          >
+            ${escapeHtml(
+              error.message ||
+              "Drop options could not be loaded."
+            )}
+          </div>
+
+          ${
+            fallback
+              ? `
+                  <div class="fcfs-control-row">
+                    ${fallback}
+                  </div>
+                `
+              : ""
+          }
+
+        </div>
+      `;
+
+    }
+
+  }
+
+
+  function resetFcfsAction(
+    statusCell
+  ) {
+
+    const row =
+      statusCell.closest(
+        "tr"
+      );
+
+
+    const actionCell =
+      row?.querySelector(
+        ".fcfs-action-cell"
+      );
+
+
+    if (!actionCell) {
+      return;
+    }
+
+
+    const fallback =
+      fcfsMflFallback(
+        actionCell
+      );
+
+
+    actionCell.innerHTML =
+      fallback
+        ? fallback
+        : `
+            <button
+              type="button"
+              class="waiver-btn"
+              disabled
+            >
+              Link unavailable
+            </button>
+          `;
+
+  }
+
+
+  async function renderBbidAction(statusCell, leagueId, playerId, waiver) {
+    const actionCell = statusCell.closest("tr")?.querySelector(".fcfs-action-cell");
+    if (!actionCell) return;
+    const fallback = fcfsMflFallback(actionCell);
+    const balance = waiver.faab_balance == null ? "Unknown" : `$${waiver.faab_balance}`;
+    actionCell.innerHTML = `<div class="fcfs-controls"><div class="fcfs-loading">Loading drop options…</div></div>`;
+    try {
+      const candidates = await loadFcfsDropCandidates(leagueId);
+      const options = candidates.map(player => `<option value="${escapeHtml(player.player_id)}">${escapeHtml(fcfsDropOptionLabel(player))}</option>`).join("");
+      actionCell.innerHTML = `
+        <div class="fcfs-controls">
+          <label class="fcfs-drop-label">Bid amount · Available FAAB: ${escapeHtml(balance)}</label>
+          <input class="bbid-amount" type="number" min="0" step="${escapeHtml(waiver.faab_increment || "1")}" placeholder="0">
+          <label class="fcfs-drop-label">Drop player (optional)</label>
+          <select class="fcfs-drop-select"><option value="">None — no drop</option>${options}</select>
+          <div class="fcfs-control-row"><button type="button" class="waiver-btn bbid-submit">Submit FAAB bid</button>${fallback}</div>
+          <div class="fcfs-result" aria-live="polite"></div>
+        </div>`;
+      actionCell.querySelector(".bbid-submit")?.addEventListener("click", event => {
+        const button = event.currentTarget;
+        const row = actionCell.closest("tr");
+        const amount = actionCell.querySelector(".bbid-amount")?.value || "0";
+        const select = actionCell.querySelector(".fcfs-drop-select");
+        const dropId = select?.value || null;
+        const dropLabel = dropId ? select.options[select.selectedIndex].textContent.trim() : "No drop";
+        const playerMeta = row.dataset.playerMeta ? ` (${row.dataset.playerMeta})` : "";
+        openConfirmation({
+          title: "Confirm FAAB Bid",
+          add: `${row.dataset.playerName || "Player"}${playerMeta}`,
+          drop: dropLabel,
+          league: row.dataset.leagueName || "League",
+          bid: amount,
+          button: "Confirm FAAB Bid",
+          onConfirm: async () => {
+            if (button.dataset.submitting === "1") return;
+            button.dataset.submitting = "1"; button.disabled = true; button.textContent = "Submitting…";
+            const resultNode = actionCell.querySelector(".fcfs-result");
+            try {
+              const response = await fetch("/waivers/api/bbid-add", {method:"POST", credentials:"same-origin", headers:{"Accept":"application/json","Content-Type":"application/json"}, body:JSON.stringify({league_id:Number(leagueId), add_player_id:Number(playerId), bid_amount:amount, drop_player_id:dropId})});
+              const payload = await response.json().catch(() => ({}));
+              if (!response.ok || !payload.ok) {
+                const error = new Error(payload.message || payload.error || `MFL transaction failed (${response.status}).`);
+                error.definiteRejection = response.status === 400;
+                throw error;
+              }
+              actionCell.innerHTML = `<div class="fcfs-result success">✓ FAAB bid submitted</div>${fallback}`;
+            } catch (error) {
+              if (error.definiteRejection) {
+                renderFcfsErrors(resultNode, [error.message || "The FAAB bid was rejected."]);
+                button.dataset.submitting = "0"; button.disabled = false; button.textContent = "Submit FAAB bid";
+              } else {
+                renderFcfsErrors(resultNode, ["The FAAB bid was not confirmed. Check MFL before retrying.", error.message || "Network request failed."]);
+                button.textContent = "Check MFL";
+              }
+            }
+          }
+        });
+      });
+    } catch (error) {
+      actionCell.innerHTML = `<div class="fcfs-result error">${escapeHtml(error.message || "Drop options could not be loaded.")}</div>${fallback}`;
+    }
+  }
+
+
+  function syncFcfsActionForLiveStatus(
+    statusCell,
+    classification,
+    leagueId,
+    playerId,
+    waiver = {},
+    quickAction = null
+  ) {
+
+    if (
+      quickAction === "FCFS"
+    ) {
+
+      renderFcfsAction(
+        statusCell,
+        leagueId,
+        playerId
+      );
+
+
+      return;
+
+    }
+
+
+    if (quickAction === "BBID") {
+      renderBbidAction(statusCell, leagueId, playerId, waiver);
+      return;
+    }
+    const actionCell = statusCell.closest("tr")?.querySelector(".fcfs-action-cell");
+    if (!waiver.waiver_type && actionCell) {
+      actionCell.innerHTML = `<div class="fcfs-result error">To use Waivers for this league, re-add the league so RosterDash can load its waiver settings.</div>`;
+      return;
+    }
+    if (statusCell.querySelector(".status-chip")?.textContent.trim() === "Waiver" && actionCell) {
+      actionCell.innerHTML = `<div class="fcfs-controls"><div class="fcfs-result">Waiver claim must be managed in MFL.</div>${fcfsMflFallback(actionCell)}</div>`;
+      return;
+    }
+    resetFcfsAction(statusCell);
+
+  }
+
+
+  function renderLiveStatus(
+    statusCell,
+    status,
+    leagueId,
+    playerId,
+    waiver = {}
+  ) {
+
+    const classification = status.classification || "UNKNOWN";
+    const visibleStatus = status.visible_status || "Waiver";
+
+
+    let cssClass =
+      "unknown";
+
+
+    let label = visibleStatus;
+
+
+    let title =
+      status.status ||
+      "";
+
+
+    if (visibleStatus === "FA") {
+      cssClass = "fa";
+      title = "Immediately available through FCFS";
+    } else if (visibleStatus === "BBID") {
+      cssClass = "locked";
+      title = "Submit blind bid";
+    } else if (visibleStatus === "Waiver") {
+      cssClass = "locked";
+      title = "Waiver claim must be managed in MFL";
+    } else if (visibleStatus === "Rostered") {
+
+      cssClass =
+        "rostered";
+
+      title =
+        status.rostered_label ||
+        status.status ||
+        "Rostered";
+
+    }
+
+
+    statusCell.innerHTML = `
+      <div class="live-status-wrap">
+
+        <span
+          class="status-chip ${cssClass}"
+          title="${escapeHtml(title)}"
+        >
+          ${escapeHtml(label)}
+        </span>
+
+        <button
+          type="button"
+          class="live-refresh"
+          data-league-id="${escapeHtml(leagueId)}"
+          data-player-id="${escapeHtml(playerId)}"
+          title="Check again"
+          aria-label="Check live status again"
+        >
+          ↻
+        </button>
+
+      </div>
+    `;
+
+
+    syncFcfsActionForLiveStatus(
+      statusCell,
+      classification,
+      leagueId,
+      playerId,
+      waiver,
+      status.quick_action || null
+    );
+
+
+    bindLiveButtons(
+      statusCell
+    );
+
+  }
+
+
+  async function runSearch() {
+
+    const query =
+      (
+        searchInput.value ||
+        ""
+      ).trim();
+
+
+    if (query.length < 2) {
+
+      resultsSub.textContent =
+        "Enter at least 2 characters to search.";
+
+
+      resultsNode.innerHTML =
+        "";
+
+
+      return;
+    }
+
+
+    const sequence =
+      ++searchSequence;
+
+
+    searchSpinner.hidden =
+      false;
+
+
+    resultsSub.textContent =
+      `Searching for “${query}”…`;
+
+
+    try {
+
+      const url =
+        new URL(
+          CONFIG.searchUrl,
+          window.location.origin
+        );
+
+
+      url.searchParams.set(
+        "q",
+        query
+      );
+
+
+      const response =
+        await fetch(
+          url.toString(),
+          {
+            headers: {
+              "Accept":
+                "application/json"
+            }
+          }
+        );
+
+
+      if (!response.ok) {
+
+        throw new Error(
+          `Search failed (${response.status})`
+        );
+
+      }
+
+
+      const payload =
+        await response.json();
+
+
+      if (
+        sequence !==
+        searchSequence
+      ) {
+        return;
+      }
+
+
+      const players =
+        payload.results ||
+        [];
+
+
+      resultsSub.textContent =
+        `${players.length} result${
+          players.length === 1
+            ? ""
+            : "s"
+        }`;
+
+
+      renderPlayers(
+        players
+      );
+
+    }
+    catch (error) {
+
+      if (
+        sequence !==
+        searchSequence
+      ) {
+        return;
+      }
+
+
+      resultsSub.textContent =
+        "Search unavailable";
+
+
+      renderSearchMessage(
+        error.message ||
+        "Could not search players.",
+        true
+      );
+
+    }
+    finally {
+
+      if (
+        sequence ===
+        searchSequence
+      ) {
+
+        searchSpinner.hidden =
+          true;
+
+      }
+
+    }
+
+  }
+
+
+  searchButton.addEventListener(
+    "click",
+    runSearch
+  );
+
+
+  searchInput.addEventListener(
+    "keydown",
+    event => {
+
+      if (
+        event.key ===
+        "Enter"
+      ) {
+
+        event.preventDefault();
+
+        clearTimeout(
+          searchTimer
+        );
+
+        runSearch();
+
+      }
+
+    }
+  );
+
+
+  searchInput.addEventListener(
+    "input",
+    () => {
+
+      clearTimeout(
+        searchTimer
+      );
+
+
+      const query =
+        (
+          searchInput.value ||
+          ""
+        ).trim();
+
+
+      if (
+        query.length < 2
+      ) {
+
+        resultsNode.innerHTML =
+          "";
+
+
+        resultsSub.textContent =
+          "Enter at least 2 characters to search.";
+
+
+        return;
+
+      }
+
+
+      searchTimer =
+        setTimeout(
+          runSearch,
+          350
+        );
+
+    }
+  );
+
+
+
+  targetsTab.addEventListener(
+    "click",
+    () => {
+
+      setWaiverView(
+        "targets"
+      );
+
+      loadTargets();
+
+    }
+  );
+
+
+  searchTab.addEventListener(
+    "click",
+    () => {
+
+      setWaiverView(
+        "search"
+      );
+
+      searchInput.focus();
+
+    }
+  );
+
+
+  targetPositionFilters
+    ?.querySelectorAll(
+      "[data-target-position]"
+    )
+    .forEach(button => {
+
+      button.addEventListener(
+        "click",
+        () => {
+
+          activeTargetPosition =
+            button.dataset.targetPosition ||
+            "ALL";
+
+          updateTargetPositionButtons();
+
+          renderTargetGroups();
+
+        }
+      );
+
+    });
+
+
+  targetSort?.addEventListener(
+    "change",
+    () => {
+
+      renderTargetGroups();
+
+    }
+  );
+
+
+  /*
+   * Reason is intentionally a real filter control from V1,
+   * even though Dynasty Rank is currently the only signal.
+   * Future signals can be added without changing the layout.
+   */
+  targetReasonFilter?.addEventListener(
+    "change",
+    () => {
+
+      renderTargetGroups();
+
+    }
+  );
+
+
+  async function loadDeepLinkedPlayer() {
+    try {
+      const response = await fetch(playerUrl(CONFIG.deepLink.player_id), {headers: {"Accept": "application/json"}});
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || "Player could not be loaded.");
+      searchInput.value = payload.player.name || "";
+      const availability = payload.availability || {};
+      renderPlayers([{
+        ...payload.player,
+        available_count: availability.available_count,
+        total_leagues: availability.total_leagues
+      }]);
+      resultsSub.textContent = "Player selected from My Leagues";
+      const card = resultsNode.querySelector(".player-card");
+      if (card) await togglePlayer(card);
+    } catch (error) {
+      renderSearchMessage(error.message || "Player could not be loaded.", true);
+    }
+  }
+
+  if (CONFIG.deepLink) {
+    setWaiverView("search");
+    loadDeepLinkedPlayer();
+  } else {
+    setWaiverView("targets");
+    loadTargets();
+  }
+
+})();
+</script>
+
+{% endif %}
+
+
+{% endblock %}

@@ -6,6 +6,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, Any
 from urllib.parse import unquote_plus
@@ -251,6 +252,55 @@ class MFLClient:
             ctx.update(context)
         return self._export("rosters", params={"L": league_id}, cookie=cookie, context=ctx)
 
+    def get_player_status(
+        self,
+        league_id: str,
+        player_ids: list[str | int],
+        cookie: str,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bytes:
+        """
+        Return MFL player status for one or more players in a league.
+
+        Uses TYPE=playerStatus with a comma-separated list of player IDs.
+
+        This method is intentionally batch-oriented: callers should pass all
+        target players for a league in one request instead of making one
+        request per player.
+        """
+        normalized_ids = []
+
+        for player_id in player_ids or []:
+            if player_id is None:
+                continue
+
+            value = str(player_id).strip()
+            if value and value not in normalized_ids:
+                normalized_ids.append(value)
+
+        if not normalized_ids:
+            raise ValueError("get_player_status requires at least one player id")
+
+        ctx = {
+            "resource": "playerStatus",
+            "league_id": str(league_id),
+            "player_count": len(normalized_ids),
+        }
+
+        if context:
+            ctx.update(context)
+
+        return self._export(
+            "playerStatus",
+            params={
+                "L": str(league_id),
+                "P": ",".join(normalized_ids),
+            },
+            cookie=cookie,
+            context=ctx,
+        )
+
     def get_schedule(
         self,
         league_id: str,
@@ -292,6 +342,511 @@ class MFLClient:
         if context:
             ctx.update(context)
         return self._export("pendingTrades", params={"L": league_id}, cookie=cookie, context=ctx)
+
+
+    def submit_fcfs_waiver(
+        self,
+        league_id: str,
+        add_player_id: str | int,
+        cookie: str,
+        *,
+        drop_player_ids: Optional[list[str | int]] = None,
+        franchise_id: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Execute an immediate MFL first-come, first-served add/drop.
+
+        MFL import:
+            TYPE=fcfsWaiver
+            L=<league id>
+            ADD=<player id>
+            DROP=<comma-separated player ids>   optional
+            FRANCHISE_ID=<franchise id>         optional
+
+        IMPORTANT:
+        This request is intentionally NEVER retried.
+
+        A transaction-changing POST is not safely idempotent. If MFL
+        processes a request but the response is lost, automatically
+        submitting it again could create an unintended second action.
+
+        Returns a normalized result:
+            {
+                "ok": True,
+                "status": "OK",
+                "message": "Added",
+                "errors": [],
+            }
+
+        or:
+            {
+                "ok": False,
+                "status": None,
+                "message": "<MFL error text>",
+                "errors": ["...", "..."],
+            }
+        """
+
+        league_id_s = str(
+            league_id or ""
+        ).strip()
+
+        add_player_id_s = str(
+            add_player_id or ""
+        ).strip()
+
+        if not league_id_s:
+            raise ValueError(
+                "league_id is required."
+            )
+
+        if not add_player_id_s:
+            raise ValueError(
+                "add_player_id is required."
+            )
+
+        normalized_drops: list[str] = []
+
+        for raw_id in (
+            drop_player_ids or []
+        ):
+            value = str(
+                raw_id or ""
+            ).strip()
+
+            if (
+                value
+                and value not in normalized_drops
+            ):
+                normalized_drops.append(
+                    value
+                )
+
+        payload: Dict[str, Any] = {
+            "TYPE": "fcfsWaiver",
+            "L": league_id_s,
+            "ADD": add_player_id_s,
+            "XML": "1",
+        }
+
+        if normalized_drops:
+            payload["DROP"] = ",".join(
+                normalized_drops
+            )
+
+        # Normal owner transactions should not require this.
+        # Keep support available for commissioner/impersonation use,
+        # but callers must explicitly request it.
+        franchise_id_s = str(
+            franchise_id or ""
+        ).strip()
+
+        if franchise_id_s:
+            payload[
+                "FRANCHISE_ID"
+            ] = franchise_id_s
+
+        # Match the authentication helpers already used by export.
+        user_id = self._extract_user_id(
+            cookie
+        )
+
+        if user_id:
+            payload[
+                "MFL_USER_ID"
+            ] = user_id
+
+        # FCFS imports have been browser-tested successfully using
+        # the user's MFL cookie together with the configured APIKEY.
+        #
+        # Keep both authentication values. The cookie identifies the
+        # MFL user/session while the APIKEY is required by the working
+        # RosterDash transaction path.
+        try:
+            apikey = current_app.config.get(
+                "MFL_APIKEY"
+            )
+
+            if apikey:
+                payload[
+                    "APIKEY"
+                ] = apikey
+
+        except Exception:
+            pass
+
+        headers = {
+            **DEFAULT_HEADERS,
+            **self._cookie_header(cookie),
+        }
+
+        # This is a league-specific write, so use the same MFL host
+        # represented by this client. For the normal Waivers workflow
+        # that is the league's wwwXX host and its matching user cookie.
+        url = (
+            f"{self.base.rstrip('/')}/import"
+        )
+
+        ctx: Dict[str, Any] = {
+            "operation": "fcfsWaiver",
+            "league_id": league_id_s,
+            "add_player_id": add_player_id_s,
+            "drop_count": len(
+                normalized_drops
+            ),
+        }
+
+        if context:
+            ctx.update(context)
+
+        _rl.wait()
+
+        start = time.time()
+
+        started_at = datetime.now(
+            timezone.utc
+        )
+
+        try:
+            response = requests.post(
+                url,
+                data=payload,
+                headers=headers,
+                timeout=self.timeout,
+            )
+
+        except requests.RequestException as exc:
+            raise RuntimeError(
+                f"MFL FCFS request failed: {exc}"
+            ) from exc
+
+        elapsed_ms = int(
+            (time.time() - start) * 1000
+        )
+
+        _log_http_safe(
+            "POST import:fcfsWaiver",
+            response,
+            elapsed_ms,
+            include_body=True,
+            context=ctx,
+            started_at=started_at,
+        )
+
+        self._raise_for_status(
+            response
+        )
+
+        result = (
+            self._parse_fcfs_import_response(
+                response.content
+            )
+        )
+
+        result["http_status"] = (
+            response.status_code
+        )
+
+        return result
+
+
+    def submit_blind_bid_waiver(
+        self,
+        league_id: str,
+        bids: list[Dict[str, Any]],
+        cookie: str,
+        *,
+        round_number: Optional[int] = None,
+        franchise_id: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Add one or more MFL blind-bid waiver requests.
+
+        Proven MFL import request shape:
+
+            TYPE=blindBidWaiverRequest
+            L=<league id>
+            ROUND=<round or blank>
+            PICKS=<player id>_<amount>_<drop player id>,...
+            FRANCHISE_ID=<owner franchise id>
+
+        A missing drop player is serialized as MFL player id 0000.
+
+        IMPORTANT:
+        This state-changing import follows the same authenticated POST
+        transaction pattern as the existing FCFS implementation and is
+        intentionally NEVER retried.
+        """
+
+        league_id_s = str(
+            league_id or ""
+        ).strip()
+
+        if not league_id_s:
+            raise ValueError(
+                "league_id is required."
+            )
+
+        if not bids:
+            raise ValueError(
+                "At least one blind-bid waiver request is required."
+            )
+
+        franchise_id_s = str(
+            franchise_id or ""
+        ).strip()
+
+        if not franchise_id_s:
+            raise ValueError(
+                "franchise_id is required for blind-bid waiver requests."
+            )
+
+        normalized_picks: list[str] = []
+
+        for index, bid in enumerate(
+            bids,
+            start=1,
+        ):
+            if not isinstance(
+                bid,
+                dict,
+            ):
+                raise ValueError(
+                    f"Bid {index} must be a dictionary."
+                )
+
+            player_id_s = str(
+                bid.get("player_id") or ""
+            ).strip()
+
+            if (
+                not player_id_s
+                or not player_id_s.isdigit()
+            ):
+                raise ValueError(
+                    f"Bid {index} requires a numeric MFL player_id."
+                )
+
+            raw_amount = bid.get(
+                "amount"
+            )
+
+            if raw_amount in (
+                None,
+                "",
+            ):
+                raise ValueError(
+                    f"Bid {index} requires an amount."
+                )
+
+            try:
+                amount = Decimal(
+                    str(raw_amount).strip()
+                )
+
+            except (
+                InvalidOperation,
+                ValueError,
+                TypeError,
+            ) as exc:
+                raise ValueError(
+                    f"Bid {index} has an invalid amount."
+                ) from exc
+
+            if (
+                not amount.is_finite()
+                or amount < 0
+            ):
+                raise ValueError(
+                    f"Bid {index} amount must be zero or greater."
+                )
+
+            amount_s = format(
+                amount,
+                "f",
+            )
+
+            if "." in amount_s:
+                amount_s = (
+                    amount_s
+                    .rstrip("0")
+                    .rstrip(".")
+                )
+
+            if not amount_s:
+                amount_s = "0"
+
+            drop_player_id_s = str(
+                bid.get("drop_player_id")
+                or "0000"
+            ).strip()
+
+            if not drop_player_id_s:
+                drop_player_id_s = "0000"
+
+            if not drop_player_id_s.isdigit():
+                raise ValueError(
+                    f"Bid {index} has an invalid drop_player_id."
+                )
+
+            normalized_picks.append(
+                "_".join(
+                    (
+                        player_id_s,
+                        amount_s,
+                        drop_player_id_s,
+                    )
+                )
+            )
+
+        round_value = ""
+
+        if round_number is not None:
+            try:
+                round_i = int(
+                    round_number
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ) as exc:
+                raise ValueError(
+                    "round_number must be a positive integer."
+                ) from exc
+
+            if round_i < 1:
+                raise ValueError(
+                    "round_number must be a positive integer."
+                )
+
+            round_value = str(
+                round_i
+            )
+
+        # REPLACE is deliberately omitted.  Its presence tells MFL to replace
+        # the owner's existing queue; quick claim must append one request.
+        payload: Dict[str, Any] = {
+            "TYPE": "blindBidWaiverRequest",
+            "L": league_id_s,
+            "ROUND": round_value,
+            "PICKS": ",".join(
+                normalized_picks
+            ),
+            "FRANCHISE_ID": franchise_id_s,
+            "XML": "1",
+        }
+
+        # Authenticate this transaction the same way as the other
+        # authenticated MFL API calls: host cookie plus owner/API params.
+        user_id = self._extract_user_id(
+            cookie
+        )
+
+        if user_id:
+            payload["MFL_USER_ID"] = (
+                user_id
+            )
+
+        try:
+            apikey = current_app.config.get(
+                "MFL_APIKEY"
+            )
+
+            if apikey:
+                payload["APIKEY"] = (
+                    apikey
+                )
+
+        except Exception:
+            pass
+
+        headers = {
+            **DEFAULT_HEADERS,
+            **self._cookie_header(cookie),
+        }
+
+        # Use the league-specific wwwXX host represented by this client.
+        url = (
+            f"{self.base.rstrip('/')}/import"
+        )
+
+        ctx: Dict[str, Any] = {
+            "operation": "blindBidWaiverRequest",
+            "league_id": league_id_s,
+            "bid_count": len(
+                normalized_picks
+            ),
+            "has_round": (
+                round_number is not None
+            ),
+            "franchise_id": franchise_id_s,
+        }
+
+        if context:
+            ctx.update(
+                context
+            )
+
+        _rl.wait()
+
+        start = time.time()
+
+        started_at = datetime.now(
+            timezone.utc
+        )
+
+        try:
+            # STATE-CHANGING REQUEST.
+            # Match the existing authenticated MFL import transaction
+            # pattern used by FCFS. Never retry this request.
+            response = requests.post(
+                url,
+                data=payload,
+                headers=headers,
+                timeout=self.timeout,
+            )
+
+        except requests.RequestException as exc:
+            raise RuntimeError(
+                f"MFL blind-bid waiver request failed: {exc}"
+            ) from exc
+
+        elapsed_ms = int(
+            (time.time() - start) * 1000
+        )
+
+        _log_http_safe(
+            "POST import:blindBidWaiverRequest",
+            response,
+            elapsed_ms,
+            include_body=True,
+            context=ctx,
+            started_at=started_at,
+        )
+
+        self._raise_for_status(
+            response
+        )
+
+        result = (
+            self._parse_fcfs_import_response(
+                response.content
+            )
+        )
+
+        if result.get("ok"):
+            result["message"] = (
+                "Waiver bid submitted"
+            )
+
+        result["http_status"] = (
+            response.status_code
+        )
+
+        return result
 
     # ---------------------------- Internals ----------------------------------
 
@@ -436,6 +991,194 @@ class MFLClient:
             if s in {"success", "ok", "1", "true"}:
                 return True
         return True
+
+
+    @staticmethod
+    def _parse_fcfs_import_response(
+        content: bytes,
+    ) -> Dict[str, Any]:
+        """
+        Normalize MFL fcfsWaiver XML.
+
+        Known success:
+            <status>OK</status>
+
+        Known failure:
+            <error>...</error>
+
+        Multiple <error> nodes are preserved in order so the UI can
+        display every reason returned by MFL.
+        """
+
+        if not content:
+            return {
+                "ok": False,
+                "status": None,
+                "message": (
+                    "MFL returned an empty transaction response."
+                ),
+                "errors": [
+                    "MFL returned an empty transaction response."
+                ],
+            }
+
+        try:
+            root = ET.fromstring(
+                content
+            )
+
+        except ET.ParseError:
+            try:
+                raw = content.decode(
+                    "utf-8",
+                    errors="replace",
+                ).strip()
+            except Exception:
+                raw = ""
+
+            raw_lower = raw.lower()
+
+            is_html = (
+                "<!doctype html" in raw_lower
+                or "<html" in raw_lower
+                or "mfl developers program" in raw_lower
+                or "<head>" in raw_lower
+                or "<body" in raw_lower
+            )
+
+            if is_html:
+                message = (
+                    "MFL returned a web page instead of a transaction "
+                    "response. Your MFL session may have expired; "
+                    "re-link MFL and try again."
+                )
+
+            elif raw:
+                # Preserve useful plain-text failures, but never send a
+                # huge unexpected response into the browser.
+                snippet = raw[:500]
+
+                if len(raw) > 500:
+                    snippet += "…"
+
+                message = snippet
+
+            else:
+                message = (
+                    "MFL returned an invalid transaction response."
+                )
+
+            return {
+                "ok": False,
+                "status": None,
+                "message": message,
+                "errors": [message],
+            }
+
+        def local_name(tag: Any) -> str:
+            return str(tag).rsplit(
+                "}",
+                1,
+            )[-1].lower()
+
+        errors: list[str] = []
+
+        statuses: list[str] = []
+
+        for element in root.iter():
+
+            name = local_name(
+                element.tag
+            )
+
+            value = "".join(
+                element.itertext()
+            ).strip()
+
+            if not value:
+                continue
+
+            if name == "error":
+                if value not in errors:
+                    errors.append(
+                        value
+                    )
+
+            elif name == "status":
+                if value not in statuses:
+                    statuses.append(
+                        value
+                    )
+
+        if (
+            local_name(root.tag)
+            == "html"
+        ):
+            message = (
+                "MFL returned a web page instead of a transaction "
+                "response. Your MFL session may have expired; "
+                "re-link MFL and try again."
+            )
+
+            return {
+                "ok": False,
+                "status": None,
+                "message": message,
+                "errors": [message],
+            }
+
+        if errors:
+            return {
+                "ok": False,
+                "status": (
+                    statuses[0]
+                    if statuses
+                    else None
+                ),
+                # Preserve all MFL errors visibly.
+                "message": "\n".join(
+                    errors
+                ),
+                "errors": errors,
+            }
+
+        status = (
+            statuses[0]
+            if statuses
+            else None
+        )
+
+        if (
+            status
+            and status.strip().upper()
+            in {
+                "OK",
+                "SUCCESS",
+            }
+        ):
+            return {
+                "ok": True,
+                "status": status,
+                "message": "Added",
+                "errors": [],
+            }
+
+        if status:
+            message = (
+                f"MFL transaction returned status: {status}"
+            )
+        else:
+            message = (
+                "MFL returned an unexpected transaction response."
+            )
+
+        return {
+            "ok": False,
+            "status": status,
+            "message": message,
+            "errors": [message],
+        }
+
 
     @staticmethod
     def _raise_for_status(resp: requests.Response) -> None:

@@ -42,6 +42,7 @@ class LeagueRow:
     submit_url: str | None
     delete_url: str | None
     platform_label: str
+    synced_at: str | None
 
 
 def _mapping_first(mapping: Mapping[str, Any], *keys: str) -> Any:
@@ -407,6 +408,7 @@ def _serialize_sleeper_roster(rows: Sequence[Mapping[str, Any]]) -> list[dict[st
         sleeper_id = str(player_identifier)
         player = sleeper_by_id.get(sleeper_id, {})
 
+        # Prefer sleeper_players metadata over the thin roster row.
         name = (
             _mapping_first(player, "name", "full_name", "display_name")
             or _mapping_first(row, "player_name", "name")
@@ -691,6 +693,7 @@ def my_leagues():
                 submit_url=url_for("lineups.lineups_single_league", league_id=lg.id, next=request.url),
                 delete_url=url_for("leagues.delete_mfl_league", league_id=lg.id),
                 platform_label=_compose_platform_label("mfl"),
+                synced_at=(lg.synced_at.isoformat() if lg.synced_at else None),
             )
         )
 
@@ -751,6 +754,26 @@ def my_leagues():
                 submit_url=None,
                 delete_url=None,
                 platform_label=_compose_platform_label("sleeper"),
+                synced_at=(
+                    str(
+                        _mapping_first(
+                            sl_row,
+                            "synced_at",
+                            "last_synced_at",
+                            "assets_synced_at",
+                            "updated_at",
+                        )
+                    )
+                    if _mapping_first(
+                        sl_row,
+                        "synced_at",
+                        "last_synced_at",
+                        "assets_synced_at",
+                        "updated_at",
+                    )
+                    not in (None, "")
+                    else None
+                ),
             )
         )
 

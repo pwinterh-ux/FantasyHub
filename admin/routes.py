@@ -205,22 +205,36 @@ def _project_root() -> Path:
 
 def _rankings_refresh_cmd() -> list[str]:
     """
-    Use the root CLI script we created:
-        python refresh_dynasty_ranks.py --source all
+    Launch the rankings refresh with the actual Python interpreter.
 
-    This avoids the previous:
-        python -m rankings.refresh_dynasty_ranks --source all
-
-    which is what was triggering the getopt_long() failure.
+    On PythonAnywhere, sys.executable inside the web process points to
+    /usr/local/bin/uwsgi, so it must not be used to launch a Python CLI.
+    sys.prefix points at the configured Python/virtualenv environment.
     """
     root = _project_root()
-    script = root / "refresh_dynasty_ranks.py"
+    script = root / "rankings" / "refresh_dynasty_ranks.py"
 
-    if script.exists():
-        return [sys.executable, str(script), "--source", "all"]
+    if not script.exists():
+        raise RuntimeError(
+            f"Rankings refresh script not found: {script}"
+        )
 
-    # Fallback only in case the script was moved later.
-    return [sys.executable, "-m", "rankings.refresh_dynasty_ranks", "--source", "all"]
+    python_exe = Path(sys.prefix) / "bin" / "python"
+
+    if not python_exe.exists():
+        python_exe = Path(sys.prefix) / "bin" / "python3"
+
+    if not python_exe.exists():
+        raise RuntimeError(
+            f"Python interpreter not found under sys.prefix={sys.prefix}"
+        )
+
+    return [
+        str(python_exe),
+        str(script),
+        "--source",
+        "all",
+    ]
 
 
 @bp.route("/refresh-rankings", methods=["POST"])

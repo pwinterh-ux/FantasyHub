@@ -168,6 +168,7 @@ def create_app():
     from exposure.routes import exposure_bp
     from sos import sos_bp
     from tools.routes import bp as tools_bp   # <-- NEW: Tools hub
+    from waivers import waivers_bp
 
     app.register_blueprint(offers_bp)
     app.register_blueprint(mfl_bp)
@@ -183,6 +184,7 @@ def create_app():
     app.register_blueprint(exposure_bp)
     app.register_blueprint(sos_bp)
     app.register_blueprint(tools_bp)  # <-- NEW: mounted at /tools
+    app.register_blueprint(waivers_bp)
 
     # ----- Routes -----
     @app.route("/")
