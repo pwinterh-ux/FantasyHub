@@ -154,9 +154,9 @@ def test_blank_bid_is_zero_and_faab_is_enforced():
 def test_waiver_confirmation_ui_guards_both_transaction_posts():
     source = open("templates/waivers/index.html", encoding="utf-8").read()
     assert 'id="waiverConfirmMask"' in source
-    assert 'action: "Immediate FA add"' in source
+    assert 'title: "Confirm FA Add"' in source
     assert 'button: "Confirm Add"' in source
-    assert 'action: "FAAB bid"' in source
+    assert 'title: "Confirm FAAB Bid"' in source
     assert 'button: "Confirm FAAB Bid"' in source
     assert 'drop: selectedDrop ? selected.textContent.trim() : "No drop"' in source
     assert 'const amount = actionCell.querySelector(".bbid-amount")?.value || "0"' in source
@@ -166,6 +166,43 @@ def test_waiver_confirmation_ui_guards_both_transaction_posts():
     assert 'onConfirm: async () =>' in source
     assert source.count('fetch("/waivers/api/bbid-add"') == 1
     assert source.count('"/waivers/api/fcfs-add"') == 1
+
+
+def test_default_targets_view_uses_position_rank_sort():
+    source = open("templates/waivers/index.html", encoding="utf-8").read()
+    assert 'class="waiver-tab is-active"' in source
+    assert 'data-waiver-view-tab="targets"' in source
+    assert 'data-target-position="ALL"' in source
+    assert '<option value="position_rank" selected>' in source
+    assert 'targetSort?.value ||\n      "position_rank"' in source
+    for option in ("top3", "top5", "position_rank", "unrostered"):
+        assert f'<option value="{option}"' in source
+
+
+def test_deep_link_populates_search_and_preserves_authoritative_flow():
+    source = open("templates/waivers/index.html", encoding="utf-8").read()
+    deep_link = source[source.index("async function loadDeepLinkedPlayer"):]
+    assert 'setWaiverView("search")' in deep_link
+    assert 'searchInput.value = payload.player.name || ""' in deep_link
+    assert "renderPlayers([{" in deep_link
+    assert "if (card) await togglePlayer(card)" in deep_link
+    assert 'String(CONFIG.deepLink?.league_id)' in source
+    assert 'class="${String(CONFIG.deepLink?.league_id) === String(league.league_id) ? "deep-link-league" : ""}"' in source
+    assert 'method: "POST"' not in deep_link
+
+
+def test_confirmation_dialog_is_compact_and_conditionally_hides_bid():
+    source = open("templates/waivers/index.html", encoding="utf-8").read()
+    assert 'width: min(380px, calc(100vw - 32px))' in source
+    assert 'grid-template-columns: 64px 1fr' in source
+    assert '.waiver-confirm-review > div[hidden] { display: none; }' in source
+    assert '<dt>Add</dt>' in source
+    assert '<dt>Drop</dt>' in source
+    assert '<dt>League</dt>' in source
+    assert '<dt>Bid</dt>' in source
+    assert 'id="waiverConfirmAction"' not in source
+    assert 'bidRow.hidden = options.bid === undefined' in source
+    assert 'document.getElementById("waiverConfirmTitle").textContent = options.title' in source
 
 
 def test_my_leagues_best_available_links_to_real_waivers_flow():
