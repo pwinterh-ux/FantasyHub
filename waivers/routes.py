@@ -712,25 +712,6 @@ def api_bbid_add():
             400,
         )
 
-    if bid_amount in (
-        None,
-        "",
-    ):
-        return (
-            jsonify(
-                {
-                    "ok": False,
-                    "error": (
-                        "bid_amount is required."
-                    ),
-                    "errors": [
-                        "bid_amount is required."
-                    ],
-                }
-            ),
-            400,
-        )
-
     try:
         league_id_int = int(
             league_id

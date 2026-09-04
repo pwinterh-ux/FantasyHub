@@ -570,7 +570,6 @@ class MFLClient:
             L=<league id>
             ROUND=<round or blank>
             PICKS=<player id>_<amount>_<drop player id>,...
-            REPLACE=
             FRANCHISE_ID=<owner franchise id>
 
         A missing drop player is serialized as MFL player id 0000.
@@ -727,8 +726,8 @@ class MFLClient:
                 round_i
             )
 
-        # Match the exact parameter shape proven through MFL's
-        # own Import Test Form.
+        # REPLACE is deliberately omitted.  Its presence tells MFL to replace
+        # the owner's existing queue; quick claim must append one request.
         payload: Dict[str, Any] = {
             "TYPE": "blindBidWaiverRequest",
             "L": league_id_s,
@@ -736,8 +735,8 @@ class MFLClient:
             "PICKS": ",".join(
                 normalized_picks
             ),
-            "REPLACE": "",
             "FRANCHISE_ID": franchise_id_s,
+            "XML": "1",
         }
 
         # Authenticate this transaction the same way as the other
@@ -805,7 +804,7 @@ class MFLClient:
             # pattern used by FCFS. Never retry this request.
             response = requests.post(
                 url,
-                params=payload,
+                data=payload,
                 headers=headers,
                 timeout=self.timeout,
             )

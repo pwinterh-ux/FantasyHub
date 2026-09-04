@@ -459,6 +459,44 @@ def _classify_mfl_player_status(raw_status: str) -> dict[str, Any]:
     }
 
 
+def classify_waiver_action(
+    classification: str,
+    waiver_type: str | None,
+    bbid_conditional: bool | None,
+) -> str | None:
+    """Return the only legal quick action for live player/league state."""
+    status = str(classification or "").strip().upper()
+    kind = str(waiver_type or "").strip().upper()
+    if status not in {"FREE_AGENT", "FREE_AGENT_LOCKED"}:
+        return None
+    if kind == "BBID":
+        return None if bbid_conditional is not False else "BBID"
+    if kind == "BBID_FCFS":
+        if status == "FREE_AGENT":
+            return "FCFS"
+        return None if bbid_conditional is not False else "BBID"
+    return None
+
+
+def validate_bbid_amount(bid_amount, faab_balance, minimum=None):
+    """Normalize a quick-claim bid and enforce locally known FAAB limits."""
+    from decimal import Decimal, InvalidOperation
+    raw = str(bid_amount if bid_amount is not None else "").strip() or "0"
+    try:
+        bid = Decimal(raw)
+        balance = Decimal(str(faab_balance))
+        floor = Decimal(str(minimum)) if minimum is not None else None
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError("Invalid waiver bid amount.") from exc
+    if not bid.is_finite() or bid < 0:
+        raise ValueError("Waiver bid must be zero or greater.")
+    if floor is not None and bid < floor:
+        raise ValueError(f"Waiver bid must be at least {format(floor, 'f')}.")
+    if bid > balance:
+        raise ValueError("Waiver bid exceeds your current FAAB balance.")
+    return bid
+
+
 def parse_player_status_xml(
     xml_bytes: bytes,
     requested_player_ids: list[int | str],
@@ -662,6 +700,13 @@ def get_live_player_status(
                 xml_bytes,
                 normalized_ids,
             )
+
+            for status in statuses.values():
+                status["quick_action"] = classify_waiver_action(
+                    status.get("classification"),
+                    league.waiver_type,
+                    league.bbid_conditional,
+                )
 
             return {
                 "league_id": league.id,
@@ -2183,30 +2228,7 @@ def perform_blind_bid_add(
     ).strip()
 
     if not raw_bid:
-        raise ValueError(
-            "A waiver bid amount is required."
-        )
-
-    try:
-        bid = Decimal(
-            raw_bid
-        )
-    except (
-        InvalidOperation,
-        ValueError,
-        TypeError,
-    ) as exc:
-        raise ValueError(
-            "Invalid waiver bid amount."
-        ) from exc
-
-    if (
-        not bid.is_finite()
-        or bid < 0
-    ):
-        raise ValueError(
-            "Waiver bid must be zero or greater."
-        )
+        raw_bid = "0"
 
     faab_balance_raw = getattr(
         team,
@@ -2258,18 +2280,7 @@ def perform_blind_bid_add(
                 "League minimum waiver bid is invalid."
             ) from exc
 
-    if (
-        minimum is not None
-        and bid < minimum
-    ):
-        raise ValueError(
-            f"Waiver bid must be at least {format(minimum, 'f')}."
-        )
-
-    if bid > faab_balance:
-        raise ValueError(
-            "Waiver bid exceeds your current FAAB balance."
-        )
+    bid = validate_bbid_amount(raw_bid, faab_balance, minimum)
 
     # Do not guess at bbidIncrement semantics here.
     # MFL remains authoritative for any additional bid constraint.
@@ -2407,6 +2418,7 @@ def perform_blind_bid_add(
             }
         ],
         cookie=cookie,
+        franchise_id=franchise_id,
         context={
             "operation": (
                 "waivers_perform_blind_bid_add"
