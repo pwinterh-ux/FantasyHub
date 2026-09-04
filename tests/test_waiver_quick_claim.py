@@ -127,7 +127,7 @@ def test_acquisition_ui_uses_authoritative_status_and_distinct_actions():
     assert 'quickAction === "FCFS"' in source
     assert 'quickAction === "BBID"' in source
     assert "Bid amount · Available FAAB" in source
-    assert "Submit waiver bid" in source
+    assert "Submit FAAB bid" in source
     assert "Perform FCFS Add" in source
     assert "Waiver claim must be managed in MFL." in source
     assert "Free Agent" not in source
@@ -139,7 +139,7 @@ def test_bbid_browser_errors_distinguish_rejection_from_ambiguity():
     assert "error.definiteRejection = response.status === 400" in source
     assert 'button.dataset.submitting = "0"' in source
     assert "button.disabled = false" in source
-    assert "The waiver bid was not confirmed. Check MFL before retrying." in source
+    assert "The FAAB bid was not confirmed. Check MFL before retrying." in source
     assert 'button.textContent = "Check MFL"' in source
 
 

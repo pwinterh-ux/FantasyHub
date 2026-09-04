@@ -4029,7 +4029,7 @@
           <input class="bbid-amount" type="number" min="0" step="${escapeHtml(waiver.faab_increment || "1")}" placeholder="0">
           <label class="fcfs-drop-label">Drop player (optional)</label>
           <select class="fcfs-drop-select"><option value="">None — no drop</option>${options}</select>
-          <div class="fcfs-control-row"><button type="button" class="waiver-btn bbid-submit">Submit waiver bid</button>${fallback}</div>
+          <div class="fcfs-control-row"><button type="button" class="waiver-btn bbid-submit">Submit FAAB bid</button>${fallback}</div>
           <div class="fcfs-result" aria-live="polite"></div>
         </div>`;
       actionCell.querySelector(".bbid-submit")?.addEventListener("click", async event => {
@@ -4045,15 +4045,15 @@
             error.definiteRejection = response.status === 400;
             throw error;
           }
-          actionCell.innerHTML = `<div class="fcfs-result success">✓ Waiver bid submitted</div>${fallback}`;
+          actionCell.innerHTML = `<div class="fcfs-result success">✓ FAAB bid submitted</div>${fallback}`;
         } catch (error) {
           if (error.definiteRejection) {
-            renderFcfsErrors(resultNode, [error.message || "The waiver bid was rejected."]);
+            renderFcfsErrors(resultNode, [error.message || "The FAAB bid was rejected."]);
             button.dataset.submitting = "0";
             button.disabled = false;
-            button.textContent = "Submit waiver bid";
+            button.textContent = "Submit FAAB bid";
           } else {
-            renderFcfsErrors(resultNode, ["The waiver bid was not confirmed. Check MFL before retrying.", error.message || "Network request failed."]);
+            renderFcfsErrors(resultNode, ["The FAAB bid was not confirmed. Check MFL before retrying.", error.message || "Network request failed."]);
             button.textContent = "Check MFL";
           }
         }
