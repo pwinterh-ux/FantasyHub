@@ -681,7 +681,7 @@
       const sellQuery = r.name || r.player_id || '';
       const sellHref = `${baseOffersSearch}?q=${encodeURIComponent(sellQuery)}&mode=sell`;
       const displayName = escapeHtml(r.name || r.player_id || '—');
-      const rankLabel = (r.position_rank === null || r.position_rank === undefined || r.position_rank === '') ? 'NULL' : String(r.position_rank);
+      const rankLabel = (r.position_rank === null || r.position_rank === undefined || r.position_rank === '') ? '—' : String(r.position_rank);
 
       return `
         <tr class="${groupStart}">

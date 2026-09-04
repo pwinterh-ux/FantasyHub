@@ -323,33 +323,163 @@ def _sleeper_pick_rows(team_row: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 
 def _serialize_sleeper_roster(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
+    """
+    Serialize Sleeper roster rows and enrich them with the Sleeper -> MFL
+    crosswalk plus current dynasty consensus rank.
+    """
+    if not rows:
+        return []
+
+    player_ids: list[str] = []
     for row in rows:
-        player_identifier = _mapping_first(row, "player_sid", "player_id", "sleeper_player_id", "player")
+        player_identifier = _mapping_first(
+            row,
+            "player_sid",
+            "player_id",
+            "sleeper_player_id",
+            "player",
+        )
+        if player_identifier not in (None, ""):
+            player_ids.append(str(player_identifier))
+
+    # Load Sleeper player metadata, including our Sleeper -> MFL crosswalk.
+    players_tbl = _reflect_table("sleeper_players")
+    sleeper_by_id: dict[str, Mapping[str, Any]] = {}
+
+    if (
+        players_tbl is not None
+        and "sleeper_id" in players_tbl.c
+        and player_ids
+    ):
+        player_rows = db.session.execute(
+            select(players_tbl).where(
+                players_tbl.c.sleeper_id.in_(player_ids)
+            )
+        ).mappings().all()
+
+        sleeper_by_id = {
+            str(player.get("sleeper_id")): player
+            for player in player_rows
+            if player.get("sleeper_id") not in (None, "")
+        }
+
+    # Load consensus ranks for every mapped MFL player in this roster.
+    mfl_ids = sorted({
+        str(player.get("mfl_id"))
+        for player in sleeper_by_id.values()
+        if player.get("mfl_id") not in (None, "")
+    })
+
+    consensus_by_key: dict[
+        tuple[str, str],
+        DynastyRankConsensusCurrent,
+    ] = {}
+
+    if mfl_ids:
+        consensus_rows = (
+            DynastyRankConsensusCurrent.query
+            .filter(DynastyRankConsensusCurrent.mfl_id.in_(mfl_ids))
+            .all()
+        )
+
+        consensus_by_key = {
+            (
+                str(consensus.position or "").upper(),
+                str(consensus.mfl_id),
+            ): consensus
+            for consensus in consensus_rows
+        }
+
+    items: list[dict[str, Any]] = []
+
+    for row in rows:
+        player_identifier = _mapping_first(
+            row,
+            "player_sid",
+            "player_id",
+            "sleeper_player_id",
+            "player",
+        )
+
         if player_identifier in (None, ""):
             continue
-        position = _mapping_first(row, "position", "pos", "slot", "slot_position")
-        team = _mapping_first(row, "team", "nfl_team")
-        status = row.get("status")
-        starter_flag = _mapping_first(row, "is_starter", "starter", "starting", "is_starting", "active")
+
+        sleeper_id = str(player_identifier)
+        player = sleeper_by_id.get(sleeper_id, {})
+
+        name = (
+            _mapping_first(player, "name", "full_name", "display_name")
+            or _mapping_first(row, "player_name", "name")
+            or sleeper_id
+        )
+
+        position = (
+            _mapping_first(player, "position", "pos")
+            or _mapping_first(row, "position", "pos", "slot", "slot_position")
+        )
+
+        team = (
+            _mapping_first(player, "team", "nfl_team")
+            or _mapping_first(row, "team", "nfl_team")
+        )
+
+        status = (
+            _mapping_first(player, "status")
+            or row.get("status")
+        )
+
+        mfl_id_raw = _mapping_first(player, "mfl_id")
+        mfl_id = (
+            str(mfl_id_raw)
+            if mfl_id_raw not in (None, "")
+            else None
+        )
+
+        consensus = None
+        if position and mfl_id:
+            consensus = consensus_by_key.get(
+                (str(position).upper(), mfl_id)
+            )
+
+        starter_flag = _mapping_first(
+            row,
+            "is_starter",
+            "starter",
+            "starting",
+            "is_starting",
+            "active",
+        )
+
         is_starter = False
         if starter_flag not in (None, ""):
             if isinstance(starter_flag, bool):
                 is_starter = starter_flag
             else:
-                is_starter = str(starter_flag).lower() not in ("0", "false", "no")
-        name = _mapping_first(row, "player_name", "name")
-        if not name:
-            name = str(player_identifier)
+                is_starter = (
+                    str(starter_flag).lower()
+                    not in ("0", "false", "no")
+                )
+
         items.append({
-            "player_id": str(player_identifier),
-            "mfl_id": None,
+            "player_id": sleeper_id,
+            "mfl_id": mfl_id,
             "name": name,
             "position": position,
             "team": team,
             "status": status,
+            "position_rank": (
+                consensus.positional_rank
+                if consensus
+                else None
+            ),
+            "consensus_rank": (
+                consensus.consensus_rank
+                if consensus
+                else None
+            ),
             "is_starter": is_starter,
         })
+
     return items
 
 
