@@ -207,8 +207,17 @@ def test_confirmation_dialog_is_compact_and_conditionally_hides_bid():
 
 def test_my_leagues_best_available_links_to_real_waivers_flow():
     source = open("templates/my_leagues.html", encoding="utf-8").read()
+    assert 'data-league-row="{{ league.key }}"' in source
+    assert 'data-db-id="{{ league.db_id }}"' in source
+    assert "const leagueKey = rowEl.getAttribute('data-league-row')" in source
+    assert "const leagueDbId = rowEl.getAttribute('data-db-id')" in source
+    assert 'data-for-league="${leagueKey}"' in source
+    assert "leagueDetailsCache.set(String(leagueKey)" in source
+    assert "renderBestAvailable(bestAvailable, leagueDbId, data.league?.platform)" in source
+    assert "renderBestAvailable(bestAvailable, leagueKey" not in source
     assert "url_for('waivers.index')" in source
-    assert "?player_id=${encodeURIComponent(player.player_id)}&league_id=${encodeURIComponent(leagueId)}" in source
+    assert "?player_id=${encodeURIComponent(player.player_id)}&league_id=${encodeURIComponent(leagueDbId)}" in source
+    assert "renderBestAvailable(bestAvailable, leagueId" not in source
     assert "Demo flow only" not in source
     assert "js-best-available-add" not in source
     assert "/waivers/api/fcfs-add" not in source

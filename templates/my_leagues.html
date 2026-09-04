@@ -607,7 +607,7 @@
     `;
   }
 
-  function renderBestAvailable(bestAvailable, leagueId, platform) {
+  function renderBestAvailable(bestAvailable, leagueDbId, platform) {
     const items = Array.isArray(bestAvailable) ? bestAvailable : [];
     const byPosition = Object.fromEntries(positionOrder.map(pos => [pos, []]));
     items.forEach(item => {
@@ -630,7 +630,7 @@
             <td style="width:92px;">
               ${platform === 'mfl' && player.player_id ? `
                 <a class="btn-ghost btn-compact btn-add"
-                   href="${escapeHtml(`${waiversUrl}?player_id=${encodeURIComponent(player.player_id)}&league_id=${encodeURIComponent(leagueId)}`)}">
+                   href="${escapeHtml(`${waiversUrl}?player_id=${encodeURIComponent(player.player_id)}&league_id=${encodeURIComponent(leagueDbId)}`)}">
                   Add
                 </a>` : '<span class="mini">MFL only</span>'}
             </td>
@@ -780,18 +780,19 @@
   }
 
   async function toggleDetails(rowEl) {
-    const leagueId = rowEl.getAttribute('data-league-row');
+    const leagueKey = rowEl.getAttribute('data-league-row');
+    const leagueDbId = rowEl.getAttribute('data-db-id');
     const url = rowEl.getAttribute('data-details-url');
     const submitUrl = rowEl.getAttribute('data-submit-url');
     const deleteUrl = rowEl.getAttribute('data-delete-url');
 
-    const existing = document.querySelector(`tr.details-row[data-for-league="${leagueId}"]`);
+    const existing = document.querySelector(`tr.details-row[data-for-league="${leagueKey}"]`);
     if (existing) { existing.remove(); return; }
-    closeOpenDetails(leagueId);
+    closeOpenDetails(leagueKey);
 
     const loadingRow = document.createElement('tr');
     loadingRow.className = 'details-row';
-    loadingRow.setAttribute('data-for-league', leagueId);
+    loadingRow.setAttribute('data-for-league', leagueKey);
 
     const colCount = rowEl.children.length;
     const td = document.createElement('td');
@@ -850,7 +851,7 @@
 
       const leagueNameSafe = escapeHtml((data.league && data.league.name) ? data.league.name : '');
       const bestAvailable = Array.isArray(data.best_available) ? data.best_available : [];
-      leagueDetailsCache.set(String(leagueId), {
+      leagueDetailsCache.set(String(leagueKey), {
         leagueName: (data.league && data.league.name) ? data.league.name : '',
         roster,
         bestAvailable,
@@ -894,7 +895,7 @@
                 <strong>Lineup:</strong> ${escapeHtml(slots)}
               </div>
               ${renderRoster(roster)}
-              ${renderBestAvailable(bestAvailable, leagueId, data.league?.platform)}
+              ${renderBestAvailable(bestAvailable, leagueDbId, data.league?.platform)}
               ${renderPicks(data.my_draft_picks, teams)}
             </div>
           </div>
