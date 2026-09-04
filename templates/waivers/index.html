@@ -148,16 +148,16 @@
             id="targetSort"
             class="target-select"
           >
+            <option value="position_rank" selected>
+              Positional Rank
+            </option>
+
             <option value="top3">
               Most Top-3 Leagues
             </option>
 
             <option value="top5">
               Most Top-5 Leagues
-            </option>
-
-            <option value="position_rank">
-              Positional Rank
             </option>
 
             <option value="unrostered">
@@ -291,15 +291,14 @@
 <div id="waiverConfirmMask" class="waiver-confirm-mask" hidden>
   <section class="waiver-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="waiverConfirmTitle">
     <div class="waiver-confirm-head">
-      <h3 id="waiverConfirmTitle">Confirm acquisition</h3>
+      <h3 id="waiverConfirmTitle">Confirm FA Add</h3>
       <button type="button" class="waiver-confirm-close" aria-label="Close">×</button>
     </div>
     <dl class="waiver-confirm-review">
       <div><dt>Add</dt><dd id="waiverConfirmAdd"></dd></div>
       <div><dt>Drop</dt><dd id="waiverConfirmDrop"></dd></div>
       <div><dt>League</dt><dd id="waiverConfirmLeague"></dd></div>
-      <div id="waiverConfirmBidRow" hidden><dt>FAAB Bid</dt><dd id="waiverConfirmBid"></dd></div>
-      <div><dt>Action</dt><dd id="waiverConfirmAction"></dd></div>
+      <div id="waiverConfirmBidRow" hidden><dt>Bid</dt><dd id="waiverConfirmBid"></dd></div>
     </dl>
     <div class="waiver-confirm-actions">
       <button type="button" class="waiver-btn waiver-confirm-cancel">Cancel</button>
@@ -394,14 +393,15 @@
   .waiver-sync-notice div { margin-top: 6px; font-size: 13px; line-height: 1.45; }
   .waiver-confirm-mask { position: fixed; inset: 0; z-index: 10020; padding: 20px; background: rgba(2,6,23,.78); display: flex; align-items: center; justify-content: center; }
   .waiver-confirm-mask[hidden] { display: none; }
-  .waiver-confirm-dialog { width: min(480px, 100%); border: 1px solid var(--waiver-border); border-radius: 14px; padding: 18px; background: #0b1220; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+  .waiver-confirm-dialog { width: min(380px, calc(100vw - 32px)); border: 1px solid var(--waiver-border); border-radius: 12px; padding: 14px; background: #0b1220; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
   .waiver-confirm-head, .waiver-confirm-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .waiver-confirm-head h3 { margin: 0; }
-  .waiver-confirm-close { border: 0; background: transparent; color: var(--waiver-muted); cursor: pointer; font-size: 24px; }
-  .waiver-confirm-review { margin: 16px 0; }
-  .waiver-confirm-review > div { display: grid; grid-template-columns: 90px 1fr; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--waiver-border); }
-  .waiver-confirm-review dt { color: var(--waiver-muted); }
-  .waiver-confirm-review dd { margin: 0; font-weight: 800; }
+  .waiver-confirm-head h3 { margin: 0; font-size: 17px; }
+  .waiver-confirm-close { border: 0; padding: 0 2px; background: transparent; color: var(--waiver-muted); cursor: pointer; font-size: 22px; line-height: 1; }
+  .waiver-confirm-review { margin: 10px 0 12px; }
+  .waiver-confirm-review > div { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 4px 0; }
+  .waiver-confirm-review > div[hidden] { display: none; }
+  .waiver-confirm-review dt { color: var(--waiver-muted); font-size: 12px; }
+  .waiver-confirm-review dd { margin: 0; font-size: 13px; font-weight: 700; }
   .waiver-confirm-actions { justify-content: flex-end; }
   tr.deep-link-league { background: rgba(56,189,248,.10); outline: 1px solid rgba(56,189,248,.35); }
 
@@ -1440,10 +1440,10 @@
 
   function openConfirmation(options) {
     pendingConfirmation = options.onConfirm;
+    document.getElementById("waiverConfirmTitle").textContent = options.title;
     document.getElementById("waiverConfirmAdd").textContent = options.add;
     document.getElementById("waiverConfirmDrop").textContent = options.drop || "No drop";
     document.getElementById("waiverConfirmLeague").textContent = options.league;
-    document.getElementById("waiverConfirmAction").textContent = options.action;
     const bidRow = document.getElementById("waiverConfirmBidRow");
     bidRow.hidden = options.bid === undefined;
     document.getElementById("waiverConfirmBid").textContent = options.bid === undefined ? "" : `$${options.bid || "0"}`;
@@ -1666,7 +1666,7 @@
 
     const mode =
       targetSort?.value ||
-      "top3";
+      "position_rank";
 
     sorted.sort(
       (a, b) => {
@@ -4026,10 +4026,10 @@
             const selectedDrop = String(select.value || "").trim();
             const playerMeta = row.dataset.playerMeta ? ` (${row.dataset.playerMeta})` : "";
             openConfirmation({
+              title: "Confirm FA Add",
               add: `${row.dataset.playerName || "Player"}${playerMeta}`,
               drop: selectedDrop ? selected.textContent.trim() : "No drop",
               league: row.dataset.leagueName || "League",
-              action: "Immediate FA add",
               button: "Confirm Add",
               onConfirm: () => submitFcfsAdd(actionCell, leagueId, playerId, selectedDrop)
             });
@@ -4142,11 +4142,11 @@
         const dropLabel = dropId ? select.options[select.selectedIndex].textContent.trim() : "No drop";
         const playerMeta = row.dataset.playerMeta ? ` (${row.dataset.playerMeta})` : "";
         openConfirmation({
+          title: "Confirm FAAB Bid",
           add: `${row.dataset.playerName || "Player"}${playerMeta}`,
           drop: dropLabel,
           league: row.dataset.leagueName || "League",
           bid: amount,
-          action: "FAAB bid",
           button: "Confirm FAAB Bid",
           onConfirm: async () => {
             if (button.dataset.submitting === "1") return;
@@ -4604,6 +4604,7 @@
       const response = await fetch(playerUrl(CONFIG.deepLink.player_id), {headers: {"Accept": "application/json"}});
       const payload = await response.json();
       if (!response.ok || !payload.ok) throw new Error(payload.error || "Player could not be loaded.");
+      searchInput.value = payload.player.name || "";
       const availability = payload.availability || {};
       renderPlayers([{
         ...payload.player,
