@@ -6,6 +6,7 @@ from flask import Flask
 
 from services.mfl_client import MFLClient
 from services.waivers_service import (
+    _resolve_waiver_transaction_client,
     classify_acquisition_status,
     classify_waiver_action,
     validate_bbid_amount,
@@ -24,6 +25,122 @@ def response(xml=b"<status>OK</status>"):
     result = Mock(status_code=200, content=xml, text=xml.decode(), headers={})
     result.request = Mock(method="POST", url="https://www43.myfantasyleague.com/2026/import")
     return result
+
+
+def transaction_user(host_cookies=None, api_cookie=None, session_key=None):
+    return SimpleNamespace(
+        get_mfl_host_cookies=lambda: host_cookies or {},
+        mfl_cookie_api=api_cookie,
+        session_key=session_key,
+    )
+
+
+@pytest.mark.parametrize(
+    "host,host_cookies,api_cookie,session_key,expected_cookie,expected_source",
+    [
+        ("www43.myfantasyleague.com", {"www43.myfantasyleague.com": "host"}, "api", None, "host", "host_cookie"),
+        ("www42.myfantasyleague.com", {"www43.myfantasyleague.com": "other"}, "api", None, "api", "api_cookie"),
+        ("www44.myfantasyleague.com", {}, "api", None, "api", "api_cookie"),
+        ("www45.myfantasyleague.com", {}, None, "legacy", "legacy", "legacy_session"),
+    ],
+)
+def test_waiver_write_resolver_keeps_league_host_and_auth_order(
+    host, host_cookies, api_cookie, session_key, expected_cookie, expected_source
+):
+    league = SimpleNamespace(league_host=host, year=2026)
+    client, cookie, auth_source = _resolve_waiver_transaction_client(
+        transaction_user(host_cookies, api_cookie, session_key), league
+    )
+    assert client.base == f"https://{host}/2026/"
+    assert "api.myfantasyleague.com" not in client.base
+    assert cookie == expected_cookie
+    assert auth_source == expected_source
+
+
+@pytest.mark.parametrize("host", [None, "", "api.myfantasyleague.com", "evil.example", "wwwx.myfantasyleague.com"])
+def test_waiver_write_resolver_rejects_invalid_host_before_http(host):
+    league = SimpleNamespace(league_host=host, year=2026)
+    with patch("services.mfl_client.requests.post") as post, pytest.raises(
+        RuntimeError, match="league-specific"
+    ):
+        _resolve_waiver_transaction_client(transaction_user(api_cookie="api"), league)
+    post.assert_not_called()
+
+
+def test_waiver_write_resolver_requires_auth_before_http():
+    league = SimpleNamespace(league_host="www42.myfantasyleague.com", year=2026)
+    with patch("services.mfl_client.requests.post") as post, pytest.raises(
+        RuntimeError, match="No usable"
+    ):
+        _resolve_waiver_transaction_client(transaction_user(), league)
+    post.assert_not_called()
+
+
+@pytest.mark.parametrize("method", ["fcfs", "bbid"])
+def test_waiver_api_host_guard_blocks_before_http(app, method):
+    client = MFLClient(2026, "https://api.myfantasyleague.com/2026/")
+    with app.app_context(), patch("services.mfl_client.requests.post") as post, pytest.raises(
+        RuntimeError, match="league-specific"
+    ):
+        if method == "fcfs":
+            client.submit_fcfs_waiver("1", "2", "cookie")
+        else:
+            client.submit_blind_bid_waiver(
+                "1", [{"player_id": "2", "amount": 1}], "cookie", franchise_id="0001"
+            )
+    post.assert_not_called()
+
+
+@pytest.mark.parametrize("method", ["fcfs", "bbid"])
+def test_waiver_redirect_is_not_followed_or_retried(app, method):
+    redirected = response(b"")
+    redirected.status_code = 302
+    redirected.headers = {"Location": "https://api.myfantasyleague.com/2026/api_info"}
+    client = MFLClient(2026, "https://www43.myfantasyleague.com/2026/")
+    with app.app_context(), patch("services.mfl_client._rl.wait"), patch(
+        "services.mfl_client.requests.post", return_value=redirected
+    ) as post:
+        if method == "fcfs":
+            result = client.submit_fcfs_waiver("1", "2", "cookie")
+        else:
+            result = client.submit_blind_bid_waiver(
+                "1", [{"player_id": "2", "amount": 1}], "cookie", franchise_id="0001"
+            )
+    assert result["ok"] is False
+    assert "Check MFL before retrying" in result["message"]
+    assert post.call_count == 1
+    assert post.call_args.kwargs["allow_redirects"] is False
+
+
+def test_waiver_html_response_is_neutral_and_not_confirmed(app):
+    html = response(b"<!doctype html><html><body>API info</body></html>")
+    html.headers = {"Content-Type": "text/html"}
+    client = MFLClient(2026, "https://www43.myfantasyleague.com/2026/")
+    with app.app_context(), patch("services.mfl_client._rl.wait"), patch(
+        "services.mfl_client.requests.post", return_value=html
+    ) as post:
+        result = client.submit_fcfs_waiver("1", "2", "cookie")
+    assert result["ok"] is False
+    assert "could not be confirmed" in result["message"]
+    assert "Check MFL before retrying" in result["message"]
+    assert "session may have expired" not in result["message"]
+    assert post.call_count == 1
+
+
+def test_waiver_xml_success_and_exact_error_are_preserved(app):
+    client = MFLClient(2026, "https://www43.myfantasyleague.com/2026/")
+    with app.app_context(), patch("services.mfl_client._rl.wait"), patch(
+        "services.mfl_client.requests.post",
+        side_effect=[response(), response(b"<error>Exact MFL rejection</error>")],
+    ) as post:
+        success = client.submit_fcfs_waiver("1", "2", "cookie")
+        failure = client.submit_blind_bid_waiver(
+            "1", [{"player_id": "2", "amount": 1}], "cookie", franchise_id="0001"
+        )
+    assert success["ok"] is True
+    assert failure["ok"] is False
+    assert failure["message"] == "Exact MFL rejection"
+    assert post.call_count == 2
 
 
 @pytest.mark.parametrize("drop,expected", [("14095", "16585_3_14095"), (None, "16585_3_0000")])

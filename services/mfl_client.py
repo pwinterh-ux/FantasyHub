@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, Any
-from urllib.parse import unquote_plus
+from urllib.parse import unquote_plus, urlparse
 
 import requests
 from flask import current_app
@@ -388,6 +388,8 @@ class MFLClient:
             }
         """
 
+        self._require_league_waiver_host()
+
         league_id_s = str(
             league_id or ""
         ).strip()
@@ -514,6 +516,7 @@ class MFLClient:
                 data=payload,
                 headers=headers,
                 timeout=self.timeout,
+                allow_redirects=False,
             )
 
         except requests.RequestException as exc:
@@ -533,6 +536,26 @@ class MFLClient:
             context=ctx,
             started_at=started_at,
         )
+
+        if 300 <= response.status_code < 400:
+            message = (
+                "MFL redirected the transaction instead of confirming it. "
+                "Check MFL before retrying. If the action is not present, "
+                "refresh or re-link your MFL connection and try again."
+            )
+            return {
+                "ok": False, "status": None, "message": message,
+                "errors": [message], "http_status": response.status_code,
+            }
+
+        if response.status_code == 200 and "text/html" in str(
+            response.headers.get("Content-Type") or ""
+        ).lower():
+            message = self._unexpected_waiver_web_response_message()
+            return {
+                "ok": False, "status": None, "message": message,
+                "errors": [message], "http_status": response.status_code,
+            }
 
         self._raise_for_status(
             response
@@ -579,6 +602,8 @@ class MFLClient:
         transaction pattern as the existing FCFS implementation and is
         intentionally NEVER retried.
         """
+
+        self._require_league_waiver_host()
 
         league_id_s = str(
             league_id or ""
@@ -807,6 +832,7 @@ class MFLClient:
                 data=payload,
                 headers=headers,
                 timeout=self.timeout,
+                allow_redirects=False,
             )
 
         except requests.RequestException as exc:
@@ -826,6 +852,26 @@ class MFLClient:
             context=ctx,
             started_at=started_at,
         )
+
+        if 300 <= response.status_code < 400:
+            message = (
+                "MFL redirected the transaction instead of confirming it. "
+                "Check MFL before retrying. If the action is not present, "
+                "refresh or re-link your MFL connection and try again."
+            )
+            return {
+                "ok": False, "status": None, "message": message,
+                "errors": [message], "http_status": response.status_code,
+            }
+
+        if response.status_code == 200 and "text/html" in str(
+            response.headers.get("Content-Type") or ""
+        ).lower():
+            message = self._unexpected_waiver_web_response_message()
+            return {
+                "ok": False, "status": None, "message": message,
+                "errors": [message], "http_status": response.status_code,
+            }
 
         self._raise_for_status(
             response
@@ -970,6 +1016,14 @@ class MFLClient:
                     return v
         return None
 
+    def _require_league_waiver_host(self) -> None:
+        """Reject central-API waiver writes before any network activity."""
+        host = (urlparse(self.base).hostname or "").lower()
+        if host == "api.myfantasyleague.com":
+            raise RuntimeError(
+                "MFL waiver transaction requires the league-specific wwwXX host."
+            )
+
     @staticmethod
     def _xml_login_success(content: bytes) -> bool:
         """
@@ -992,6 +1046,15 @@ class MFLClient:
                 return True
         return True
 
+
+    @staticmethod
+    def _unexpected_waiver_web_response_message() -> str:
+        return (
+            "MFL returned an unexpected web response, so the transaction "
+            "could not be confirmed. Check MFL before retrying. If the "
+            "action is not present, refresh or re-link your MFL connection "
+            "and try again."
+        )
 
     @staticmethod
     def _parse_fcfs_import_response(
@@ -1047,11 +1110,7 @@ class MFLClient:
             )
 
             if is_html:
-                message = (
-                    "MFL returned a web page instead of a transaction "
-                    "response. Your MFL session may have expired; "
-                    "re-link MFL and try again."
-                )
+                message = MFLClient._unexpected_waiver_web_response_message()
 
             elif raw:
                 # Preserve useful plain-text failures, but never send a
@@ -1114,11 +1173,7 @@ class MFLClient:
             local_name(root.tag)
             == "html"
         ):
-            message = (
-                "MFL returned a web page instead of a transaction "
-                "response. Your MFL session may have expired; "
-                "re-link MFL and try again."
-            )
+            message = MFLClient._unexpected_waiver_web_response_message()
 
             return {
                 "ok": False,
