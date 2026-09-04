@@ -469,6 +469,8 @@ def classify_waiver_action(
     kind = str(waiver_type or "").strip().upper()
     if status not in {"FREE_AGENT", "FREE_AGENT_LOCKED"}:
         return None
+    if kind == "FCFS":
+        return "FCFS" if status == "FREE_AGENT" else None
     if kind == "BBID":
         return None if bbid_conditional is not False else "BBID"
     if kind == "BBID_FCFS":
@@ -476,6 +478,26 @@ def classify_waiver_action(
             return "FCFS"
         return None if bbid_conditional is not False else "BBID"
     return None
+
+
+def classify_acquisition_status(
+    classification: str,
+    waiver_type: str | None,
+    bbid_conditional: bool | None,
+) -> str:
+    """Return the concise, user-facing acquisition mechanism."""
+    status = str(classification or "").strip().upper()
+    kind = str(waiver_type or "").strip().upper()
+    if status == "ROSTERED":
+        return "Rostered"
+    if status not in {"FREE_AGENT", "FREE_AGENT_LOCKED"}:
+        return "Waiver"
+    action = classify_waiver_action(status, kind, bbid_conditional)
+    if action == "FCFS":
+        return "FA"
+    if action == "BBID":
+        return "BBID"
+    return "Waiver"
 
 
 def validate_bbid_amount(bid_amount, faab_balance, minimum=None):
@@ -703,6 +725,11 @@ def get_live_player_status(
 
             for status in statuses.values():
                 status["quick_action"] = classify_waiver_action(
+                    status.get("classification"),
+                    league.waiver_type,
+                    league.bbid_conditional,
+                )
+                status["visible_status"] = classify_acquisition_status(
                     status.get("classification"),
                     league.waiver_type,
                     league.bbid_conditional,

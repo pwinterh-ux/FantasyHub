@@ -4040,11 +4040,22 @@
         try {
           const response = await fetch("/waivers/api/bbid-add", {method:"POST", credentials:"same-origin", headers:{"Accept":"application/json","Content-Type":"application/json"}, body:JSON.stringify({league_id:Number(leagueId), add_player_id:Number(playerId), bid_amount:actionCell.querySelector(".bbid-amount")?.value || "0", drop_player_id:actionCell.querySelector(".fcfs-drop-select")?.value || null})});
           const payload = await response.json().catch(() => ({}));
-          if (!response.ok || !payload.ok) throw new Error(payload.message || payload.error || `MFL transaction failed (${response.status}).`);
+          if (!response.ok || !payload.ok) {
+            const error = new Error(payload.message || payload.error || `MFL transaction failed (${response.status}).`);
+            error.definiteRejection = response.status === 400;
+            throw error;
+          }
           actionCell.innerHTML = `<div class="fcfs-result success">✓ Waiver bid submitted</div>${fallback}`;
         } catch (error) {
-          renderFcfsErrors(resultNode, ["The waiver bid was not confirmed. Check MFL before retrying.", error.message || "Network request failed."]);
-          button.textContent = "Check MFL";
+          if (error.definiteRejection) {
+            renderFcfsErrors(resultNode, [error.message || "The waiver bid was rejected."]);
+            button.dataset.submitting = "0";
+            button.disabled = false;
+            button.textContent = "Submit waiver bid";
+          } else {
+            renderFcfsErrors(resultNode, ["The waiver bid was not confirmed. Check MFL before retrying.", error.message || "Network request failed."]);
+            button.textContent = "Check MFL";
+          }
         }
       });
     } catch (error) {
@@ -4087,6 +4098,10 @@
       actionCell.innerHTML = `<div class="fcfs-result error">To use Waivers for this league, re-add the league so RosterDash can load its waiver settings.</div>`;
       return;
     }
+    if (statusCell.querySelector(".status-chip")?.textContent.trim() === "Waiver" && actionCell) {
+      actionCell.innerHTML = `<div class="fcfs-controls"><div class="fcfs-result">Waiver claim must be managed in MFL.</div>${fcfsMflFallback(actionCell)}</div>`;
+      return;
+    }
     resetFcfsAction(statusCell);
 
   }
@@ -4100,18 +4115,15 @@
     waiver = {}
   ) {
 
-    const classification =
-      status.classification ||
-      "UNKNOWN";
+    const classification = status.classification || "UNKNOWN";
+    const visibleStatus = status.visible_status || "Waiver";
 
 
     let cssClass =
       "unknown";
 
 
-    let label =
-      status.status ||
-      "Unknown";
+    let label = visibleStatus;
 
 
     let title =
@@ -4119,44 +4131,19 @@
       "";
 
 
-    if (
-      classification ===
-      "FREE_AGENT"
-    ) {
-
-      cssClass =
-        "fa";
-
-      label =
-        "Free Agent";
-
-    }
-
-
-    else if (
-      classification ===
-      "FREE_AGENT_LOCKED"
-    ) {
-
-      cssClass =
-        "locked";
-
-      label =
-        "FA · Locked";
-
-    }
-
-
-    else if (
-      classification ===
-      "ROSTERED"
-    ) {
+    if (visibleStatus === "FA") {
+      cssClass = "fa";
+      title = "Immediately available through FCFS";
+    } else if (visibleStatus === "BBID") {
+      cssClass = "locked";
+      title = "Submit blind bid";
+    } else if (visibleStatus === "Waiver") {
+      cssClass = "locked";
+      title = "Waiver claim must be managed in MFL";
+    } else if (visibleStatus === "Rostered") {
 
       cssClass =
         "rostered";
-
-      label =
-        "Rostered";
 
       title =
         status.rostered_label ||
