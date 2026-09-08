@@ -559,7 +559,7 @@ def mfl_config_submit():
                 # 1) league info from API host (consistent source)
                 info_xml = api_client.get_league_info(lid, api_cookie)
                 try:
-                    franchise_meta, roster_text, league_base_url = parse_league_info(info_xml) if info_xml else ({}, None, None)
+                    franchise_meta, roster_text, league_base_url, _ir, _mode, _taxi = parse_league_info(info_xml) if info_xml else ({}, None, None, None, "UNKNOWN", None)
                 except Exception as e:
                     franchise_meta, roster_text, league_base_url = {}, None, None
                     out["errors"].append(f"parse_league_info:{e}")
@@ -745,8 +745,8 @@ def mfl_config_sync_one():
         if phase == "FAST":
             info_xml = api_client.get_league_info(league_id, api_cookie)
             try:
-                franchise_meta, roster_text, league_base_url = (
-                    parse_league_info(info_xml) if info_xml else ({}, None, None)
+                franchise_meta, roster_text, league_base_url, _ir, _mode, _taxi = (
+                    parse_league_info(info_xml) if info_xml else ({}, None, None, None, "UNKNOWN", None)
                 )
             except Exception as parse_err:
                 franchise_meta, roster_text, league_base_url = {}, None, None

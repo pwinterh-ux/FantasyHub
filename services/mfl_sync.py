@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from typing import List, Dict, Optional, Any, Iterable, Tuple
+from datetime import datetime
 
 from flask import current_app
 from app import db
 from models import League, Team, Player, Roster, DraftPick
-from services.mfl_parsers import FranchiseAssets, StandingRow
+from services.mfl_parsers import FranchiseAssets, StandingRow, normalize_roster_status, ROSTER_STATUS_IR
 from sqlalchemy import select
 
 
@@ -74,6 +75,21 @@ def _iter_player_ids(fr: Any) -> Iterable[int]:
             yield int(raw)
         except (TypeError, ValueError):
             continue
+
+def _iter_roster_players(fr: Any) -> Iterable[tuple[int, str]]:
+    entries = _get(fr, "roster_players")
+    if entries:
+        for entry in entries:
+            raw_id = _get(entry, "player_id", _get(entry, "id"))
+            if raw_id in (None, ""):
+                continue
+            try:
+                yield int(raw_id), normalize_roster_status(_get(entry, "roster_status", _get(entry, "status")))
+            except (TypeError, ValueError):
+                continue
+        return
+    for pid in _iter_player_ids(fr):
+        yield pid, "UNKNOWN"
 
 
 # ------------------------- Draft pick extractors ----------------------------
@@ -160,6 +176,8 @@ def sync_league_info(
     roster_slots: Optional[str] = None,
     ir_slots_max: Optional[int] = None,
     waiver_settings: Optional[Dict[str, Any]] = None,
+    lineup_mode: Optional[str] = None,
+    taxi_slots_max: Optional[int] = None,
     *,
     commit: bool = True,
 ) -> Dict[str, int]:
@@ -242,6 +260,11 @@ def sync_league_info(
             league.ir_slots_max = ir_slots_max
             ir_updated = 1
 
+    if lineup_mode is not None:
+        league.lineup_mode = lineup_mode
+    if taxi_slots_max is not None:
+        league.taxi_slots_max = taxi_slots_max
+
     # Waiver configuration from TYPE=league.
     # Missing values do not erase previously stored settings.
     if waiver_settings:
@@ -310,7 +333,8 @@ def sync_league_assets(
             continue
         franchise_id = _fid(franchise_id_raw)
 
-        player_ids = list(_iter_player_ids(fr))
+        roster_players = list(_iter_roster_players(fr))
+        player_ids = [pid for pid, _status in roster_players]
         pick_items = list(_iter_picks(fr))  # CHANGED: yields (season, round, pick_number, original_team)
         name_hint = _get(fr, "name") or _get(fr, "team_name")
         faab_balance = _get(fr, "faab_balance")
@@ -320,6 +344,7 @@ def sync_league_assets(
                 "franchise_id": franchise_id,
                 "name_hint": name_hint,
                 "player_ids": player_ids,
+                "roster_players": roster_players,
                 "pick_items": pick_items,
                 "faab_balance": faab_balance,
             }
@@ -352,6 +377,7 @@ def sync_league_assets(
     for payload in normalized_franchises:
         franchise_id = payload["franchise_id"]
         player_ids = payload["player_ids"]
+        roster_players = payload["roster_players"]
         pick_items = payload["pick_items"]
         name_hint = payload["name_hint"]
         faab_balance = payload["faab_balance"]
@@ -372,10 +398,13 @@ def sync_league_assets(
         )
 
         # Rebuild roster
-        for pid in player_ids:
+        for pid, roster_status in roster_players:
             if pid not in known_player_ids:
                 continue
-            roster_rows.append(Roster(team_id=team.id, player_id=pid, is_starter=False))
+            roster_rows.append(Roster(
+                team_id=team.id, player_id=pid, is_starter=False,
+                roster_status=roster_status, in_ir=(roster_status == ROSTER_STATUS_IR),
+            ))
             inserted_rosters += 1
 
         # Rebuild draft picks (current year + future year)
@@ -402,6 +431,7 @@ def sync_league_assets(
     if pick_rows:
         db.session.bulk_save_objects(pick_rows)
 
+    league.roster_status_synced_at = datetime.utcnow()
     if commit:
         db.session.commit()
     else:

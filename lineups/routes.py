@@ -20,11 +20,15 @@ from flask import (
 from flask_login import login_required, current_user
 
 from app import db
-from models import League, Team, Player, Roster
+from models import League, Team
 
 # Service helpers
 from services.lineups_service import (
-    get_my_team_player_ids,
+    get_my_team_roster_statuses,
+    is_lineup_eligible_status,
+    ensure_roster_status_fresh,
+    ensure_lineup_mode_resolved,
+    validate_lineup_starters,
     fetch_projected_scores,
     submit_lineup,
     build_players_for_review,
@@ -34,6 +38,7 @@ from services.lineups_service import (
     pick_optimal_lineup,
     Projection,
 )
+from services.mfl_parsers import LINEUP_MODE_BEST_BALL
 
 lineups_bp = Blueprint("lineups", __name__, template_folder="../templates")
 
@@ -100,6 +105,24 @@ def _cookie_header_for_host(host: str) -> Optional[str]:
             return f"MFLSESSION={v}"
 
     return None
+
+
+def _refresh_lineup_roster(league: League) -> Tuple[bool, Optional[str], str, Optional[str]]:
+    host = _league_host(league) or "api.myfantasyleague.com"
+    cookie = _cookie_header_for_host(host)
+    ok, error = ensure_roster_status_fresh(league, host=host, cookie=cookie)
+    return ok, error, host, cookie
+
+
+def _resolve_lineup_mode(league: League) -> str:
+    host = _league_host(league) or "api.myfantasyleague.com"
+    cookie = _cookie_header_for_host(host)
+    return ensure_lineup_mode_resolved(league, host=host, cookie=cookie)
+
+
+def _eligible_players(league_id: int, players: List[Tuple[int, str, str, str]]):
+    statuses = get_my_team_roster_statuses(league_id)
+    return [row for row in players if is_lineup_eligible_status(statuses.get(row[0]))]
 
 # ----------------------- Sync gate (reuse if present) -----------------------
 
@@ -320,8 +343,12 @@ def lineups_review():
         if getattr(lg, "user_id", None) != current_user.id:
             continue
 
-        host = _league_host(lg) or "api.myfantasyleague.com"
-        cookie = _cookie_header_for_host(host)
+        if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
+            jobs.append(dict(league=lg, host=None, cookie=None, players=[], pid_list=[],
+                             my_team_name=None, starters_label="", best_ball=True,
+                             refresh_warning=None))
+            continue
+        refresh_ok, refresh_error, host, cookie = _refresh_lineup_roster(lg)
 
         # Roster from DB
         players = build_players_for_review(lg.id)  # [(pid, name, pos, team)]
@@ -347,11 +374,15 @@ def lineups_review():
             pid_list=pid_list,
             my_team_name=my_team_name,
             starters_label=(getattr(lg, "roster_slots", None) or ""),
+            best_ball=False,
+            refresh_warning=refresh_error if not refresh_ok else None,
         ))
 
     # THREADS: network projections only
     def _net_fetch(job: dict):
         lg: League = job["league"]
+        if job.get("best_ball"):
+            return (lg.id, {})
         proj_map = fetch_projected_scores(
             job["host"], lg.mfl_id, lg.year, week_i, job["pid_list"], cookie=job["cookie"]
         )
@@ -363,7 +394,8 @@ def lineups_review():
     items: List[Dict[str, object]] = []
     for job in jobs:
         lg: League = job["league"]
-        grouped = group_and_sort_players_for_review(job["players"], proj_by_league_id.get(lg.id, {}))
+        statuses = get_my_team_roster_statuses(lg.id)
+        grouped = group_and_sort_players_for_review(job["players"], proj_by_league_id.get(lg.id, {}), statuses)
         items.append(dict(
             league=lg,
             host=job["host"],
@@ -371,6 +403,8 @@ def lineups_review():
             starters_label=job["starters_label"],  # raw from DB (may include total prefix)
             grouped_players=grouped,
             flat_players=job["players"],
+            best_ball=job.get("best_ball", False),
+            refresh_warning=job.get("refresh_warning"),
         ))
 
     return render_template("lineups/review.html", week=week_i, items=items)
@@ -424,13 +458,25 @@ def lineups_submit():
             ))
             continue
 
-        host = _league_host(lg) or "api.myfantasyleague.com"
-        cookie = _cookie_header_for_host(host)
+        if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
+            jobs.append(dict(
+                league=lg, host=None, cookie=None, starters=[],
+                force_result=dict(ok=True, skipped=True, message="Skipped — Best Ball (MFL sets optimal lineup)")
+            ))
+            continue
 
-        # Intersect submitted starters with my roster to prevent injected IDs
-        allowed_ids = set(get_my_team_player_ids(lg.id))
+        refresh_ok, refresh_error, host, cookie = _refresh_lineup_roster(lg)
         submitted = selections.get(lg.id, [])
-        starters = [pid for pid in submitted if pid in allowed_ids]
+        if not refresh_ok:
+            jobs.append(dict(league=lg, host=None, cookie=None, starters=[],
+                             force_result=dict(ok=False, message=f"Lineup not submitted: {refresh_error}")))
+            continue
+        guard_error = validate_lineup_starters(lg.id, submitted)
+        if guard_error:
+            jobs.append(dict(league=lg, host=None, cookie=None, starters=[],
+                             force_result=dict(ok=False, message=guard_error)))
+            continue
+        starters = submitted
 
         if not starters:
             # Don't send an empty lineup (avoids clearing)
@@ -452,7 +498,7 @@ def lineups_submit():
         # Forced result (not owned / no starters)
         if job.get("force_result"):
             fr = job["force_result"]
-            return dict(league=lg, ok=fr["ok"], message=fr["message"])
+            return dict(league=lg, ok=fr["ok"], skipped=fr.get("skipped", False), message=fr["message"])
         ok, raw = submit_lineup(job["host"], lg.mfl_id, lg.year, week_i, job["starters"], cookie=job["cookie"])
         # raw may include XML; keep as-is for batch page (legacy)
         return dict(league=lg, ok=ok, message=raw or ("Lineup submitted successfully" if ok else "Unknown response"))
@@ -496,8 +542,22 @@ def lineups_auto_submit():
             )
             continue
 
-        host = _league_host(lg) or "api.myfantasyleague.com"
-        cookie = _cookie_header_for_host(host)
+        if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
+            forced_results.append(dict(
+                league=lg, ok=True, skipped=True,
+                message="Skipped — Best Ball (MFL sets optimal lineup)",
+                lineup=[], projected_total=None,
+            ))
+            continue
+
+        refresh_ok, refresh_error, host, cookie = _refresh_lineup_roster(lg)
+        if not refresh_ok:
+            forced_results.append(dict(
+                league=lg, ok=False, message=f"Lineup not submitted: {refresh_error}",
+                lineup=[], projected_total=None,
+            ))
+            continue
+
         players = build_players_for_review(lg.id)
         if not players:
             forced_results.append(
@@ -580,10 +640,9 @@ def lineups_auto_submit():
         players = job["players"]
         total_required = job["total_required"]
         ranges = job["ranges"]
-        auto_ids = pick_optimal_lineup(players, projections, total_required, ranges)
+        auto_ids = pick_optimal_lineup(_eligible_players(lg.id, players), projections, total_required, ranges)
 
-        allowed_ids = {pid for (pid, _name, _pos, _team) in players}
-        starters = [pid for pid in auto_ids if pid in allowed_ids]
+        starters = auto_ids
         if not starters:
             auto_results.append(
                 dict(
@@ -594,6 +653,12 @@ def lineups_auto_submit():
                     projected_total=None,
                 )
             )
+            continue
+
+        guard_error = validate_lineup_starters(lg.id, starters)
+        if guard_error:
+            auto_results.append(dict(league=lg, ok=False, message=guard_error,
+                                     lineup=[], projected_total=None))
             continue
 
         players_lookup = {
@@ -741,8 +806,15 @@ def lineups_rapid_league():
         session.modified = True
         return redirect(url_for("lineups.lineups_rapid_league"))
 
-    host = _league_host(lg) or "api.myfantasyleague.com"
-    cookie = _cookie_header_for_host(host)
+    if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
+        return render_template(
+            "lineups/rapid_league.html", week=week_i, league=lg,
+            my_team_name=None, starters_label="", total_required=None, ranges={},
+            grouped_players={}, auto_selected=set(), index=idx + 1,
+            total_leagues=len(queue), best_ball=True, refresh_warning=None,
+        )
+
+    refresh_ok, refresh_error, host, cookie = _refresh_lineup_roster(lg)
 
     players = build_players_for_review(lg.id)
     pid_list = [pid for (pid, _, _, _) in players]
@@ -750,8 +822,9 @@ def lineups_rapid_league():
 
     starters_label = getattr(lg, "roster_slots", None) or ""
     total_required, ranges = parse_lineup_requirements(starters_label)
-    auto_ids = pick_optimal_lineup(players, proj_map, total_required, ranges)
-    grouped = group_and_sort_players_for_review(players, proj_map)
+    statuses = get_my_team_roster_statuses(lg.id)
+    auto_ids = pick_optimal_lineup(_eligible_players(lg.id, players), proj_map, total_required, ranges)
+    grouped = group_and_sort_players_for_review(players, proj_map, statuses)
 
     my_team_name = None
     try:
@@ -776,6 +849,8 @@ def lineups_rapid_league():
         auto_selected=set(auto_ids),
         index=idx + 1,
         total_leagues=len(queue),
+        best_ball=False,
+        refresh_warning=refresh_error if not refresh_ok else None,
     )
 
 
@@ -818,6 +893,20 @@ def lineups_rapid_submit():
     if not lg or getattr(lg, "user_id", None) != current_user.id:
         return jsonify({"ok": False, "message": "League not found or not owned by you.", "next": False}), 404
 
+    if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
+        message = "Best Ball — no lineup required (MFL sets the optimal lineup)."
+        _record_rapid_event(lg, "skipped", message)
+        queue: List[int] = session.get("rapid_queue") or []
+        idx = int(session.get("rapid_idx") or 0)
+        session["rapid_idx"] = min(idx + 1, len(queue))
+        session.modified = True
+        return jsonify({
+            "ok": True,
+            "skipped": True,
+            "message": message,
+            "next": session["rapid_idx"] < len(queue),
+        })
+
     vals = request.form.getlist("starters[]") or request.form.getlist("starters")
     submitted: List[int] = []
     for v in vals:
@@ -826,14 +915,19 @@ def lineups_rapid_submit():
         except Exception:
             continue
 
-    allowed_ids = set(get_my_team_player_ids(lg.id))
-    starters = [pid for pid in submitted if pid in allowed_ids]
+    refresh_ok, refresh_error, host, cookie = _refresh_lineup_roster(lg)
+    if not refresh_ok:
+        message = f"Lineup not submitted: {refresh_error}"
+        _record_rapid_event(lg, "error", message)
+        return jsonify({"ok": False, "message": message, "next": False}), 503
+    guard_error = validate_lineup_starters(lg.id, submitted)
+    if guard_error:
+        _record_rapid_event(lg, "error", guard_error)
+        return jsonify({"ok": False, "message": guard_error, "next": False}), 400
+    starters = submitted
     if not starters:
         _record_rapid_event(lg, "error", "No starters selected.")
         return jsonify({"ok": False, "message": "No starters selected.", "next": False}), 400
-
-    host = _league_host(lg) or "api.myfantasyleague.com"
-    cookie = _cookie_header_for_host(host)
 
     ok, raw = submit_lineup(host, lg.mfl_id, lg.year, week_i, starters, cookie=cookie)
     msg = raw or ("OK" if ok else "Failed")
@@ -875,7 +969,9 @@ def lineups_rapid_skip():
         league_id_pk = queue[idx]
         lg: League | None = db.session.get(League, league_id_pk)
         if lg:
-            _record_rapid_event(lg, "skipped", "Skipped by user.")
+            message = ("Best Ball — no lineup required (MFL sets the optimal lineup)."
+                       if lg.lineup_mode == LINEUP_MODE_BEST_BALL else "Skipped by user.")
+            _record_rapid_event(lg, "skipped", message)
         session["rapid_idx"] = idx + 1
         session.modified = True
     next_exists = (session.get("rapid_idx", 0) < len(queue))
@@ -969,8 +1065,11 @@ def lineups_single_league(league_id: int):
     if selected_week < current_week:
         selected_week = current_week
 
-    host = _league_host(lg) or "api.myfantasyleague.com"
-    cookie = _cookie_header_for_host(host)
+    if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
+        flash("Best Ball league: MFL sets the optimal lineup; no weekly submission is required.", "info")
+        return redirect(request.args.get("next") or "/leagues")
+
+    refresh_ok, refresh_error, host, cookie = _refresh_lineup_roster(lg)
 
     players = build_players_for_review(lg.id)
     pid_list = [pid for (pid, _, _, _) in players]
@@ -978,8 +1077,9 @@ def lineups_single_league(league_id: int):
 
     starters_label = getattr(lg, "roster_slots", None) or ""
     total_required, ranges = parse_lineup_requirements(starters_label)
-    auto_ids = pick_optimal_lineup(players, proj_map, total_required, ranges)
-    grouped = group_and_sort_players_for_review(players, proj_map)
+    statuses = get_my_team_roster_statuses(lg.id)
+    auto_ids = pick_optimal_lineup(_eligible_players(lg.id, players), proj_map, total_required, ranges)
+    grouped = group_and_sort_players_for_review(players, proj_map, statuses)
 
     my_team_name = None
     try:
@@ -1005,6 +1105,7 @@ def lineups_single_league(league_id: int):
         grouped_players=grouped,
         auto_selected=set(auto_ids),
         next_url=request.args.get("next") or "/leagues",
+        refresh_warning=refresh_error if not refresh_ok else None,
     )
 
 
@@ -1018,6 +1119,13 @@ def lineups_single_submit(league_id: int):
     lg: League | None = db.session.get(League, league_id)
     if not lg or getattr(lg, "user_id", None) != current_user.id:
         return jsonify({"ok": False, "message": "League not found or not owned by you."}), 404
+    if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
+        return jsonify({
+            "ok": True,
+            "skipped": True,
+            "message": "Best Ball — no lineup required (MFL sets the optimal lineup).",
+            "redirect": request.args.get("next") or request.form.get("next") or "/leagues",
+        })
 
     try:
         week_i = int(str(request.form.get("week")))
@@ -1032,13 +1140,15 @@ def lineups_single_submit(league_id: int):
         except Exception:
             continue
 
-    allowed_ids = set(get_my_team_player_ids(lg.id))
-    starters = [pid for pid in submitted if pid in allowed_ids]
+    refresh_ok, refresh_error, host, cookie = _refresh_lineup_roster(lg)
+    if not refresh_ok:
+        return jsonify({"ok": False, "message": f"Lineup not submitted: {refresh_error}"}), 503
+    guard_error = validate_lineup_starters(lg.id, submitted)
+    if guard_error:
+        return jsonify({"ok": False, "message": guard_error}), 400
+    starters = submitted
     if not starters:
         return jsonify({"ok": False, "message": "No starters selected."}), 400
-
-    host = _league_host(lg) or "api.myfantasyleague.com"
-    cookie = _cookie_header_for_host(host)
 
     ok, raw = submit_lineup(host, lg.mfl_id, lg.year, week_i, starters, cookie=cookie)
     clean = _clean_mfl_message(raw or ("OK" if ok else "Failed"))

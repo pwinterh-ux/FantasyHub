@@ -25,13 +25,19 @@
               </div>
             </div>
             <div class="lh-right">
+              {% if item.best_ball %}<span class="status-badge bestball">Best Ball</span>{% endif %}
               <label class="include-label">
-                <input type="checkbox" name="include_{{ lg.id }}" value="1">
+                <input type="checkbox" name="include_{{ lg.id }}" value="1"{% if item.refresh_warning or item.best_ball %} disabled{% endif %}>
                 <span>Include</span>
               </label>
             </div>
           </div>
 
+          {% if item.best_ball %}
+            <div class="best-ball-note">MFL sets the optimal lineup. No weekly submission or projection lookup is required.</div>
+          {% elif item.refresh_warning %}
+            <div class="refresh-warning">{{ item.refresh_warning }} This league cannot be included until status refresh succeeds.</div>
+          {% endif %}
           {% set grouped = item.grouped_players %}
           {% if not grouped or (grouped|length == 0) %}
             <div class="mini" style="opacity:.9;">No rostered players found for this league.</div>
@@ -56,13 +62,13 @@
                       </thead>
                       <tbody>
                         {% for row in grouped[pos] %}
-                          <tr>
+                          <tr{% if not row.lineup_eligible %} class="ineligible"{% endif %}>
                             <td class="ta-c">
                               <input class="chk"
                                      type="checkbox"
                                      name="starters_{{ lg.id }}[]"
                                      value="{{ row.player_id }}"
-                                     data-pos="{{ pos }}">
+                                     data-pos="{{ pos }}"{% if not row.lineup_eligible %} disabled{% endif %}>
                             </td>
                             <td class="nowrap">
                               <span class="pname">{{ row.name or '—' }}</span>
@@ -71,6 +77,9 @@
                               {% else %}
                                 <span class="pmeta mini">&nbsp;•&nbsp;{{ row.position or pos }}</span>
                               {% endif %}
+                              {% if row.roster_status == 'TAXI' %}<span class="status-badge taxi">On Taxi</span>
+                              {% elif row.roster_status == 'IR' %}<span class="status-badge ir">On IR</span>
+                              {% elif row.roster_status != 'ACTIVE' %}<span class="status-badge unknown">Status Unknown</span>{% endif %}
                             </td>
                             <td class="ta-r">
                               {% if row.projected is not none %}
@@ -110,6 +119,14 @@
   .lh-sub { opacity:.85; }
   .include-label { display:flex; align-items:center; gap:8px; user-select:none; }
   .include-label input { transform: scale(1.05); }
+  .ineligible { background:rgba(148,163,184,.07); }
+  .status-badge { display:inline-block;padding:2px 6px;border-radius:999px;font-size:10px;font-weight:800;text-transform:uppercase; }
+  .status-badge.taxi { color:#fde68a;border:1px solid rgba(245,158,11,.55);background:rgba(245,158,11,.15); }
+  .status-badge.ir { color:#fecaca;border:1px solid rgba(239,68,68,.45); }
+  .status-badge.unknown { color:#cbd5e1;border:1px solid rgba(203,213,225,.35); }
+  .status-badge.bestball { color:#bfdbfe;border:1px solid rgba(59,130,246,.5); }
+  .best-ball-note,.refresh-warning { padding:8px;margin:6px 0;border-radius:8px;background:rgba(59,130,246,.1); }
+  .refresh-warning { background:rgba(245,158,11,.1); }
 
   .pos-grid { display:grid; gap:10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   @media (max-width: 1100px) { .pos-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
