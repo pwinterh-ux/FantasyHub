@@ -344,7 +344,8 @@ def lineups_review():
             continue
 
         if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
-            jobs.append(dict(league=lg, host=None, cookie=None, players=[], pid_list=[],
+            jobs.append(dict(league_id=lg.id, league_mfl_id=str(lg.mfl_id),
+                             league_year=int(lg.year), host=None, cookie=None, players=[], pid_list=[],
                              my_team_name=None, starters_label="", best_ball=True,
                              refresh_warning=None))
             continue
@@ -367,7 +368,9 @@ def lineups_review():
             pass
 
         jobs.append(dict(
-            league=lg,
+            league_id=lg.id,
+            league_mfl_id=str(lg.mfl_id),
+            league_year=int(lg.year),
             host=host,
             cookie=cookie,
             players=players,
@@ -380,22 +383,32 @@ def lineups_review():
 
     # THREADS: network projections only
     def _net_fetch(job: dict):
-        lg: League = job["league"]
         if job.get("best_ball"):
-            return (lg.id, {})
-        proj_map = fetch_projected_scores(
-            job["host"], lg.mfl_id, lg.year, week_i, job["pid_list"], cookie=job["cookie"]
-        )
-        return (lg.id, proj_map)
+            return (job["league_id"], {}, None)
+        try:
+            proj_map = fetch_projected_scores(
+                job["host"], job["league_mfl_id"], job["league_year"], week_i,
+                job["pid_list"], cookie=job["cookie"]
+            )
+            return (job["league_id"], proj_map, None)
+        except Exception as exc:
+            return (job["league_id"], {}, str(exc))
 
-    proj_by_league_id = dict(_parallel_map(_net_fetch, jobs, max_workers=PARALLEL_WORKERS))
+    projection_results = {
+        league_id: (projections, error)
+        for league_id, projections, error in _parallel_map(_net_fetch, jobs, max_workers=PARALLEL_WORKERS)
+    }
+    leagues_by_id = {lg.id: lg for lg in leagues}
 
     # MAIN THREAD: assemble view model
     items: List[Dict[str, object]] = []
     for job in jobs:
-        lg: League = job["league"]
+        lg = leagues_by_id[job["league_id"]]
+        projections, projection_error = projection_results.get(
+            lg.id, ({}, "Projection lookup failed")
+        )
         statuses = get_my_team_roster_statuses(lg.id)
-        grouped = group_and_sort_players_for_review(job["players"], proj_by_league_id.get(lg.id, {}), statuses)
+        grouped = group_and_sort_players_for_review(job["players"], projections, statuses)
         items.append(dict(
             league=lg,
             host=job["host"],
@@ -404,7 +417,9 @@ def lineups_review():
             grouped_players=grouped,
             flat_players=job["players"],
             best_ball=job.get("best_ball", False),
-            refresh_warning=job.get("refresh_warning"),
+            refresh_warning=job.get("refresh_warning") or (
+                f"Projection error: {projection_error}" if projection_error else None
+            ),
         ))
 
     return render_template("lineups/review.html", week=week_i, items=items)
@@ -453,14 +468,16 @@ def lineups_submit():
         # Hard owner check (skip anything not owned by this user)
         if getattr(lg, "user_id", None) != current_user.id:
             jobs.append(dict(
-                league=lg, host=None, cookie=None, starters=[],
+                league_id=lg.id, league_mfl_id=str(lg.mfl_id), league_year=int(lg.year),
+                host=None, cookie=None, starters=[],
                 force_result=dict(ok=False, message="Skipped: league not owned by current user")
             ))
             continue
 
         if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
             jobs.append(dict(
-                league=lg, host=None, cookie=None, starters=[],
+                league_id=lg.id, league_mfl_id=str(lg.mfl_id), league_year=int(lg.year),
+                host=None, cookie=None, starters=[],
                 force_result=dict(ok=True, skipped=True, message="Skipped — Best Ball (MFL sets optimal lineup)")
             ))
             continue
@@ -468,12 +485,12 @@ def lineups_submit():
         refresh_ok, refresh_error, host, cookie = _refresh_lineup_roster(lg)
         submitted = selections.get(lg.id, [])
         if not refresh_ok:
-            jobs.append(dict(league=lg, host=None, cookie=None, starters=[],
+            jobs.append(dict(league_id=lg.id, league_mfl_id=str(lg.mfl_id), league_year=int(lg.year), host=None, cookie=None, starters=[],
                              force_result=dict(ok=False, message=f"Lineup not submitted: {refresh_error}")))
             continue
         guard_error = validate_lineup_starters(lg.id, submitted)
         if guard_error:
-            jobs.append(dict(league=lg, host=None, cookie=None, starters=[],
+            jobs.append(dict(league_id=lg.id, league_mfl_id=str(lg.mfl_id), league_year=int(lg.year), host=None, cookie=None, starters=[],
                              force_result=dict(ok=False, message=guard_error)))
             continue
         starters = submitted
@@ -481,12 +498,14 @@ def lineups_submit():
         if not starters:
             # Don't send an empty lineup (avoids clearing)
             jobs.append(dict(
-                league=lg, host=None, cookie=None, starters=[],
+                league_id=lg.id, league_mfl_id=str(lg.mfl_id), league_year=int(lg.year),
+                host=None, cookie=None, starters=[],
                 force_result=dict(ok=False, message="Skipped: no starters selected")
             ))
             continue
 
-        jobs.append(dict(league=lg, host=host, cookie=cookie, starters=starters, force_result=None))
+        jobs.append(dict(league_id=lg.id, league_mfl_id=str(lg.mfl_id), league_year=int(lg.year),
+                         host=host, cookie=cookie, starters=starters, force_result=None))
 
     if not jobs:
         flash("No leagues selected to submit. Check the 'Include' box for any league you want to submit.", "warning")
@@ -494,16 +513,19 @@ def lineups_submit():
 
     # THREADS: only network submission (or return forced result)
     def _submit_one(job: dict) -> Dict[str, object]:
-        lg: League = job["league"]
         # Forced result (not owned / no starters)
         if job.get("force_result"):
             fr = job["force_result"]
-            return dict(league=lg, ok=fr["ok"], skipped=fr.get("skipped", False), message=fr["message"])
-        ok, raw = submit_lineup(job["host"], lg.mfl_id, lg.year, week_i, job["starters"], cookie=job["cookie"])
+            return dict(league_id=job["league_id"], ok=fr["ok"], skipped=fr.get("skipped", False), message=fr["message"])
+        ok, raw = submit_lineup(job["host"], job["league_mfl_id"], job["league_year"],
+                                week_i, job["starters"], cookie=job["cookie"])
         # raw may include XML; keep as-is for batch page (legacy)
-        return dict(league=lg, ok=ok, message=raw or ("Lineup submitted successfully" if ok else "Unknown response"))
+        return dict(league_id=job["league_id"], ok=ok, message=raw or ("Lineup submitted successfully" if ok else "Unknown response"))
 
+    leagues_by_id = {lg.id: lg for lg in leagues}
     results = _parallel_map(_submit_one, jobs, max_workers=PARALLEL_WORKERS)
+    for result in results:
+        result["league"] = leagues_by_id[result.pop("league_id")]
 
     return render_template("lineups/summary.html", week=week_i, results=results)
 
@@ -588,7 +610,9 @@ def lineups_auto_submit():
 
         jobs.append(
             dict(
-                league=lg,
+                league_id=lg.id,
+                league_mfl_id=str(lg.mfl_id),
+                league_year=int(lg.year),
                 host=host,
                 cookie=cookie,
                 players=players,
@@ -599,19 +623,18 @@ def lineups_auto_submit():
         )
 
     def _fetch(job: dict) -> Tuple[int, Dict[int, Projection], Optional[str]]:
-        lg: League = job["league"]
         try:
             proj = fetch_projected_scores(
                 job["host"],
-                lg.mfl_id,
-                lg.year,
+                job["league_mfl_id"],
+                job["league_year"],
                 week_i,
                 job["pid_list"],
                 cookie=job["cookie"],
             )
-            return (lg.id, proj, None)
+            return (job["league_id"], proj, None)
         except Exception as exc:
-            return (lg.id, {}, str(exc))
+            return (job["league_id"], {}, str(exc))
 
     proj_results: Dict[int, Dict[str, object]] = {}
     if jobs:
@@ -619,9 +642,10 @@ def lineups_auto_submit():
             proj_results[league_id] = {"projections": proj_map, "error": error}
 
     auto_results: List[Dict[str, object]] = []
+    leagues_by_id = {lg.id: lg for lg in leagues}
 
     for job in jobs:
-        lg: League = job["league"]
+        lg = leagues_by_id[job["league_id"]]
         entry = proj_results.get(lg.id) or {"projections": {}, "error": "Projection lookup failed"}
         error_msg = entry.get("error")
         if error_msg:

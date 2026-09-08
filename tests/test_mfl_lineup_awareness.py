@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from flask import Flask
+from flask import Flask, has_app_context
 
 from app import db
 from models import League, Player, Roster, Team, User
@@ -125,6 +125,17 @@ def _league_with_roster(statuses):
     return league
 
 
+def _additional_league_with_roster(user, mfl_id, player_id):
+    league = League(user=user, mfl_id=mfl_id, name=f"League {mfl_id}", year=2026,
+                    franchise_id="0001", lineup_mode="MANUAL")
+    team = Team(league=league, mfl_id="0001", name="Mine")
+    player = Player(id=player_id, mfl_id=str(player_id), name=f"Player {player_id}", position="WR")
+    db.session.add_all([league, team, player])
+    db.session.add(Roster(team=team, player=player, roster_status="ACTIVE"))
+    db.session.commit()
+    return league
+
+
 def test_asset_sync_persists_status_ir_and_timestamp(db_app):
     with db_app.app_context():
         league = _league_with_roster({999: "ACTIVE"})
@@ -230,6 +241,102 @@ def test_best_ball_auto_submit_skips_projection_and_import(db_app):
         submit.assert_not_called()
         get_info.assert_called_once()
         assert league.lineup_mode == "BEST_BALL"
+
+
+def test_auto_submit_workers_use_snapshots_across_orm_expiring_commits(db_app):
+    with db_app.test_request_context("/lineups/auto-submit", method="POST", data={"week": "1"}):
+        first = _league_with_roster({711: "ACTIVE"})
+        first.lineup_mode = "MANUAL"
+        second = _additional_league_with_roster(first.user, "456", 712)
+        first.roster_slots = second.roster_slots = "1 WR"
+        db.session.commit()
+        rendered = {}
+
+        def refresh(league):
+            db.session.commit()  # Expire every loaded League before worker threads start.
+            return True, None, "www1.myfantasyleague.com", "cookie"
+
+        def projections(host, mfl_id, year, week, player_ids, cookie=None):
+            assert not has_app_context()
+            return {player_ids[0]: Projection(player_ids[0], 10)}
+
+        with patch.object(lineup_routes, "current_user", SimpleNamespace(id=first.user_id)), patch.object(
+            lineup_routes, "_require_recent_sync_or_gate", return_value=None
+        ), patch.object(lineup_routes, "_user_synced_leagues", return_value=[first, second]), patch.object(
+            lineup_routes, "_refresh_lineup_roster", side_effect=refresh
+        ), patch.object(lineup_routes, "fetch_projected_scores", side_effect=projections) as fetch, patch.object(
+            lineup_routes, "pick_optimal_lineup", side_effect=lambda players, *_: [players[0][0]]
+        ), patch.object(lineup_routes, "submit_lineup", return_value=(True, "OK")), patch.object(
+            lineup_routes, "render_template", side_effect=lambda template, **context: rendered.update(context) or template
+        ):
+            assert lineup_routes.lineups_auto_submit.__wrapped__() == "lineups/summary.html"
+
+        assert fetch.call_count == 2
+        assert len(rendered["results"]) == 2
+        assert all(result["ok"] for result in rendered["results"])
+
+
+def test_batch_review_projection_exception_is_per_league_error(db_app):
+    with db_app.test_request_context("/lineups/review", method="POST", data={"week": "1"}):
+        league = _league_with_roster({721: "ACTIVE"})
+        league.lineup_mode = "MANUAL"
+        league.roster_status_synced_at = datetime.utcnow()
+        db.session.commit()
+        rendered = {}
+        with patch.object(lineup_routes, "current_user", SimpleNamespace(id=league.user_id)), patch.object(
+            lineup_routes, "_require_recent_sync_or_gate", return_value=None
+        ), patch.object(lineup_routes, "_user_synced_leagues", return_value=[league]), patch.object(
+            lineup_routes, "fetch_projected_scores", side_effect=RuntimeError("projection down")
+        ), patch.object(
+            lineup_routes, "render_template", side_effect=lambda template, **context: rendered.update(context) or template
+        ):
+            assert lineup_routes.lineups_review.__wrapped__() == "lineups/review.html"
+
+        assert rendered["items"][0]["refresh_warning"] == "Projection error: projection down"
+
+
+def test_batch_review_threaded_projection_worker_uses_primitive_snapshot(db_app):
+    with db_app.test_request_context("/lineups/review", method="POST", data={"week": "2"}):
+        first = _league_with_roster({731: "ACTIVE"})
+        first.lineup_mode = "MANUAL"
+        second = _additional_league_with_roster(first.user, "457", 732)
+        db.session.commit()
+        calls = []
+        with patch.object(lineup_routes, "current_user", SimpleNamespace(id=first.user_id)), patch.object(
+            lineup_routes, "_require_recent_sync_or_gate", return_value=None
+        ), patch.object(lineup_routes, "_user_synced_leagues", return_value=[first, second]), patch.object(
+            lineup_routes, "_refresh_lineup_roster",
+            side_effect=lambda league: (db.session.commit() or True, None, "host", "cookie")
+        ), patch.object(
+            lineup_routes, "fetch_projected_scores",
+            side_effect=lambda host, mfl_id, year, week, ids, cookie=None: calls.append((mfl_id, year, ids)) or {}
+        ), patch.object(lineup_routes, "render_template", return_value="review"):
+            assert lineup_routes.lineups_review.__wrapped__() == "review"
+
+        assert {call[0] for call in calls} == {"123", "457"}
+
+
+def test_batch_submit_threaded_worker_maps_result_to_league_on_main_thread(db_app):
+    with db_app.test_request_context(
+        "/lineups/submit", method="POST",
+        data={"week": "3", "include_1": "1", "starters_1[]": "741"},
+    ):
+        league = _league_with_roster({741: "ACTIVE"})
+        league.lineup_mode = "MANUAL"
+        league.roster_status_synced_at = datetime.utcnow()
+        db.session.commit()
+        rendered = {}
+        with patch.object(lineup_routes, "current_user", SimpleNamespace(id=league.user_id)), patch.object(
+            lineup_routes, "_require_recent_sync_or_gate", return_value=None
+        ), patch.object(lineup_routes, "_user_synced_leagues", return_value=[league]), patch.object(
+            lineup_routes, "submit_lineup", return_value=(True, "OK")
+        ) as submit, patch.object(
+            lineup_routes, "render_template", side_effect=lambda template, **context: rendered.update(context) or template
+        ):
+            assert lineup_routes.lineups_submit.__wrapped__() == "lineups/summary.html"
+
+        submit.assert_called_once_with("api.myfantasyleague.com", "123", 2026, 3, [741], cookie=None)
+        assert rendered["results"][0]["league"] is league
 
 
 def test_rapid_renders_best_ball_state_without_projection(db_app):
