@@ -149,6 +149,11 @@ class League(db.Model):
 
     # IR configuration (nullable: treat None as zero slots)
     ir_slots_max = db.Column(db.Integer, nullable=True)
+    taxi_slots_max = db.Column(db.Integer, nullable=True)
+
+    # MFL lineup configuration. UNKNOWN intentionally remains distinct from manual.
+    lineup_mode = db.Column(db.String(16), nullable=False, default="UNKNOWN")
+    roster_status_synced_at = db.Column(db.DateTime, nullable=True)
 
     # Waiver / blind-bidding configuration (nullable for legacy leagues)
     waiver_type = db.Column(db.String(32), nullable=True)
@@ -302,6 +307,8 @@ class Roster(db.Model):
     )
     is_starter = db.Column(db.Boolean, nullable=False, default=False)
     in_ir = db.Column(db.Boolean, nullable=True)
+    # Normalized MFL roster location: ACTIVE, TAXI, IR, or UNKNOWN.
+    roster_status = db.Column(db.String(16), nullable=False, default="UNKNOWN")
 
     team = db.relationship("Team", back_populates="rosters")
     player = db.relationship("Player", back_populates="rosters")

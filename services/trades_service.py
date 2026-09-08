@@ -120,7 +120,7 @@ def fetch_open_trades_for_user(
         base_url = None
         try:
             info_xml = api_client.get_league_info(lid, cookie)
-            _, _, base_url, _ = parse_league_info(info_xml)
+            _, _, base_url, _, _, _ = parse_league_info(info_xml)
         except Exception as e:
             league_errors.append(f"league_info failed: {e}")
 

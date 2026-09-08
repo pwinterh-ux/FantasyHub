@@ -25,8 +25,8 @@
             <div class="mini">MFL {{ lg.mfl_id }} • Season {{ lg.year }}</div>
           </div>
           <div class="rh">
-            {% if r.ok %}<span class="pill ok">Success</span>{% else %}<span class="pill err">Failed</span>{% endif %}
-            <a href="{{ submit_href }}" class="btn-ghost btn-compact">Submit Lineup</a>
+            {% if r.skipped %}<span class="pill skip">Best Ball</span>{% elif r.ok %}<span class="pill ok">Success</span>{% else %}<span class="pill err">Failed</span>{% endif %}
+            {% if not r.skipped %}<a href="{{ submit_href }}" class="btn-ghost btn-compact">Submit Lineup</a>{% endif %}
           </div>
         </div>
 
@@ -109,6 +109,7 @@
   .pill{display:inline-block;padding:4px 8px;border-radius:999px;font-size:11px;border:1px solid rgba(255,255,255,.18);background:#0b1220;line-height:1}
   .pill.ok{border-color:rgba(16,185,129,.5);color:#86f3c0}
   .pill.err{border-color:rgba(239,68,68,.5);color:#ffb4b4}
+  .pill.skip{border-color:rgba(59,130,246,.5);color:#bfdbfe}
 
   .hdrbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
   .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}

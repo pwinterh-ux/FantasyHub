@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import logging
 import xml.etree.ElementTree as ET
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
@@ -15,6 +16,43 @@ from urllib.parse import urlparse
 # - pick_number (when present) is ALWAYS 1-based (pick 1 == 1, pick 3 == 3)
 # - future picks often have no pick_number => None
 DraftPickT = Tuple[int, int, Optional[int], Optional[str]]
+LINEUP_MODE_MANUAL = "MANUAL"
+LINEUP_MODE_BEST_BALL = "BEST_BALL"
+LINEUP_MODE_UNKNOWN = "UNKNOWN"
+ROSTER_STATUS_ACTIVE = "ACTIVE"
+ROSTER_STATUS_TAXI = "TAXI"
+ROSTER_STATUS_IR = "IR"
+ROSTER_STATUS_UNKNOWN = "UNKNOWN"
+
+log = logging.getLogger(__name__)
+
+
+def normalize_roster_status(value: Any) -> str:
+    """Normalize MFL roster location strings without treating unknown values as active."""
+    raw = str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
+    if not raw or raw in {"ROSTER", "ACTIVE"}:
+        return ROSTER_STATUS_ACTIVE
+    if raw in {"TAXI", "TAXI_SQUAD", "TAXISQUAD"}:
+        return ROSTER_STATUS_TAXI
+    if raw in {"IR", "INJURED_RESERVE", "INJUREDRESERVE", "RESERVE"}:
+        return ROSTER_STATUS_IR
+    log.warning("Unknown MFL roster status %r", value)
+    return ROSTER_STATUS_UNKNOWN
+
+
+def normalize_lineup_mode(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw == "yes":
+        return LINEUP_MODE_BEST_BALL
+    if raw == "no":
+        return LINEUP_MODE_MANUAL
+    return LINEUP_MODE_UNKNOWN
+
+
+@dataclass(frozen=True)
+class RosterPlayer:
+    player_id: int
+    roster_status: str = ROSTER_STATUS_UNKNOWN
 
 
 @dataclass
@@ -23,6 +61,13 @@ class FranchiseAssets:
     player_ids: List[int]
     draft_picks: List[DraftPickT]
     faab_balance: Optional[Decimal] = None
+    roster_players: Optional[List[RosterPlayer]] = None
+
+    def __post_init__(self) -> None:
+        if self.roster_players is None:
+            self.roster_players = [RosterPlayer(pid, ROSTER_STATUS_UNKNOWN) for pid in self.player_ids]
+        elif not self.player_ids:
+            self.player_ids = [entry.player_id for entry in self.roster_players]
 
 
 @dataclass
@@ -269,13 +314,13 @@ def parse_user_leagues(xml_bytes: bytes) -> List[dict]:
 
 # ---------- League info (franchise names/owners + lineup + IR) --------------
 
-def parse_league_info(xml: bytes) -> tuple[dict[str, dict], str | None, str | None, Optional[int]]:
+def parse_league_info(xml: bytes) -> tuple[dict[str, dict], str | None, str | None, Optional[int], str, Optional[int]]:
     """
     Returns:
       - franchise meta map
       - lineup/roster string
       - baseURL (host)
-      - ir_slots_max (int|None)
+      - ir_slots_max, lineup_mode, taxi_slots_max
     """
     root = ET.fromstring(xml)
 
@@ -327,7 +372,7 @@ def parse_league_info(xml: bytes) -> tuple[dict[str, dict], str | None, str | No
     lineup_str = _extract_lineup_string(root)
 
     # 3) IR slots + other league attrs (read from league tag attributes directly)
-    raw_ir = raw_bbid_limit = raw_last_reg = raw_waiver_type = None
+    raw_ir = raw_bbid_limit = raw_last_reg = raw_waiver_type = raw_taxi = raw_best = None
     if league_el is not None:
         attrs = dict(league_el.attrib or {})
         print(f"[parse_league_info] league attrs: {attrs}")
@@ -336,6 +381,8 @@ def parse_league_info(xml: bytes) -> tuple[dict[str, dict], str | None, str | No
         raw_bbid_limit = attrs.get("bbidSeasonLimit")
         raw_last_reg = attrs.get("lastRegularSeasonWeek")
         raw_waiver_type = attrs.get("currentWaiverType")
+        raw_taxi = attrs.get("taxiSquad") or attrs.get("taxi_squad")
+        raw_best = attrs.get("bestLineup")
 
     ir_slots_max = None
     if raw_ir not in (None, ""):
@@ -351,7 +398,13 @@ def parse_league_info(xml: bytes) -> tuple[dict[str, dict], str | None, str | No
     )
     print(f"[parse_league_info] parsed ir_slots_max={ir_slots_max} (from raw={repr(raw_ir)})")
 
-    return meta, lineup_str, base_url, ir_slots_max
+    taxi_slots_max = None
+    if raw_taxi not in (None, ""):
+        try:
+            taxi_slots_max = int(str(raw_taxi).strip())
+        except (TypeError, ValueError):
+            pass
+    return meta, lineup_str, base_url, ir_slots_max, normalize_lineup_mode(raw_best), taxi_slots_max
 
 
 def parse_league_waiver_settings(xml: bytes) -> dict[str, Any]:
@@ -493,6 +546,7 @@ def parse_assets(xml_bytes: bytes) -> List[FranchiseAssets]:
         fid = _fid(fid)
 
         player_ids: List[int] = []
+        roster_players: List[RosterPlayer] = []
         players_el = fr.find("players")
         if players_el is not None:
             for pe in players_el.findall("player"):
@@ -500,7 +554,9 @@ def parse_assets(xml_bytes: bytes) -> List[FranchiseAssets]:
                 if not pid:
                     continue
                 try:
-                    player_ids.append(int(pid))
+                    pid_i = int(pid)
+                    player_ids.append(pid_i)
+                    roster_players.append(RosterPlayer(pid_i, normalize_roster_status(pe.get("status"))))
                 except ValueError:
                     continue
 
@@ -543,6 +599,7 @@ def parse_assets(xml_bytes: bytes) -> List[FranchiseAssets]:
                 player_ids=player_ids,
                 draft_picks=picks,
                 faab_balance=faab_balance,
+                roster_players=roster_players,
             )
         )
 
@@ -588,14 +645,17 @@ def parse_rosters_fallback(rosters_xml: bytes, picks_xml: Optional[bytes] = None
         if not fid:
             continue
         player_ids: List[int] = []
+        roster_players: List[RosterPlayer] = []
         for pe in fr.findall(".//player"):
             pid = pe.get("id")
             if pid:
                 try:
-                    player_ids.append(int(pid))
+                    pid_i = int(pid)
+                    player_ids.append(pid_i)
+                    roster_players.append(RosterPlayer(pid_i, normalize_roster_status(pe.get("status"))))
                 except Exception:
                     continue
-        assets[fid] = FranchiseAssets(franchise_id=fid, player_ids=player_ids, draft_picks=[])
+        assets[fid] = FranchiseAssets(franchise_id=fid, player_ids=player_ids, draft_picks=[], roster_players=roster_players)
 
     for fid, picks in picks_by_fid.items():
         fa = assets.get(fid)
