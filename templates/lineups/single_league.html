@@ -31,6 +31,7 @@
 
   <!-- Body (compact grid) -->
   <div class="tile pad dark body" style="max-width:1200px;margin:0 auto 90px;">
+    {% if refresh_warning %}<div class="refresh-warning">{{ refresh_warning }} Cached players are shown, but submission will retry the safety refresh.</div>{% endif %}
     <form id="lineupForm" method="POST" action="{{ url_for('lineups.lineups_single_submit', league_id=league.id) }}">
       <input type="hidden" name="week" value="{{ week }}">
       <input type="hidden" name="next" value="{{ next_url }}">
@@ -46,14 +47,19 @@
 
             <div class="list">
               {% for r in rows %}
-                <label class="row">
+                <label class="row{% if not r.lineup_eligible %} ineligible{% endif %}">
                   <input type="checkbox"
                          name="starters[]"
                          value="{{ r.player_id }}"
                          {% if r.player_id in auto_selected %}checked{% endif %}
+                         {% if not r.lineup_eligible %}disabled{% endif %}
                          data-pos="{{ r.position }}"
                          data-proj="{{ r.projected if r.projected is not none else '' }}">
-                  <span class="nm">{{ r.name }}</span>
+                  <span class="nm">{{ r.name }}
+                    {% if r.roster_status == 'TAXI' %}<span class="status-badge taxi">On Taxi</span>
+                    {% elif r.roster_status == 'IR' %}<span class="status-badge ir">On IR</span>
+                    {% elif r.roster_status != 'ACTIVE' %}<span class="status-badge unknown">Status Unknown</span>{% endif %}
+                  </span>
                   {% if r.team %}<span class="tm">— {{ r.team }}</span>{% endif %}
                   <span class="pj">{{ r.projected if r.projected is not none else '—' }}</span>
                 </label>
@@ -93,6 +99,12 @@
   .hdr-row { display:flex; align-items:flex-end; justify-content:space-between; gap:10px; }
   .hdr { margin:0; font-size:16px; font-weight:700; }
   .sub { font-size:11px; color: var(--mut); }
+  .row.ineligible { cursor:not-allowed;background:rgba(148,163,184,.07); }
+  .status-badge { padding:1px 5px;border-radius:999px;font-size:9px;text-transform:uppercase; }
+  .status-badge.taxi { color:#fde68a;border:1px solid rgba(245,158,11,.55); }
+  .status-badge.ir { color:#fecaca;border:1px solid rgba(239,68,68,.45); }
+  .status-badge.unknown { color:#cbd5e1;border:1px solid rgba(203,213,225,.35); }
+  .refresh-warning { padding:8px;margin-bottom:8px;border-radius:8px;background:rgba(245,158,11,.1); }
 
   .hdr-right { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
   .wk-label { font-size:12px; color:var(--mut); }

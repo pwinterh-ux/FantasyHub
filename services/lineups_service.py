@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote_plus
 
@@ -10,8 +11,17 @@ import requests
 
 from app import db
 from models import League, Team, Roster, Player
+from services.mfl_client import MFLClient
+from services.mfl_parsers import (
+    parse_rosters_fallback,
+    ROSTER_STATUS_ACTIVE,
+    ROSTER_STATUS_IR,
+    ROSTER_STATUS_TAXI,
+    ROSTER_STATUS_UNKNOWN,
+)
 
 log = logging.getLogger(__name__)
+ROSTER_STATUS_TTL_SECONDS = 300
 
 # ---------------------------- Data types ------------------------------------
 
@@ -84,6 +94,94 @@ def get_my_team_player_ids(league_id_pk: int) -> List[int]:
         except Exception:
             continue
     return player_ids
+
+
+def is_lineup_eligible_status(status: Optional[str]) -> bool:
+    return str(status or ROSTER_STATUS_UNKNOWN).upper() == ROSTER_STATUS_ACTIVE
+
+
+def get_my_team_roster(league_id_pk: int) -> List[Roster]:
+    league = db.session.get(League, league_id_pk)
+    if not league:
+        return []
+    team = db.session.query(Team).filter_by(
+        league_id=league.id, mfl_id=league.franchise_id
+    ).first()
+    return db.session.query(Roster).filter_by(team_id=team.id).all() if team else []
+
+
+def get_my_team_roster_statuses(league_id_pk: int) -> Dict[int, str]:
+    return {
+        int(row.player_id): str(row.roster_status or ROSTER_STATUS_UNKNOWN).upper()
+        for row in get_my_team_roster(league_id_pk)
+    }
+
+
+def get_my_team_active_player_ids(league_id_pk: int) -> List[int]:
+    return [pid for pid, status in get_my_team_roster_statuses(league_id_pk).items()
+            if is_lineup_eligible_status(status)]
+
+
+def roster_status_is_fresh(league: League, *, now: Optional[datetime] = None) -> bool:
+    synced_at = league.roster_status_synced_at
+    return bool(synced_at and (now or datetime.utcnow()) - synced_at <= timedelta(seconds=ROSTER_STATUS_TTL_SECONDS))
+
+
+def ensure_roster_status_fresh(
+    league: League, *, host: str, cookie: Optional[str], now: Optional[datetime] = None
+) -> Tuple[bool, Optional[str]]:
+    """Refresh roster locations with one MFL rosters request when the five-minute TTL expires."""
+    if roster_status_is_fresh(league, now=now):
+        return True, None
+    try:
+        client = MFLClient(year=league.year, base_url=f"https://{_norm_host(host)}/{league.year}/")
+        assets_list = parse_rosters_fallback(client.get_rosters(league.mfl_id, cookie or ""))
+        wanted_fid = _zpad4(league.franchise_id or "")
+        assets = next((item for item in assets_list if item.franchise_id == wanted_fid), None)
+        if assets is None:
+            raise RuntimeError("MFL roster response did not include your franchise")
+        team = db.session.query(Team).filter_by(league_id=league.id, mfl_id=wanted_fid).first()
+        if not team:
+            raise RuntimeError("Your MFL franchise is not present in the local league")
+
+        incoming = {entry.player_id: entry.roster_status for entry in (assets.roster_players or [])}
+        existing = {row.player_id: row for row in db.session.query(Roster).filter_by(team_id=team.id).all()}
+        for player_id, status in incoming.items():
+            if not db.session.get(Player, player_id):
+                db.session.add(Player(id=player_id, mfl_id=str(player_id), name=f"Player #{player_id}"))
+            row = existing.get(player_id)
+            if row is None:
+                row = Roster(team_id=team.id, player_id=player_id, is_starter=False)
+                db.session.add(row)
+            row.roster_status = status
+            row.in_ir = status == ROSTER_STATUS_IR
+        for player_id, row in existing.items():
+            if player_id not in incoming:
+                db.session.delete(row)
+        league.roster_status_synced_at = now or datetime.utcnow()
+        db.session.commit()
+        return True, None
+    except Exception as exc:
+        db.session.rollback()
+        log.exception("MFL roster-status refresh failed for league %s", league.mfl_id)
+        return False, f"Could not refresh current Taxi/IR status: {exc}"
+
+
+def validate_lineup_starters(league_id_pk: int, submitted: List[int]) -> Optional[str]:
+    """Reject any non-owned or non-ACTIVE starter instead of silently changing a lineup."""
+    statuses = get_my_team_roster_statuses(league_id_pk)
+    for player_id in submitted:
+        if player_id not in statuses:
+            return f"Lineup not submitted: player {player_id} is not on your roster."
+        status = statuses[player_id]
+        if not is_lineup_eligible_status(status):
+            player = db.session.get(Player, player_id)
+            name = player.name if player and player.name else f"Player {player_id}"
+            label = {ROSTER_STATUS_TAXI: "Taxi Squad", ROSTER_STATUS_IR: "Injured Reserve"}.get(
+                status, "an unknown roster status"
+            )
+            return f"Lineup not submitted: {name} is currently on {label}."
+    return None
 
 
 # ----------------------- Projected scores (XML) -----------------------------
@@ -248,6 +346,7 @@ POS_ORDER = {"QB": 0, "RB": 1, "WR": 2, "TE": 3}
 def group_and_sort_players_for_review(
     players: List[Tuple[int, str, str, str]],
     projections: Dict[int, Projection],
+    roster_statuses: Optional[Dict[int, str]] = None,
 ) -> Dict[str, List[Dict[str, object]]]:
     buckets: Dict[str, List[Dict[str, object]]] = {}
 
@@ -256,9 +355,13 @@ def group_and_sort_players_for_review(
         proj = p.projected if p else None
         key = pos.upper() if pos and pos.upper() in POS_ORDER else ("OTHER" if pos else "OTHER")
 
-        buckets.setdefault(key, []).append(
-            dict(player_id=pid, name=name, position=key if key != "OTHER" else (pos or "OTHER"), team=nfl, projected=proj)
-        )
+        status = (roster_statuses or {}).get(pid, ROSTER_STATUS_UNKNOWN)
+        buckets.setdefault(key, []).append(dict(
+            player_id=pid, name=name,
+            position=key if key != "OTHER" else (pos or "OTHER"), team=nfl,
+            projected=proj, roster_status=status,
+            lineup_eligible=is_lineup_eligible_status(status),
+        ))
 
     def sort_key(row: Dict[str, object]):
         proj = row.get("projected", None)
