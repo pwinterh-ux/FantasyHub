@@ -13,12 +13,15 @@ from app import db
 from models import League, Team, Roster, Player
 from services.mfl_client import MFLClient
 from services.mfl_parsers import (
+    parse_league_info,
     parse_rosters_fallback,
+    LINEUP_MODE_UNKNOWN,
     ROSTER_STATUS_ACTIVE,
     ROSTER_STATUS_IR,
     ROSTER_STATUS_TAXI,
     ROSTER_STATUS_UNKNOWN,
 )
+from services.mfl_sync import sync_league_info
 
 log = logging.getLogger(__name__)
 ROSTER_STATUS_TTL_SECONDS = 300
@@ -125,6 +128,55 @@ def get_my_team_active_player_ids(league_id_pk: int) -> List[int]:
 def roster_status_is_fresh(league: League, *, now: Optional[datetime] = None) -> bool:
     synced_at = league.roster_status_synced_at
     return bool(synced_at and (now or datetime.utcnow()) - synced_at <= timedelta(seconds=ROSTER_STATUS_TTL_SECONDS))
+
+
+def ensure_lineup_mode_resolved(
+    league: League, *, host: str, cookie: Optional[str]
+) -> str:
+    """Resolve a migrated UNKNOWN lineup mode once, retaining manual fallback on failure."""
+    current_mode = str(league.lineup_mode or LINEUP_MODE_UNKNOWN).upper()
+    if current_mode != LINEUP_MODE_UNKNOWN:
+        return current_mode
+
+    try:
+        client = MFLClient(year=league.year, base_url=f"https://{_norm_host(host)}/{league.year}/")
+        info_xml = client.get_league_info(
+            league.mfl_id,
+            cookie or "",
+            context={"operation": "lineup_mode_self_heal", "league_id": str(league.mfl_id)},
+        )
+        franchise_meta, roster_slots, _base_url, ir_slots_max, lineup_mode, taxi_slots_max = (
+            parse_league_info(info_xml)
+        )
+        sync_league_info(
+            league,
+            franchise_meta,
+            roster_slots=roster_slots,
+            ir_slots_max=ir_slots_max,
+            lineup_mode=lineup_mode,
+            taxi_slots_max=taxi_slots_max,
+            commit=False,
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        log.exception(
+            "Unable to refresh MFL lineup mode for league_id=%s mfl_id=%s; "
+            "proceeding with manual-lineup fallback",
+            league.id,
+            league.mfl_id,
+        )
+        return LINEUP_MODE_UNKNOWN
+
+    resolved_mode = str(league.lineup_mode or LINEUP_MODE_UNKNOWN).upper()
+    if resolved_mode == LINEUP_MODE_UNKNOWN:
+        log.warning(
+            "Unable to resolve MFL lineup mode for league_id=%s mfl_id=%s; "
+            "proceeding with manual-lineup fallback",
+            league.id,
+            league.mfl_id,
+        )
+    return resolved_mode
 
 
 def ensure_roster_status_fresh(

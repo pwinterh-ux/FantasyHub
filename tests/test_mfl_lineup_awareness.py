@@ -9,6 +9,7 @@ from app import db
 from models import League, Player, Roster, Team, User
 from services.lineups_service import (
     Projection,
+    ensure_lineup_mode_resolved,
     ensure_roster_status_fresh,
     get_my_team_active_player_ids,
     get_my_team_player_ids,
@@ -47,6 +48,55 @@ def test_parse_best_lineup_and_taxi_capacity(attribute, expected):
     parsed = parse_league_info(f'<league taxiSquad="7"{best}/>'.encode())
     assert parsed[4] == expected
     assert parsed[5] == 7
+
+
+@pytest.mark.parametrize("mode", ["MANUAL", "BEST_BALL"])
+def test_resolved_lineup_mode_makes_no_league_info_request(mode, db_app):
+    with db_app.app_context():
+        league = _league_with_roster({100: "ACTIVE"})
+        league.lineup_mode = mode
+        db.session.commit()
+        with patch("services.lineups_service.MFLClient.get_league_info") as get_info:
+            assert ensure_lineup_mode_resolved(
+                league, host="www1.myfantasyleague.com", cookie="cookie"
+            ) == mode
+        get_info.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "best_lineup, expected",
+    [("Yes", "BEST_BALL"), ("No", "MANUAL"), ("maybe", "UNKNOWN"), (None, "UNKNOWN")],
+)
+def test_unknown_lineup_mode_self_heals_once(best_lineup, expected, db_app, caplog):
+    with db_app.app_context():
+        league = _league_with_roster({110: "ACTIVE"})
+        assert league.lineup_mode == "UNKNOWN"
+        attr = f' bestLineup="{best_lineup}"' if best_lineup is not None else ""
+        xml = f'<league taxiSquad="8"{attr}/>'.encode()
+        with patch("services.lineups_service.MFLClient.get_league_info", return_value=xml) as get_info:
+            mode = ensure_lineup_mode_resolved(
+                league, host="www1.myfantasyleague.com", cookie="cookie"
+            )
+        assert mode == expected
+        assert league.lineup_mode == expected
+        assert league.taxi_slots_max == 8
+        get_info.assert_called_once()
+        if expected == "UNKNOWN":
+            assert "proceeding with manual-lineup fallback" in caplog.text
+
+
+def test_lineup_mode_request_failure_retains_unknown_and_logs(db_app, caplog):
+    with db_app.app_context():
+        league = _league_with_roster({120: "ACTIVE"})
+        with patch(
+            "services.lineups_service.MFLClient.get_league_info", side_effect=TimeoutError("timeout")
+        ) as get_info:
+            assert ensure_lineup_mode_resolved(
+                league, host="www1.myfantasyleague.com", cookie="cookie"
+            ) == "UNKNOWN"
+        assert league.lineup_mode == "UNKNOWN"
+        get_info.assert_called_once()
+        assert "proceeding with manual-lineup fallback" in caplog.text
 
 
 @pytest.mark.parametrize("parser", [parse_assets, parse_rosters_fallback])
@@ -153,7 +203,7 @@ def test_failed_required_refresh_keeps_stale_data_and_fails_closed(db_app):
 def test_best_ball_auto_submit_skips_projection_and_import(db_app):
     with db_app.test_request_context("/lineups/auto-submit", method="POST", data={"week": "1"}):
         league = _league_with_roster({701: "ACTIVE"})
-        league.lineup_mode = "BEST_BALL"
+        league.lineup_mode = "UNKNOWN"
         db.session.commit()
         rendered = {}
 
@@ -167,19 +217,25 @@ def test_best_ball_auto_submit_skips_projection_and_import(db_app):
             lineup_routes, "render_template", side_effect=capture
         ), patch.object(lineup_routes, "fetch_projected_scores") as projections, patch.object(
             lineup_routes, "submit_lineup"
-        ) as submit:
+        ) as submit, patch.object(lineup_routes, "pick_optimal_lineup") as optimizer, patch(
+            "services.lineups_service.MFLClient.get_league_info",
+            return_value=b'<league bestLineup="Yes"/>',
+        ) as get_info:
             response = lineup_routes.lineups_auto_submit.__wrapped__()
         assert response == "lineups/summary.html"
         assert rendered["results"][0]["skipped"] is True
         assert "Best Ball" in rendered["results"][0]["message"]
         projections.assert_not_called()
+        optimizer.assert_not_called()
         submit.assert_not_called()
+        get_info.assert_called_once()
+        assert league.lineup_mode == "BEST_BALL"
 
 
 def test_rapid_renders_best_ball_state_without_projection(db_app):
     with db_app.test_request_context("/lineups/rapid/league"):
         league = _league_with_roster({801: "ACTIVE"})
-        league.lineup_mode = "BEST_BALL"
+        league.lineup_mode = "UNKNOWN"
         db.session.commit()
         from flask import session
         session["rapid_queue"] = [league.id]
@@ -196,10 +252,85 @@ def test_rapid_renders_best_ball_state_without_projection(db_app):
         ), patch.object(lineup_routes, "render_template", side_effect=capture), patch.object(
             lineup_routes, "fetch_projected_scores"
         ) as projections, patch.object(lineup_routes, "submit_lineup") as submit:
-            response = lineup_routes.lineups_rapid_league.__wrapped__()
+            with patch.object(lineup_routes, "pick_optimal_lineup") as optimizer, patch(
+                "services.lineups_service.MFLClient.get_league_info",
+                return_value=b'<league bestLineup="Yes"/>',
+            ) as get_info:
+                response = lineup_routes.lineups_rapid_league.__wrapped__()
         assert response == "lineups/rapid_league.html"
         assert context["best_ball"] is True
         projections.assert_not_called()
+        optimizer.assert_not_called()
+        submit.assert_not_called()
+        get_info.assert_called_once()
+        assert league.lineup_mode == "BEST_BALL"
+
+
+@pytest.mark.parametrize(
+    "league_info, expected_mode",
+    [(b'<league bestLineup="No"/>', "MANUAL"), (b"<league/>", "UNKNOWN")],
+)
+def test_rapid_unknown_manual_or_unresolved_uses_manual_fallback(league_info, expected_mode, db_app):
+    with db_app.test_request_context("/lineups/rapid/league"):
+        league = _league_with_roster({850: "ACTIVE"})
+        league.roster_status_synced_at = datetime.utcnow()
+        db.session.commit()
+        from flask import session
+        session.update(rapid_queue=[league.id], rapid_idx=0, rapid_week=1)
+        with patch.object(lineup_routes, "current_user", SimpleNamespace(id=league.user_id)), patch.object(
+            lineup_routes, "_require_recent_sync_or_gate", return_value=None
+        ), patch.object(lineup_routes, "render_template", return_value="rapid"), patch.object(
+            lineup_routes, "fetch_projected_scores", return_value={}
+        ) as projections, patch(
+            "services.lineups_service.MFLClient.get_league_info", return_value=league_info
+        ) as get_info:
+            assert lineup_routes.lineups_rapid_league.__wrapped__() == "rapid"
+        get_info.assert_called_once()
+        projections.assert_called_once()
+        assert league.lineup_mode == expected_mode
+
+
+def test_rapid_lineup_mode_refresh_failure_continues_manual_fallback(db_app, caplog):
+    with db_app.test_request_context("/lineups/rapid/league"):
+        league = _league_with_roster({875: "ACTIVE"})
+        league.roster_status_synced_at = datetime.utcnow()
+        db.session.commit()
+        from flask import session
+        session.update(rapid_queue=[league.id], rapid_idx=0, rapid_week=1)
+        with patch.object(lineup_routes, "current_user", SimpleNamespace(id=league.user_id)), patch.object(
+            lineup_routes, "_require_recent_sync_or_gate", return_value=None
+        ), patch.object(lineup_routes, "render_template", return_value="rapid"), patch.object(
+            lineup_routes, "fetch_projected_scores", return_value={}
+        ) as projections, patch(
+            "services.lineups_service.MFLClient.get_league_info", side_effect=TimeoutError("timeout")
+        ):
+            assert lineup_routes.lineups_rapid_league.__wrapped__() == "rapid"
+        projections.assert_called_once()
+        assert league.lineup_mode == "UNKNOWN"
+        assert "proceeding with manual-lineup fallback" in caplog.text
+
+
+def test_stale_rapid_form_resolving_best_ball_skips_before_import(db_app):
+    with db_app.app_context():
+        league = _league_with_roster({890: "ACTIVE"})
+        league.roster_status_synced_at = datetime.utcnow()
+        db.session.commit()
+        league_id, user_id = league.id, league.user_id
+    with db_app.test_request_context(
+        "/lineups/rapid/submit", method="POST",
+        data={"league_id": str(league_id), "week": "1", "starters[]": "890"},
+    ):
+        from flask import session
+        session.update(rapid_queue=[league_id], rapid_idx=0, rapid_week=1)
+        with patch.object(lineup_routes, "current_user", SimpleNamespace(id=user_id)), patch.object(
+            lineup_routes, "_require_recent_sync_or_gate", return_value=None
+        ), patch("services.lineups_service.MFLClient.get_league_info", return_value=b'<league bestLineup="Yes"/>'), patch.object(
+            lineup_routes, "submit_lineup"
+        ) as submit:
+            response = lineup_routes.lineups_rapid_submit.__wrapped__()
+        assert response.get_json()["ok"] is True
+        assert response.get_json()["skipped"] is True
+        assert "Best Ball" in response.get_json()["message"]
         submit.assert_not_called()
 
 

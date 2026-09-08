@@ -27,6 +27,7 @@ from services.lineups_service import (
     get_my_team_roster_statuses,
     is_lineup_eligible_status,
     ensure_roster_status_fresh,
+    ensure_lineup_mode_resolved,
     validate_lineup_starters,
     fetch_projected_scores,
     submit_lineup,
@@ -111,6 +112,12 @@ def _refresh_lineup_roster(league: League) -> Tuple[bool, Optional[str], str, Op
     cookie = _cookie_header_for_host(host)
     ok, error = ensure_roster_status_fresh(league, host=host, cookie=cookie)
     return ok, error, host, cookie
+
+
+def _resolve_lineup_mode(league: League) -> str:
+    host = _league_host(league) or "api.myfantasyleague.com"
+    cookie = _cookie_header_for_host(host)
+    return ensure_lineup_mode_resolved(league, host=host, cookie=cookie)
 
 
 def _eligible_players(league_id: int, players: List[Tuple[int, str, str, str]]):
@@ -336,7 +343,7 @@ def lineups_review():
         if getattr(lg, "user_id", None) != current_user.id:
             continue
 
-        if lg.lineup_mode == LINEUP_MODE_BEST_BALL:
+        if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
             jobs.append(dict(league=lg, host=None, cookie=None, players=[], pid_list=[],
                              my_team_name=None, starters_label="", best_ball=True,
                              refresh_warning=None))
@@ -451,7 +458,7 @@ def lineups_submit():
             ))
             continue
 
-        if lg.lineup_mode == LINEUP_MODE_BEST_BALL:
+        if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
             jobs.append(dict(
                 league=lg, host=None, cookie=None, starters=[],
                 force_result=dict(ok=True, skipped=True, message="Skipped — Best Ball (MFL sets optimal lineup)")
@@ -535,7 +542,7 @@ def lineups_auto_submit():
             )
             continue
 
-        if lg.lineup_mode == LINEUP_MODE_BEST_BALL:
+        if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
             forced_results.append(dict(
                 league=lg, ok=True, skipped=True,
                 message="Skipped — Best Ball (MFL sets optimal lineup)",
@@ -799,7 +806,7 @@ def lineups_rapid_league():
         session.modified = True
         return redirect(url_for("lineups.lineups_rapid_league"))
 
-    if lg.lineup_mode == LINEUP_MODE_BEST_BALL:
+    if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
         return render_template(
             "lineups/rapid_league.html", week=week_i, league=lg,
             my_team_name=None, starters_label="", total_required=None, ranges={},
@@ -886,8 +893,19 @@ def lineups_rapid_submit():
     if not lg or getattr(lg, "user_id", None) != current_user.id:
         return jsonify({"ok": False, "message": "League not found or not owned by you.", "next": False}), 404
 
-    if lg.lineup_mode == LINEUP_MODE_BEST_BALL:
-        return jsonify({"ok": False, "message": "Best Ball league: no lineup submission is required.", "next": False}), 400
+    if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
+        message = "Best Ball — no lineup required (MFL sets the optimal lineup)."
+        _record_rapid_event(lg, "skipped", message)
+        queue: List[int] = session.get("rapid_queue") or []
+        idx = int(session.get("rapid_idx") or 0)
+        session["rapid_idx"] = min(idx + 1, len(queue))
+        session.modified = True
+        return jsonify({
+            "ok": True,
+            "skipped": True,
+            "message": message,
+            "next": session["rapid_idx"] < len(queue),
+        })
 
     vals = request.form.getlist("starters[]") or request.form.getlist("starters")
     submitted: List[int] = []
@@ -1047,7 +1065,7 @@ def lineups_single_league(league_id: int):
     if selected_week < current_week:
         selected_week = current_week
 
-    if lg.lineup_mode == LINEUP_MODE_BEST_BALL:
+    if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
         flash("Best Ball league: MFL sets the optimal lineup; no weekly submission is required.", "info")
         return redirect(request.args.get("next") or "/leagues")
 
@@ -1101,8 +1119,13 @@ def lineups_single_submit(league_id: int):
     lg: League | None = db.session.get(League, league_id)
     if not lg or getattr(lg, "user_id", None) != current_user.id:
         return jsonify({"ok": False, "message": "League not found or not owned by you."}), 404
-    if lg.lineup_mode == LINEUP_MODE_BEST_BALL:
-        return jsonify({"ok": False, "message": "Best Ball league: no lineup submission is required."}), 400
+    if _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL:
+        return jsonify({
+            "ok": True,
+            "skipped": True,
+            "message": "Best Ball — no lineup required (MFL sets the optimal lineup).",
+            "redirect": request.args.get("next") or request.form.get("next") or "/leagues",
+        })
 
     try:
         week_i = int(str(request.form.get("week")))
