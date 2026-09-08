@@ -74,7 +74,7 @@ def get_my_team_player_ids(league_id_pk: int) -> List[int]:
     """
     Return ALL rostered player IDs (ints) for the user's franchise
     in the given League (by DB primary key), using Team.mfl_id == League.franchise_id.
-    Includes any Taxi/IR because status isn't stored (as requested).
+    Includes Taxi and IR players regardless of their stored roster status.
     """
     league: League | None = db.session.get(League, league_id_pk)
     if not league:
