@@ -39,6 +39,7 @@ from services.lineups_service import (
     Projection,
 )
 from services.mfl_parsers import LINEUP_MODE_BEST_BALL
+from services.nfl_week import current_nfl_week
 
 lineups_bp = Blueprint("lineups", __name__, template_folder="../templates")
 
@@ -211,43 +212,7 @@ def _date_based_lineup_week(year: int, today: date) -> int | None:
 
 
 def _effective_current_week(year: int) -> int:
-    cfg_week = current_app.config.get("MFL_CURRENT_WEEK")
-    try:
-        forced_week = int(cfg_week)
-    except (TypeError, ValueError):
-        forced_week = None
-    if forced_week and 1 <= forced_week <= 22:
-        return forced_week
-
-    try:
-        wk = int(current_app.config.get("MFL_WEEK_FALLBACK", 1))
-    except (TypeError, ValueError):
-        wk = 1
-    if wk < 1:
-        wk = 1
-
-    try:
-        today = datetime.now().date()
-    except Exception:
-        today = None
-
-    if today:
-        date_week = _date_based_lineup_week(year, today)
-        if date_week is not None:
-            wk = max(wk, date_week)
-
-    minwk = current_app.config.get("MFL_MIN_CURRENT_WEEK")
-    if isinstance(minwk, int) and 1 <= minwk <= 22:
-        wk = max(wk, minwk)
-
-    try:
-        max_week = int(current_app.config.get("MFL_MAX_WEEKS", MFL_MAX_WEEKS_FALLBACK))
-    except (TypeError, ValueError):
-        max_week = MFL_MAX_WEEKS_FALLBACK
-    if max_week < 1:
-        max_week = MFL_MAX_WEEKS_FALLBACK
-
-    return max(1, min(wk, max_week))
+    return current_nfl_week(year)
 
 
 def _allowed_weeks_from(current_week: int, max_week: int) -> List[int]:

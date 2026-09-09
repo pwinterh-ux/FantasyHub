@@ -11,6 +11,8 @@ from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, Any
 from urllib.parse import unquote_plus, urlparse
 
+import json
+
 import requests
 from flask import current_app
 
@@ -342,6 +344,77 @@ class MFLClient:
         if context:
             ctx.update(context)
         return self._export("pendingTrades", params={"L": league_id}, cookie=cookie, context=ctx)
+
+    def get_top_adds(self, week: int | None = None) -> Dict[str, Any]:
+        """Return normalized site-wide MFL ``TYPE=topAdds`` data."""
+        params: Dict[str, Any] = {"JSON": "1", "XML": "0"}
+        if week is not None:
+            params["W"] = int(week)
+        raw = self._export(
+            "topAdds",
+            params=params,
+            context={"resource": "topAdds", "week": week},
+        )
+        return self.parse_top_adds(raw, requested_week=week)
+
+    @staticmethod
+    def parse_top_adds(
+        payload: bytes | str | Dict[str, Any],
+        *,
+        requested_week: int | None = None,
+    ) -> Dict[str, Any]:
+        """Defensively normalize MFL's JSON/XML-to-JSON ``topAdds`` shape."""
+        if isinstance(payload, dict):
+            data = payload
+        else:
+            if isinstance(payload, bytes):
+                payload = payload.decode("utf-8", errors="replace")
+            data = json.loads(payload or "{}")
+
+        container = data.get("topAdds") if isinstance(data, dict) else {}
+        if not isinstance(container, dict):
+            container = {}
+        raw_players = container.get("player", [])
+        if isinstance(raw_players, dict):
+            raw_players = [raw_players]
+        if not isinstance(raw_players, list):
+            raw_players = []
+
+        players = []
+        seen = set()
+        for row in raw_players:
+            if not isinstance(row, dict):
+                continue
+            mfl_id = str(row.get("id") or "").strip()
+            if not mfl_id:
+                continue
+            # MFL ids are numeric in the local model; canonicalizing also
+            # makes leading-zero duplicates resolve to the same player.
+            try:
+                canonical_id = str(int(mfl_id))
+            except (TypeError, ValueError):
+                continue
+            if canonical_id in seen:
+                continue
+            try:
+                percent = float(row.get("percent"))
+                if not math.isfinite(percent):
+                    raise ValueError
+            except (TypeError, ValueError):
+                percent = None
+            seen.add(canonical_id)
+            players.append({
+                "mfl_id": canonical_id,
+                "add_percent": percent,
+                "trend_rank": len(players) + 1,
+            })
+
+        raw_week = container.get("week", requested_week)
+        try:
+            resolved_week = int(raw_week)
+        except (TypeError, ValueError):
+            resolved_week = requested_week
+        return {"week": resolved_week, "players": players}
 
 
     def submit_fcfs_waiver(
