@@ -5,32 +5,45 @@ from services.mfl_client import MFLClient
 import services.waivers_service as service
 
 
-def test_top_adds_parser_preserves_order_and_normalizes_rows():
-    parsed = MFLClient.parse_top_adds({
-        "topAdds": {"week": "1", "player": [
-            {"id": "17545", "percent": "18.42"},
-            {"id": "17480", "percent": "12.10"},
-            {"id": "017545", "percent": "99"},  # duplicate
-            {"id": "bad", "percent": "4"},
-        ]}
-    })
-    assert parsed["week"] == 1
+def test_top_adds_parser_preserves_verified_xml_order_and_normalizes_rows():
+    parsed = MFLClient.parse_top_adds(b"""<topAdds>
+        <player id="16850" percent="22.15"/>
+        <player id="15738" percent="13.01"/>
+        <player id="016850" percent="99"/>
+        <player id="bad" percent="4"/>
+        <player percent="3"/>
+    </topAdds>""")
     assert parsed["players"] == [
-        {"mfl_id": "17545", "add_percent": 18.42, "trend_rank": 1},
-        {"mfl_id": "17480", "add_percent": 12.1, "trend_rank": 2},
+        {"mfl_id": "16850", "add_percent": 22.15, "trend_rank": 1},
+        {"mfl_id": "15738", "add_percent": 13.01, "trend_rank": 2},
     ]
 
 
-def test_top_adds_parser_handles_single_player_and_invalid_percent():
+def test_top_adds_parser_handles_invalid_percent_and_empty_response():
     parsed = MFLClient.parse_top_adds(
-        '{"topAdds":{"week":"2","player":{"id":"00123","percent":"n/a"}}}'
+        '<topAdds><player id="00123" percent="n/a"/></topAdds>'
     )
-    assert parsed == {"week": 2, "players": [
+    assert parsed == {"players": [
         {"mfl_id": "123", "add_percent": None, "trend_rank": 1}
     ]}
+    assert MFLClient.parse_top_adds(b"") == {"players": []}
+    assert MFLClient.parse_top_adds(b"<response/>") == {"players": []}
 
 
-def test_top_adds_cache_reuses_fresh_refetches_expired_and_keys_by_week():
+def test_get_top_adds_sends_no_week_status_or_json_and_supports_count():
+    xml = b'<topAdds><player id="16850" percent="22.15"/></topAdds>'
+    client = MFLClient(2026)
+    with patch.object(client, "_export", return_value=xml) as export:
+        client.get_top_adds()
+        export.assert_called_once_with(
+            "topAdds", params={}, context={"resource": "topAdds", "count": None}
+        )
+    with patch.object(client, "_export", return_value=xml) as export:
+        client.get_top_adds(count=25)
+        assert export.call_args.kwargs["params"] == {"COUNT": 25}
+
+
+def test_top_adds_cache_reuses_fresh_refetches_expired_and_keys_by_year():
     service._MFL_TRENDING_CACHE.clear()
     calls = []
 
@@ -38,18 +51,18 @@ def test_top_adds_cache_reuses_fresh_refetches_expired_and_keys_by_week():
         def __init__(self, year):
             self.year = year
 
-        def get_top_adds(self, week):
-            calls.append((self.year, week))
-            return {"week": week, "players": []}
+        def get_top_adds(self):
+            calls.append(self.year)
+            return {"players": []}
 
     with patch.object(service, "MFLClient", Client), patch.object(
         service.time, "time", side_effect=[100, 101, 1000, 1001]
     ):
-        service.get_mfl_trending_adds(2026, 1)
-        service.get_mfl_trending_adds(2026, 1)
-        service.get_mfl_trending_adds(2026, 1)
-        service.get_mfl_trending_adds(2026, 2)
-    assert calls == [(2026, 1), (2026, 1), (2026, 2)]
+        service.get_mfl_trending_adds(2026)
+        service.get_mfl_trending_adds(2026)
+        service.get_mfl_trending_adds(2026)
+        service.get_mfl_trending_adds(2027)
+    assert calls == [2026, 2026, 2027]
 
 
 def test_trending_builder_bulk_availability_keeps_rank_and_missing_data():
@@ -110,3 +123,11 @@ def test_trending_ui_keeps_zero_available_and_filters_client_side():
     assert "Number(player.available_count || 0) > 0" in source
     assert 'targetReasonFilter?.value === "trending_adds"' in source
     assert '["trend_rank", "Trend Rank"]' in source
+    assert "MFL Top Adds · Updated" in source
+    assert "MFL Week ${payload.week}" not in source
+
+
+def test_trending_endpoint_has_no_current_week_dependency():
+    source = open("waivers/routes.py", encoding="utf-8").read()
+    assert "current_nfl_week" not in source
+    assert '"period": "current_period"' in source

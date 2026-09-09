@@ -19,20 +19,20 @@ from services.mfl_client import MFLClient
 
 
 MFL_TRENDING_TTL_SECONDS = 10 * 60
-_MFL_TRENDING_CACHE: dict[tuple[int, int], tuple[float, dict[str, Any]]] = {}
+_MFL_TRENDING_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
 _MFL_TRENDING_CACHE_LOCK = threading.Lock()
 
 
-def get_mfl_trending_adds(year: int, week: int) -> dict[str, Any]:
-    """Fetch or reuse the site-wide MFL trend list for one season/week."""
-    key = (int(year), int(week))
+def get_mfl_trending_adds(year: int) -> dict[str, Any]:
+    """Fetch or reuse the year-scoped site-wide MFL trend list."""
+    key = int(year)
     now = time.time()
     with _MFL_TRENDING_CACHE_LOCK:
         cached = _MFL_TRENDING_CACHE.get(key)
         if cached and now - cached[0] < MFL_TRENDING_TTL_SECONDS:
             return dict(cached[1])
 
-    parsed = MFLClient(year).get_top_adds(week)
+    parsed = MFLClient(year).get_top_adds()
     fetched_at = datetime.now(timezone.utc).isoformat()
     result = {**parsed, "fetched_at": fetched_at}
     with _MFL_TRENDING_CACHE_LOCK:

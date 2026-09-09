@@ -18,7 +18,6 @@ from services.waivers_service import (
     get_mfl_trending_adds,
     build_trending_waiver_targets,
 )
-from services.nfl_week import current_nfl_week
 
 from . import waivers_bp
 
@@ -236,9 +235,8 @@ def api_targets():
 def api_trending():
     """MFL trend discovery enriched with this user's local availability."""
     year = datetime.now(timezone.utc).year
-    week = current_nfl_week(year)
     try:
-        trend_data = get_mfl_trending_adds(year, week)
+        trend_data = get_mfl_trending_adds(year)
         players = build_trending_waiver_targets(
             current_user.id, trend_data, year=year
         )
@@ -247,14 +245,13 @@ def api_trending():
         return jsonify({
             "ok": False,
             "source": "mfl",
-            "week": week,
             "error": "MFL trending data is temporarily unavailable.",
         }), 503
 
     return jsonify({
         "ok": True,
         "source": "mfl",
-        "week": trend_data.get("week") or week,
+        "period": "current_period",
         "fetched_at": trend_data.get("fetched_at"),
         "players": players,
     })

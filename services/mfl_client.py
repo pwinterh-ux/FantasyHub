@@ -11,8 +11,6 @@ from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, Any
 from urllib.parse import unquote_plus, urlparse
 
-import json
-
 import requests
 from flask import current_app
 
@@ -345,51 +343,40 @@ class MFLClient:
             ctx.update(context)
         return self._export("pendingTrades", params={"L": league_id}, cookie=cookie, context=ctx)
 
-    def get_top_adds(self, week: int | None = None) -> Dict[str, Any]:
-        """Return normalized site-wide MFL ``TYPE=topAdds`` data."""
-        params: Dict[str, Any] = {"JSON": "1", "XML": "0"}
-        if week is not None:
-            params["W"] = int(week)
+    def get_top_adds(self, count: int | None = None) -> Dict[str, Any]:
+        """Return normalized site-wide MFL ``TYPE=topAdds`` XML data."""
+        params: Dict[str, Any] = {}
+        if count is not None:
+            count = int(count)
+            if count < 1:
+                raise ValueError("topAdds count must be positive")
+            params["COUNT"] = count
         raw = self._export(
             "topAdds",
             params=params,
-            context={"resource": "topAdds", "week": week},
+            context={"resource": "topAdds", "count": count},
         )
-        return self.parse_top_adds(raw, requested_week=week)
+        return self.parse_top_adds(raw)
 
     @staticmethod
-    def parse_top_adds(
-        payload: bytes | str | Dict[str, Any],
-        *,
-        requested_week: int | None = None,
-    ) -> Dict[str, Any]:
-        """Defensively normalize MFL's JSON/XML-to-JSON ``topAdds`` shape."""
-        if isinstance(payload, dict):
-            data = payload
-        else:
-            if isinstance(payload, bytes):
-                payload = payload.decode("utf-8", errors="replace")
-            data = json.loads(payload or "{}")
+    def parse_top_adds(payload: bytes | str) -> Dict[str, Any]:
+        """Defensively normalize MFL's verified ``<topAdds>`` XML shape."""
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+        if not payload or not payload.strip():
+            return {"players": []}
 
-        container = data.get("topAdds") if isinstance(data, dict) else {}
-        if not isinstance(container, dict):
-            container = {}
-        raw_players = container.get("player", [])
-        if isinstance(raw_players, dict):
-            raw_players = [raw_players]
-        if not isinstance(raw_players, list):
-            raw_players = []
+        root = ET.fromstring(payload)
+        top_adds = root if root.tag == "topAdds" else root.find(".//topAdds")
+        if top_adds is None:
+            return {"players": []}
 
         players = []
         seen = set()
-        for row in raw_players:
-            if not isinstance(row, dict):
-                continue
-            mfl_id = str(row.get("id") or "").strip()
+        for row in top_adds.findall("player"):
+            mfl_id = str(row.attrib.get("id") or "").strip()
             if not mfl_id:
                 continue
-            # MFL ids are numeric in the local model; canonicalizing also
-            # makes leading-zero duplicates resolve to the same player.
             try:
                 canonical_id = str(int(mfl_id))
             except (TypeError, ValueError):
@@ -397,7 +384,7 @@ class MFLClient:
             if canonical_id in seen:
                 continue
             try:
-                percent = float(row.get("percent"))
+                percent = float(row.attrib.get("percent"))
                 if not math.isfinite(percent):
                     raise ValueError
             except (TypeError, ValueError):
@@ -409,12 +396,7 @@ class MFLClient:
                 "trend_rank": len(players) + 1,
             })
 
-        raw_week = container.get("week", requested_week)
-        try:
-            resolved_week = int(raw_week)
-        except (TypeError, ValueError):
-            resolved_week = requested_week
-        return {"week": resolved_week, "players": players}
+        return {"players": players}
 
 
     def submit_fcfs_waiver(
