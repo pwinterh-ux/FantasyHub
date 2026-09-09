@@ -343,6 +343,61 @@ class MFLClient:
             ctx.update(context)
         return self._export("pendingTrades", params={"L": league_id}, cookie=cookie, context=ctx)
 
+    def get_top_adds(self, count: int | None = None) -> Dict[str, Any]:
+        """Return normalized site-wide MFL ``TYPE=topAdds`` XML data."""
+        params: Dict[str, Any] = {}
+        if count is not None:
+            count = int(count)
+            if count < 1:
+                raise ValueError("topAdds count must be positive")
+            params["COUNT"] = count
+        raw = self._export(
+            "topAdds",
+            params=params,
+            context={"resource": "topAdds", "count": count},
+        )
+        return self.parse_top_adds(raw)
+
+    @staticmethod
+    def parse_top_adds(payload: bytes | str) -> Dict[str, Any]:
+        """Defensively normalize MFL's verified ``<topAdds>`` XML shape."""
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+        if not payload or not payload.strip():
+            return {"players": []}
+
+        root = ET.fromstring(payload)
+        top_adds = root if root.tag == "topAdds" else root.find(".//topAdds")
+        if top_adds is None:
+            return {"players": []}
+
+        players = []
+        seen = set()
+        for row in top_adds.findall("player"):
+            mfl_id = str(row.attrib.get("id") or "").strip()
+            if not mfl_id:
+                continue
+            try:
+                canonical_id = str(int(mfl_id))
+            except (TypeError, ValueError):
+                continue
+            if canonical_id in seen:
+                continue
+            try:
+                percent = float(row.attrib.get("percent"))
+                if not math.isfinite(percent):
+                    raise ValueError
+            except (TypeError, ValueError):
+                percent = None
+            seen.add(canonical_id)
+            players.append({
+                "mfl_id": canonical_id,
+                "add_percent": percent,
+                "trend_rank": len(players) + 1,
+            })
+
+        return {"players": players}
+
 
     def submit_fcfs_waiver(
         self,
