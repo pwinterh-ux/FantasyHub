@@ -9,6 +9,7 @@ import requests
 
 from services.lineups_service import Projection, fetch_projected_scores, parse_lineup_requirements
 from services.nfl_schedule_service import BYE, LOCKED, UNKNOWN, game_state_for_team
+from services.lineup_lock_service import fetch_player_roster_statuses
 
 LINEUP_CHECK_MIN_GAIN = 2.0
 CLASS_PRIORITY = {"CRITICAL": 0, "ACTION": 1, "WATCH": 2, "ERROR": 3, "GOOD": 4}
@@ -23,23 +24,6 @@ def fetch_injuries(year: int, week: int, *, timeout: int = 20) -> dict[int, dict
     return {int(n.get("id")): {"status": n.get("status", ""), "details": n.get("details", ""),
                                "exp_return": n.get("exp_return", "")}
             for n in root.findall(".//injury") if str(n.get("id", "")).isdigit()}
-
-
-def fetch_player_roster_statuses(job: dict, week: int, *, timeout: int = 20) -> dict[int, str]:
-    response = requests.get(f"https://{job['host']}/{job['year']}/export",
-        params={"TYPE": "playerRosterStatus", "L": job["mfl_id"], "W": str(week),
-                "P": ",".join(str(x) for x in job["player_ids"]), "JSON": "0"},
-        headers={"Cookie": job.get("cookie", "")}, timeout=timeout)
-    response.raise_for_status()
-    root = ET.fromstring(response.content)
-    out = {}
-    for node in root.findall(".//playerStatus"):
-        if not str(node.get("id", "")).isdigit(): continue
-        entries = node.findall("roster_franchise")
-        match = next((x for x in entries if str(x.get("franchise_id", "")) == str(job["franchise_id"])), None)
-        if match is not None and match.get("status"):
-            out[int(node.get("id"))] = str(match.get("status")).upper()
-    return out
 
 
 def build_constrained_optimal_lineup(players: list[dict], total: int | None, ranges: dict,

@@ -31,6 +31,11 @@
           <span>MFL automatically sets this league's optimal lineup.</span>
         </div>
       {% else %}
+      {% if checker_context %}<div class="checker-banner"><strong>Lineup Checker recommendation</strong>
+        {% if checker_context.leaving %}<span>OUT: {{ checker_context.leaving|join(', ') }}</span>{% endif %}
+        {% if checker_context.entering %}<span>IN: {{ checker_context.entering|join(', ') }}</span>{% endif %}
+        <span>🔒 {{ locked_starter_count }} locked starter{{ '' if locked_starter_count == 1 else 's' }} preserved</span>
+      </div>{% endif %}
       {% if refresh_warning %}<div class="refresh-warning">{{ refresh_warning }} Cached players are shown, but submission will retry the safety refresh.</div>{% endif %}
       <div class="pos-grid">
         {% for pos, rows in grouped_players.items() %}
@@ -43,16 +48,16 @@
 
             <div class="list">
               {% for r in rows %}
-                <label class="row{% if not r.lineup_eligible %} ineligible{% endif %}">
+                <label class="row{% if not r.lineup_eligible or not r.is_editable %} ineligible{% endif %}"{% if r.locked_as_starter %} title="Game started — starter locked"{% elif r.is_locked %} title="Game started — cannot be added"{% elif r.game_state == 'UNKNOWN' %} title="Game status unknown — lineup position preserved"{% elif r.game_state == 'BYE' %} title="Player is on a bye"{% endif %}>
                   <input type="checkbox"
                          name="starters[]"
                          value="{{ r.player_id }}"
                          {% if r.player_id in auto_selected %}checked{% endif %}
-                         {% if not r.lineup_eligible %}disabled{% endif %}
+                         {% if not r.lineup_eligible or not r.is_editable %}disabled{% endif %}
                          data-pos="{{ r.position }}"
                          data-proj="{{ r.projected if r.projected is not none else '' }}">
                   <span class="info">
-                    <span class="nm">{{ r.name }}</span>
+                    <span class="nm">{{ r.name }}{% if r.is_locked %} <span aria-label="Locked">🔒</span>{% elif r.game_state == 'UNKNOWN' %} <span title="Game status unknown">⚠</span>{% elif r.game_state == 'BYE' %} <span class="status-badge unknown">BYE</span>{% endif %}</span>
                     {% if r.team %}<span class="tm">— {{ r.team }}</span>{% endif %}
                     {% if r.roster_status == 'TAXI' %}<span class="status-badge taxi">On Taxi</span>
                     {% elif r.roster_status == 'IR' %}<span class="status-badge ir">On IR</span>
@@ -60,6 +65,7 @@
                   </span>
                   <span class="pj">{{ r.projected if r.projected is not none else '—' }}</span>
                 </label>
+                {% if r.locked_as_starter or r.unknown_as_starter %}<input type="hidden" name="starters[]" value="{{ r.player_id }}">{% endif %}
               {% endfor %}
             </div>
           </div>
@@ -103,6 +109,7 @@
   .rules .totalReq { border:1px solid var(--bd); padding:1px 6px; border-radius:999px; font-size:11px; }
 
   .body { padding:10px !important; }
+  .checker-banner { display:flex;gap:10px;flex-wrap:wrap;padding:7px 9px;margin-bottom:8px;border:1px solid rgba(34,197,94,.4);border-radius:8px; }
   .pos-grid {
     display:grid;
     grid-template-columns: repeat(4, minmax(0,1fr));
@@ -342,7 +349,11 @@
         showToast('error', msg, {persist:true});
       }
 
-      if (data.next) {
+      if (!data.ok) {
+        return;
+      } else if (data.redirect) {
+        window.location = data.redirect;
+      } else if (data.next) {
         window.location = '{{ url_for("lineups.lineups_rapid_league") }}';
       } else {
         window.location = '{{ url_for("lineups.lineups_rapid_finish") }}';
@@ -364,7 +375,9 @@
       const data = await res.json().catch(()=>({ok:false,next:false}));
       // Skip is a benign success -> auto-hide, no persistence
       showToast('success', 'Skipped.', {persist:false, autohideMs:1000});
-      if (data.next) {
+      if (data.redirect) {
+        window.location = data.redirect;
+      } else if (data.next) {
         window.location = '{{ url_for("lineups.lineups_rapid_league") }}';
       } else {
         window.location = '{{ url_for("lineups.lineups_rapid_finish") }}';
