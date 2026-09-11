@@ -15,7 +15,15 @@
       {% for finding in league.findings %}<p><strong>{{ finding.type|replace('_',' ')|title }}</strong>{% if finding.player_name %} — {{ finding.player_name }}{% endif %}{% if finding.injury_status %} · {{ finding.injury_status }}{% endif %}{% if finding.message %}<br>{{ finding.message }}{% endif %}</p>{% endfor %}
       {% if league.leaving_players or league.entering_players %}<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">{% if league.leaving_players %}<div><strong>Leaving lineup</strong>{% for player in league.leaving_players %}<div>{{ player.name }} · {{ player.position }}{% if player.projection is not none %} · {{ '%.1f'|format(player.projection) }}{% endif %}</div>{% endfor %}</div>{% endif %}{% if league.entering_players %}<div><strong>Entering lineup</strong>{% for player in league.entering_players %}<div>{{ player.name }} · {{ player.position }}{% if player.projection is not none %} · {{ '%.1f'|format(player.projection) }}{% endif %}</div>{% endfor %}</div>{% endif %}</div>{% endif %}
       {% if league.projected_gain is not none %}<p>Projected improvement: {{ '%+.1f'|format(league.projected_gain) }}</p>{% endif %}
-      <a class="btn-ghost" href="{{ url_for('lineups.lineups_single_league', league_id=league.league_id) }}">Review Lineup</a>
+      {% if league.recommended_starter_ids %}
+      <form method="post" action="{{ url_for('lineups.lineups_check_review', league_id=league.league_id) }}" style="margin-top:10px">
+        <input type="hidden" name="week" value="{{ result.week }}">
+        {% for id in league.recommended_starter_ids %}<input type="hidden" name="recommended_starters[]" value="{{ id }}">{% endfor %}
+        {% for player in league.leaving_players %}<input type="hidden" name="leaving[]" value="{{ player.name }}">{% endfor %}
+        {% for player in league.entering_players %}<input type="hidden" name="entering[]" value="{{ player.name }}">{% endfor %}
+        <button class="btn-ghost" type="submit">Review &amp; Submit</button>
+      </form>
+      {% endif %}
     </section>
   {% endfor %}
   {% if result.summary.good %}<details style="margin-top:16px"><summary>Show {{ result.summary.good }} good leagues</summary>
