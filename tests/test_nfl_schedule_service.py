@@ -97,3 +97,65 @@ def test_fresh_payload_states_do_not_include_stale_database_row(app):
         states = build_team_game_states(fresh, datetime.fromtimestamp(100, timezone.utc), schedule_verified=True)
         assert "KCC" not in states
         assert game_state_for_team("KC", states, schedule_verified=True, week_complete=True)["state"] == BYE
+
+
+def test_live_2026_top_level_nflschedule_shape():
+    payload = {
+        "encoding": "utf-8",
+        "nflSchedule": {
+            "week": "1",
+            "matchup": [
+                {
+                    "kickoff": "1788999600",
+                    "gameSecondsRemaining": "0",
+                    "team": [
+                        {"id": "NEP", "isHome": "0"},
+                        {"id": "SEA", "isHome": "1"},
+                    ],
+                },
+                {
+                    "kickoff": "1789086900",
+                    "gameSecondsRemaining": "0",
+                    "team": [
+                        {"id": "SFO", "isHome": "0"},
+                        {"id": "LAR", "isHome": "1"},
+                    ],
+                },
+            ],
+        },
+    }
+
+    records, metadata = parse_mfl_nfl_schedule_with_metadata(payload, 2026)
+
+    assert metadata[1] == {
+        "week_number": 1,
+        "raw_matchup_count": 2,
+        "parsed_matchup_count": 2,
+        "malformed_matchup_count": 0,
+        "unique_team_count": 4,
+        "structurally_complete": True,
+    }
+
+    assert len(records) == 4
+
+    by_team = {record["team"]: record for record in records}
+
+    assert by_team["NEP"]["opponent"] == "SEA"
+    assert by_team["SEA"]["opponent"] == "NEP"
+    assert by_team["SFO"]["opponent"] == "LAR"
+    assert by_team["LAR"]["opponent"] == "SFO"
+
+    assert by_team["NEP"]["kickoff_unix"] == 1788999600
+    assert by_team["SEA"]["kickoff_unix"] == 1788999600
+    assert by_team["SFO"]["kickoff_unix"] == 1789086900
+    assert by_team["LAR"]["kickoff_unix"] == 1789086900
+
+
+def test_unknown_schedule_root_shape_fails_closed():
+    records, metadata = parse_mfl_nfl_schedule_with_metadata(
+        {"encoding": "utf-8", "schedule": {}},
+        2026,
+    )
+
+    assert records == []
+    assert metadata == {}

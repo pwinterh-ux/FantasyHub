@@ -47,7 +47,11 @@ def parse_mfl_nfl_schedule_with_metadata(payload: dict, year: int) -> tuple[list
     reciprocal teams.  Kickoff may be absent without hiding the teams; those
     teams receive UNKNOWN lock state later.
     """
-    weeks = payload.get("fullNflSchedule", {}).get("nflSchedule", [])
+    full_schedule = payload.get("fullNflSchedule")
+    if isinstance(full_schedule, dict) and "nflSchedule" in full_schedule:
+        weeks = full_schedule.get("nflSchedule", [])
+    else:
+        weeks = payload.get("nflSchedule", [])
     if isinstance(weeks, dict):
         weeks = [weeks]
     records: list[dict] = []
