@@ -906,16 +906,20 @@ def _lock_safe_view(lg: League, players: list, projections: dict, total: int | N
                     ranges: dict, statuses: dict, lock_context: dict,
                     requested_prefill: list[int] | None = None) -> tuple[dict, set[int], str | None]:
     current = set(lock_context["current"])
+    frozen = set(lock_context["locked_starters"]) | set(lock_context.get("unknown_starters", set()))
+    forbidden = (set(lock_context["locked_bench"]) |
+                 set(lock_context.get("unknown_bench", set())) |
+                 set(lock_context.get("bye_players", set())))
     warning = lock_context.get("warning")
     if not lock_context["safe"]:
         selected = current
     elif requested_prefill is not None:
         selected = set(requested_prefill)
-        selected.update(lock_context["locked_starters"])
-        selected.difference_update(lock_context["locked_bench"])
+        selected.update(frozen)
+        selected.difference_update(forbidden)
         selected = {pid for pid in selected if is_lineup_eligible_status(statuses.get(pid))}
         if not _lineup_is_legal(selected, players, total, ranges):
-            selected = current
+            selected = current - set(lock_context.get("bye_players", set()))
             warning = "The saved checker recommendation is no longer legal after current game locks. Current starters are preserved; refresh Lineup Checker."
     else:
         player_dicts = [{"player_id": pid, "name": name, "position": pos, "team": team,
@@ -923,8 +927,9 @@ def _lock_safe_view(lg: League, players: list, projections: dict, total: int | N
                         for pid, name, pos, team in players
                         if is_lineup_eligible_status(statuses.get(pid))]
         result = build_constrained_optimal_lineup(player_dicts, total, ranges,
-                    set(lock_context["locked_starters"]), set(lock_context["locked_bench"]))
-        selected = set(result["starter_ids"]) if result["ok"] else current
+                    frozen, forbidden)
+        selected = (set(result["starter_ids"]) if result["ok"] else
+                    current - set(lock_context.get("bye_players", set())))
         if not result["ok"]:
             warning = result["reason"]
     grouped = group_and_sort_players_for_review(players, projections, statuses)
@@ -934,7 +939,9 @@ def _lock_safe_view(lg: League, players: list, projections: dict, total: int | N
             row.update(is_current_starter=pid in current,
                        game_state=lock_context["states"].get(pid, "UNKNOWN"),
                        is_locked=pid in lock_context["locked_starters"] | lock_context["locked_bench"],
-                       locked_as_starter=pid in lock_context["locked_starters"])
+                       locked_as_starter=pid in lock_context["locked_starters"],
+                       unknown_as_starter=pid in lock_context.get("unknown_starters", set()),
+                       is_editable=pid not in frozen | forbidden)
     return grouped, selected, warning
 
 

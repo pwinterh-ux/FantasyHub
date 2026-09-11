@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import requests
 
 from services.nfl_schedule_service import (
-    LOCKED, UNKNOWN, build_team_game_states, fetch_mfl_nfl_schedule,
+    BYE, LOCKED, UNKNOWN, UNLOCKED, build_team_game_states, fetch_mfl_nfl_schedule,
     game_state_for_team, parse_mfl_nfl_schedule_with_metadata,
 )
 
@@ -38,9 +38,31 @@ def resolve_lineup_locks(job: dict, players: list[tuple], week: int) -> dict:
     ids = [int(row[0]) for row in players]
     try:
         statuses = fetch_player_roster_statuses({**job, "player_ids": ids}, week)
+        if set(statuses) != set(ids):
+            raise ValueError("MFL weekly lineup status is incomplete")
         current = {pid for pid, status in statuses.items() if status == "S"}
         payload = fetch_mfl_nfl_schedule(int(job["year"]))
         rows, metadata = parse_mfl_nfl_schedule_with_metadata(payload, int(job["year"]))
+        # The live MFL shape contains only the current week.  Prefer its explicit
+        # week marker; full-schedule/test payloads can still verify the requested
+        # week directly when no current-week marker exists.
+        live_node = payload.get("nflSchedule")
+        raw_live_week = live_node.get("week") if isinstance(live_node, dict) else (
+            payload.get("currentWeek") or payload.get("fullNflSchedule", {}).get("currentWeek")
+            if isinstance(payload.get("fullNflSchedule", {}), dict) else None)
+        try:
+            live_week = int(raw_live_week)
+        except (TypeError, ValueError):
+            live_week = int(week) if int(week) in metadata else None
+        if live_week is None:
+            raise ValueError("NFL current week could not be determined")
+        if int(week) < live_week:
+            raise ValueError("Past-week lineup editing is not supported")
+        if int(week) > live_week:
+            states = {pid: UNLOCKED for pid in ids}
+            return {"safe": True, "warning": None, "current": current, "states": states,
+                    "locked_starters": set(), "locked_bench": set(),
+                    "unknown_starters": set(), "unknown_bench": set(), "bye_players": set()}
         complete = bool(metadata.get(int(week), {}).get("structurally_complete"))
         week_rows = [row for row in rows if row["week"] == int(week)]
         if not complete or not week_rows:
@@ -49,18 +71,22 @@ def resolve_lineup_locks(job: dict, players: list[tuple], week: int) -> dict:
         states = {int(pid): game_state_for_team(team, team_states,
                   schedule_verified=True, week_complete=True)["state"]
                   for pid, _name, _pos, team in players}
-        if any(state == UNKNOWN for state in states.values()):
-            raise ValueError("NFL game state is unknown")
+        unknown_starters = {pid for pid in current if states.get(pid) == UNKNOWN}
+        unknown_bench = {pid for pid in ids if pid not in current and states.get(pid) == UNKNOWN}
         return {"safe": True, "warning": None, "current": current, "states": states,
                 "locked_starters": {pid for pid in current if states.get(pid) == LOCKED},
-                "locked_bench": {pid for pid in ids if pid not in current and states.get(pid) == LOCKED}}
+                "locked_bench": {pid for pid in ids if pid not in current and states.get(pid) == LOCKED},
+                "unknown_starters": unknown_starters, "unknown_bench": unknown_bench,
+                "bye_players": {pid for pid in ids if states.get(pid) == BYE}}
     except Exception as exc:
         # If the schedule is unavailable we can still preserve live starters when
         # that first fetch succeeded; otherwise no edit or submit is safe.
         current = locals().get("current", set())
         return {"safe": False, "warning": f"Game lock status unavailable ({exc}). Current starters are preserved; editing and submission are disabled.",
                 "current": current, "states": {pid: UNKNOWN for pid in ids},
-                "locked_starters": set(current), "locked_bench": set(ids) - set(current)}
+                "locked_starters": set(), "locked_bench": set(),
+                "unknown_starters": set(current), "unknown_bench": set(ids) - set(current),
+                "bye_players": set()}
 
 
 def lock_violation(lock_context: dict, submitted: list[int]) -> str | None:
@@ -68,6 +94,10 @@ def lock_violation(lock_context: dict, submitted: list[int]) -> str | None:
     if not lock_context.get("safe"):
         return "Lineup not submitted because current game-lock status could not be verified. Refresh this lineup before submitting."
     selected = set(submitted)
-    if not set(lock_context["locked_starters"]).issubset(selected) or selected & set(lock_context["locked_bench"]):
+    frozen = set(lock_context["locked_starters"]) | set(lock_context.get("unknown_starters", set()))
+    forbidden = (set(lock_context["locked_bench"]) |
+                 set(lock_context.get("unknown_bench", set())) |
+                 set(lock_context.get("bye_players", set())))
+    if not frozen.issubset(selected) or selected & forbidden:
         return "Lineup changed after a game locked. Refresh this lineup before submitting."
     return None
