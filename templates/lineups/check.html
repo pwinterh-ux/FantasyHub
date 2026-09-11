@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="tile pad" style="max-width:1100px;margin:24px auto;">
+  <h2 class="hdr">Lineup Check — Week {{ result.week }}</h2>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+    <strong>🚨 {{ result.summary.critical }} Critical</strong><strong>↑ {{ result.summary.action }} Projection Upgrades</strong>
+    <strong>⚠ {{ result.summary.watch }} Watch</strong><span>{{ result.summary.error }} Error</span>
+    <span>✓ {{ result.summary.good }} Good</span><span>{{ result.summary.best_ball_skipped }} Best Ball skipped</span>
+  </div>
+  {% if not result.schedule_ok %}<div class="tile pad" style="border:1px solid #ef4444;margin-bottom:12px">Current NFL schedule could not be refreshed. Swap recommendations are disabled because game-lock status cannot be verified.</div>{% endif %}
+  {% if not result.injuries_ok %}<div class="tile pad" style="border:1px solid #f59e0b;margin-bottom:12px">Current MFL injury report could not be refreshed. The scan does not claim these lineups are injury-safe.</div>{% endif %}
+  {% for league in result.leagues if league.classification != 'GOOD' %}
+    <section class="tile pad dark" style="margin:12px 0;border-left:4px solid {% if league.classification == 'CRITICAL' %}#ef4444{% elif league.classification == 'ACTION' %}#22c55e{% else %}#f59e0b{% endif %}">
+      <h3 style="margin-top:0">{{ league.classification }} · {{ league.league_name }}</h3>
+      {% for finding in league.findings %}<p><strong>{{ finding.type|replace('_',' ')|title }}</strong>{% if finding.player_name %} — {{ finding.player_name }}{% endif %}{% if finding.injury_status %} · {{ finding.injury_status }}{% endif %}{% if finding.message %}<br>{{ finding.message }}{% endif %}</p>{% endfor %}
+      {% if league.leaving_players or league.entering_players %}<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">{% if league.leaving_players %}<div><strong>Leaving lineup</strong>{% for player in league.leaving_players %}<div>{{ player.name }} · {{ player.position }}{% if player.projection is not none %} · {{ '%.1f'|format(player.projection) }}{% endif %}</div>{% endfor %}</div>{% endif %}{% if league.entering_players %}<div><strong>Entering lineup</strong>{% for player in league.entering_players %}<div>{{ player.name }} · {{ player.position }}{% if player.projection is not none %} · {{ '%.1f'|format(player.projection) }}{% endif %}</div>{% endfor %}</div>{% endif %}</div>{% endif %}
+      {% if league.projected_gain is not none %}<p>Projected improvement: {{ '%+.1f'|format(league.projected_gain) }}</p>{% endif %}
+      <a class="btn-ghost" href="{{ url_for('lineups.lineups_single_league', league_id=league.league_id) }}">Review Lineup</a>
+    </section>
+  {% endfor %}
+  {% if result.summary.good %}<details style="margin-top:16px"><summary>Show {{ result.summary.good }} good leagues</summary>
+    {% for league in result.leagues if league.classification == 'GOOD' %}<div class="tile pad dark" style="margin:8px 0">✓ {{ league.league_name }} — No meaningful lineup issues found.</div>{% endfor %}
+  </details>{% endif %}
+</div>
+{% endblock %}

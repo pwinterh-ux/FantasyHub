@@ -7,7 +7,7 @@
     <span class="mini" style="opacity:.85;">Hidden tool • Requires a league sync in the last 4 hours</span>
   </div>
 
-  <div class="grid" style="display:grid; grid-template-columns: 1fr 1fr; gap:16px;">
+  <div class="grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:16px;">
     <!-- Tile 1: Rapid Lineups (one-league-at-a-time) -->
     <div class="tile pad dark" style="display:flex; flex-direction:column; gap:12px;">
       <div>
@@ -38,6 +38,16 @@
       <div style="font-size:12px; opacity:.8;">
         We’ll fetch projections and pre-fill a recommended lineup; you can adjust before submitting to MFL.
       </div>
+    </div>
+    <div class="tile pad dark" style="display:flex; flex-direction:column; gap:12px;">
+      <div>
+        <h3 style="margin:0 0 6px;">Lineup Checker</h3>
+        <div style="opacity:.85;">Scan all of your MFL lineups and show only leagues needing attention because of injuries, locked players, or meaningful projection upgrades.</div>
+      </div>
+      <form method="POST" action="{{ url_for('lineups.lineups_check') }}">
+        <button type="submit" class="btn-ghost" style="padding:10px 14px; border-radius:10px;">Check All Lineups</button>
+      </form>
+      <div style="font-size:12px; opacity:.8;">Read-only: this check never submits or changes a lineup.</div>
     </div>
 
     <!-- Tile 2: Auto submit -->
