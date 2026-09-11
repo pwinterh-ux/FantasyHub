@@ -214,6 +214,47 @@ def test_current_week_uses_verified_kickoffs_and_future_week_needs_no_schedule_r
     assert locked["locked_starters"] == {1} and locked["locked_bench"] == {2}
 
 
+def test_future_week_does_not_require_weekly_statuses_and_is_editable():
+    players = [(1, "One", "WR", "TBB"), (2, "Two", "WR", "ATL")]
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses") as statuses, \
+         patch("services.lineup_lock_service.fetch_mfl_nfl_schedule", return_value=_schedule(1)):
+        result = resolve_lineup_locks(_lock_job(), players, 4)
+
+    assert result == {
+        "safe": True, "warning": None, "current": set(),
+        "states": {1: "UNLOCKED", 2: "UNLOCKED"},
+        "locked_starters": set(), "locked_bench": set(),
+        "unknown_starters": set(), "unknown_bench": set(), "bye_players": set(),
+    }
+    statuses.assert_not_called()
+    grouped, _selected, warning = routes._lock_safe_view(
+        SimpleNamespace(), players, {1: Projection(1, 10), 2: Projection(2, 5)},
+        1, {"WR": (1, 1)}, {1: "ACTIVE", 2: "ACTIVE"}, result)
+    assert warning is None
+    assert all(row["is_editable"] for row in grouped["WR"])
+
+
+def test_current_week_missing_unlocked_status_is_safe_but_missing_locked_status_fails():
+    players = [(1, "One", "WR", "TBB"), (2, "Two", "WR", "ATL")]
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses", return_value={1: "S"}), \
+         patch("services.lineup_lock_service.fetch_mfl_nfl_schedule", return_value=_schedule()):
+        unlocked = resolve_lineup_locks(_lock_job(), players, 1)
+    assert unlocked["safe"]
+    assert unlocked["states"] == {1: "UNLOCKED", 2: "UNLOCKED"}
+    grouped, _selected, warning = routes._lock_safe_view(
+        SimpleNamespace(), players, {1: Projection(1, 10), 2: Projection(2, 5)},
+        1, {"WR": (1, 1)}, {1: "ACTIVE", 2: "ACTIVE"}, unlocked)
+    assert warning is None
+    assert all(row["is_editable"] for row in grouped["WR"])
+
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses", return_value={1: "S"}), \
+         patch("services.lineup_lock_service.fetch_mfl_nfl_schedule",
+               return_value=_schedule(kickoff="1")):
+        locked = resolve_lineup_locks(_lock_job(), players, 1)
+    assert not locked["safe"]
+    assert "incomplete for a locked or unknown player" in locked["warning"]
+
+
 def test_past_week_fails_closed():
     players = [(1, "Starter", "WR", "TBB")]
     with patch("services.lineup_lock_service.fetch_player_roster_statuses", return_value={1: "S"}), \
@@ -229,29 +270,31 @@ def test_future_week_rapid_renders_and_submits_through_live_lock_guard():
         patch.object(routes, "current_user", SimpleNamespace(id=user_id)),
         patch.object(routes, "_require_recent_sync_or_gate", return_value=None),
         patch.object(routes, "_refresh_lineup_roster", return_value=(True, None, "host", "cookie")),
-        patch("services.lineup_lock_service.fetch_player_roster_statuses",
-              return_value={1: "S", 2: "NS"}),
+        patch("services.lineup_lock_service.fetch_player_roster_statuses"),
         patch("services.lineup_lock_service.fetch_mfl_nfl_schedule", return_value=_schedule(1)),
     ]
     with app.test_request_context("/lineups/rapid/league"):
         session.update(rapid_queue=[league_id], rapid_idx=0, rapid_week=2)
-        with common[0], common[1], common[2], common[3], common[4], \
+        with common[0], common[1], common[2], common[3] as statuses, common[4], \
              patch.object(routes, "fetch_projected_scores",
                           return_value={1: Projection(1, 10), 2: Projection(2, 5)}), \
-             patch.object(routes, "render_template", return_value="rapid"):
-            assert routes.lineups_rapid_league.__wrapped__() == "rapid"
+             patch.object(routes, "render_template",
+                          side_effect=lambda _template, **values: values):
+            rendered = routes.lineups_rapid_league.__wrapped__()
+        assert rendered["auto_selected"] == {1}
+        statuses.assert_not_called()
     with app.test_request_context("/lineups/rapid/submit", method="POST",
                                   data={"league_id": league_id, "week": 2, "starters[]": ["1"]}):
         session.update(rapid_queue=[league_id], rapid_idx=0, rapid_week=2)
         with patch.object(routes, "current_user", SimpleNamespace(id=user_id)), \
              patch.object(routes, "_require_recent_sync_or_gate", return_value=None), \
              patch.object(routes, "_refresh_lineup_roster", return_value=(True, None, "host", "cookie")), \
-             patch("services.lineup_lock_service.fetch_player_roster_statuses",
-                   return_value={1: "S", 2: "NS"}), \
+             patch("services.lineup_lock_service.fetch_player_roster_statuses") as statuses, \
              patch("services.lineup_lock_service.fetch_mfl_nfl_schedule", return_value=_schedule(1)), \
              patch.object(routes, "submit_lineup", return_value=(True, "OK")) as submit:
             response = routes.lineups_rapid_submit.__wrapped__()
         assert response.get_json()["ok"] is True
+        statuses.assert_not_called()
         submit.assert_called_once()
 
 

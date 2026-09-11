@@ -34,13 +34,9 @@ def fetch_player_roster_statuses(job: dict, week: int, *, timeout: int = 20) -> 
 
 
 def resolve_lineup_locks(job: dict, players: list[tuple], week: int) -> dict:
-    """Fetch authoritative weekly starters and schedule, failing closed on any gap."""
+    """Resolve game locks, requiring weekly status only when a game is not editable."""
     ids = [int(row[0]) for row in players]
     try:
-        statuses = fetch_player_roster_statuses({**job, "player_ids": ids}, week)
-        if set(statuses) != set(ids):
-            raise ValueError("MFL weekly lineup status is incomplete")
-        current = {pid for pid, status in statuses.items() if status == "S"}
         payload = fetch_mfl_nfl_schedule(int(job["year"]))
         rows, metadata = parse_mfl_nfl_schedule_with_metadata(payload, int(job["year"]))
         # The live MFL shape contains only the current week.  Prefer its explicit
@@ -57,10 +53,12 @@ def resolve_lineup_locks(job: dict, players: list[tuple], week: int) -> dict:
         if live_week is None:
             raise ValueError("NFL current week could not be determined")
         if int(week) < live_week:
+            statuses = fetch_player_roster_statuses({**job, "player_ids": ids}, week)
+            current = {pid for pid, status in statuses.items() if status == "S"}
             raise ValueError("Past-week lineup editing is not supported")
         if int(week) > live_week:
             states = {pid: UNLOCKED for pid in ids}
-            return {"safe": True, "warning": None, "current": current, "states": states,
+            return {"safe": True, "warning": None, "current": set(), "states": states,
                     "locked_starters": set(), "locked_bench": set(),
                     "unknown_starters": set(), "unknown_bench": set(), "bye_players": set()}
         complete = bool(metadata.get(int(week), {}).get("structurally_complete"))
@@ -71,6 +69,16 @@ def resolve_lineup_locks(job: dict, players: list[tuple], week: int) -> dict:
         states = {int(pid): game_state_for_team(team, team_states,
                   schedule_verified=True, week_complete=True)["state"]
                   for pid, _name, _pos, team in players}
+        statuses = fetch_player_roster_statuses({**job, "player_ids": ids}, week)
+        # Weekly S/NS is only needed to place players whose games can no longer
+        # be changed on the correct side of the lineup.  An omitted status for
+        # an unlocked player does not create a game-lock risk.
+        missing_required = {pid for pid in ids
+                            if states.get(pid) in {LOCKED, UNKNOWN}
+                            and statuses.get(pid) not in {"S", "NS"}}
+        if missing_required:
+            raise ValueError("MFL weekly lineup status is incomplete for a locked or unknown player")
+        current = {pid for pid in ids if statuses.get(pid) == "S"}
         unknown_starters = {pid for pid in current if states.get(pid) == UNKNOWN}
         unknown_bench = {pid for pid in ids if pid not in current and states.get(pid) == UNKNOWN}
         return {"safe": True, "warning": None, "current": current, "states": states,
