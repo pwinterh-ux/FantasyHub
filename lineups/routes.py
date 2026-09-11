@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Tuple, Optional
 
 import requests
@@ -314,6 +314,74 @@ def lineups_index():
 
     # index.html still shows both tiles: batch review and rapid flow
     return render_template("lineups/index.html", weeks=weeks, selected_week=current_week)
+
+
+@lineups_bp.route("/lineups/check", methods=["GET", "POST"])
+@login_required
+def lineups_check():
+    """Run the read-only portfolio checker; no MFL import endpoint is reachable here."""
+    gate = _require_recent_sync_or_gate()
+    if gate:
+        return gate
+    from services.lineup_check_service import check_user_lineups, fetch_injuries
+    from services.nfl_schedule_service import (
+        build_team_game_states, fetch_mfl_nfl_schedule, get_week_schedule,
+        parse_mfl_nfl_schedule, sync_nfl_schedule,
+    )
+
+    season = _pick_year_for_week_lookup()
+    week = _effective_current_week(season)
+    schedule_ok = False
+    week_complete = False
+    game_states = {}
+    try:
+        payload = fetch_mfl_nfl_schedule(season)  # exactly once for the entire scan
+        parsed = parse_mfl_nfl_schedule(payload, season)
+        week_complete = any(row["week"] == week for row in parsed)
+        if not week_complete:
+            raise ValueError(f"MFL schedule did not contain week {week}")
+        sync_nfl_schedule(season, parsed)
+        rows = get_week_schedule(season, week)
+        schedule_ok = bool(rows)
+        game_states = build_team_game_states(rows, datetime.now(timezone.utc), schedule_verified=schedule_ok)
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Lineup Checker schedule refresh failed")
+
+    try:
+        injuries = fetch_injuries(season, week)  # exactly once for the entire scan
+        injuries_ok = True
+    except Exception:
+        current_app.logger.exception("Lineup Checker injury refresh failed")
+        injuries, injuries_ok = {}, False
+
+    jobs = []
+    for league in _user_synced_leagues():
+        host = _league_host(league) or "api.myfantasyleague.com"
+        cookie = _cookie_header_for_host(host)
+        best_ball = _resolve_lineup_mode(league) == LINEUP_MODE_BEST_BALL
+        refresh_error = None
+        if not best_ball:
+            ok, refresh_error = ensure_roster_status_fresh(league, host=host, cookie=cookie)
+            if ok:
+                refresh_error = None
+        tuples = [] if best_ball else build_players_for_review(league.id)
+        locations = {} if best_ball else get_my_team_roster_statuses(league.id)
+        jobs.append({
+            "league_id": int(league.id), "mfl_id": str(league.mfl_id),
+            "league_name": str(league.name), "year": int(league.year), "host": str(host),
+            "cookie": str(cookie or ""), "franchise_id": str(league.franchise_id or ""),
+            "roster_slots": str(league.roster_slots or ""), "best_ball": bool(best_ball),
+            "refresh_error": str(refresh_error) if refresh_error else None,
+            "player_ids": [int(p[0]) for p in tuples],
+            "players": [{"player_id": int(pid), "name": str(name), "position": str(pos),
+                         "team": str(team), "roster_status": str(locations.get(pid, "UNKNOWN"))}
+                        for pid, name, pos, team in tuples],
+        })
+    result = check_user_lineups(jobs, season=season, week=week, injuries=injuries,
+        injuries_ok=injuries_ok, game_states=game_states, schedule_ok=schedule_ok,
+        week_complete=week_complete, max_workers=PARALLEL_WORKERS)
+    return render_template("lineups/check.html", result=result)
 
 # ============================ Batch flow (classic) ===========================
 
