@@ -10,6 +10,7 @@ from models import NflSchedule
 from services.nfl_schedule_service import (
     BYE, LOCKED, UNKNOWN, UNLOCKED, build_team_game_states, game_state_for_team,
     normalize_nfl_team, parse_mfl_nfl_schedule, sync_nfl_schedule,
+    parse_mfl_nfl_schedule_with_metadata,
 )
 
 
@@ -62,3 +63,37 @@ def test_lock_boundary_bye_unknown_and_aliases():
     assert normalize_nfl_team("KC") == "KCC"
     assert normalize_nfl_team("GB") == "GBP"
     assert normalize_nfl_team("LV") == "LVR"
+
+
+def test_malformed_matchup_makes_week_incomplete_and_absence_unknown():
+    payload = {"fullNflSchedule": {"nflSchedule": [{"week": "2", "matchup": [
+        {"kickoff": "100", "team": [{"id": "PIT", "isHome": "0"}, {"id": "BAL", "isHome": "1"}]},
+        {"kickoff": "200", "team": [{"id": "NOT_A_TEAM", "isHome": "0"}]},
+    ]}]}}
+    records, metadata = parse_mfl_nfl_schedule_with_metadata(payload, 2026)
+    assert len(records) == 2
+    assert metadata[2] == {"week_number": 2, "raw_matchup_count": 2,
+        "parsed_matchup_count": 1, "malformed_matchup_count": 1,
+        "unique_team_count": 2, "structurally_complete": False}
+    assert game_state_for_team("KC", {}, schedule_verified=True,
+                               week_complete=metadata[2]["structurally_complete"])["state"] == UNKNOWN
+
+
+def test_complete_week_can_assign_bye_and_invalid_alias_fails_closed():
+    payload = {"fullNflSchedule": {"nflSchedule": [{"week": "2", "matchup":
+        {"team": [{"id": "PIT"}, {"id": "BAL"}]}}]}}
+    records, metadata = parse_mfl_nfl_schedule_with_metadata(payload, 2026)
+    assert len(records) == 2 and metadata[2]["structurally_complete"]
+    assert game_state_for_team("KC", {}, schedule_verified=True, week_complete=True)["state"] == BYE
+    assert game_state_for_team("malformed", {}, schedule_verified=True, week_complete=True)["state"] == UNKNOWN
+
+
+def test_fresh_payload_states_do_not_include_stale_database_row(app):
+    with app.app_context():
+        db.session.add(NflSchedule(year=2026, week=2, team="KCC", opponent="LVR", is_home=True, kickoff_unix=999))
+        db.session.commit()
+        fresh = [{"year": 2026, "week": 2, "team": "PIT", "opponent": "BAL", "is_home": False, "kickoff_unix": 101},
+                 {"year": 2026, "week": 2, "team": "BAL", "opponent": "PIT", "is_home": True, "kickoff_unix": 101}]
+        states = build_team_game_states(fresh, datetime.fromtimestamp(100, timezone.utc), schedule_verified=True)
+        assert "KCC" not in states
+        assert game_state_for_team("KC", states, schedule_verified=True, week_complete=True)["state"] == BYE

@@ -92,8 +92,15 @@ def check_league_lineup(job: dict, *, week: int, injuries: dict[int, dict], inju
     players = []
     findings = []
     current = {pid for pid, status in roster_statuses.items() if status == "S"}
+    total, ranges = parse_lineup_requirements(job.get("roster_slots"))
     if not current:
         findings.append({"type": "NO_LINEUP", "severity": "CRITICAL", "message": "No lineup currently submitted"})
+    elif total is not None and len(current) < total:
+        findings.append({"type": "INCOMPLETE_LINEUP", "severity": "CRITICAL",
+                         "message": f"Current lineup has {len(current)} of {total} required starters."})
+    elif total is not None and len(current) > total:
+        findings.append({"type": "INVALID_LINEUP_COUNT", "severity": "CRITICAL",
+                         "message": f"MFL reports {len(current)} starters but this league requires {total}; recommendations are disabled."})
     frozen, forbidden = set(), set()
     for raw in job["players"]:
         p = dict(raw); pid = int(p["player_id"])
@@ -112,10 +119,17 @@ def check_league_lineup(job: dict, *, week: int, injuries: dict[int, dict], inju
         elif is_starter and kind == "WATCH":
             findings.append({"type": "INJURY_WATCH", "severity": "WATCH", "player_id": pid,
                              "player_name": p.get("name"), "injury_status": injury.get("status"), "game_state": p["game"]["state"]})
-    total, ranges = parse_lineup_requirements(job.get("roster_slots"))
+        # Missing data is not evidence that a healthy/watch starter is worse.
+        # Definite unavailable/bye/illegal starters remain repairable.
+        if is_starter and p["projection"] is None and kind != "UNAVAILABLE" and \
+                p["game"]["state"] != BYE and p.get("roster_status") == "ACTIVE":
+            frozen.add(pid)
     # A stale schedule cannot prove that a starter may leave or a bench player may
     # enter.  A failed injury feed likewise cannot prove a candidate is available.
     if not schedule_ok or not injuries_ok:
+        frozen.update(current)
+        forbidden.update(int(p["player_id"]) for p in players if int(p["player_id"]) not in current)
+    if total is not None and len(current) > total:
         frozen.update(current)
         forbidden.update(int(p["player_id"]) for p in players if int(p["player_id"]) not in current)
     optimal = build_constrained_optimal_lineup(players, total, ranges, frozen, forbidden)

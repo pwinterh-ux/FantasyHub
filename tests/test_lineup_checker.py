@@ -2,6 +2,11 @@ from services.lineup_check_service import (
     build_constrained_optimal_lineup, check_league_lineup, check_user_lineups,
 )
 from services.lineups_service import Projection
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from flask import Flask
+import lineups.routes as lineup_routes
 
 
 def player(pid, pos="RB", projection=1, status="ACTIVE", team="PIT"):
@@ -109,3 +114,68 @@ def test_global_feed_failure_returns_no_swap():
         projections=projections)
     assert result["recommended_starter_ids"] == [1]
     assert result["entering_player_ids"] == []
+
+
+def test_missing_projection_healthy_and_questionable_starters_are_frozen():
+    players = [player(1, projection=None), player(2, projection=20)]
+    healthy = run(players, {1: "S", 2: "NS"})
+    assert healthy["recommended_starter_ids"] == [1]
+    assert healthy["entering_player_ids"] == healthy["leaving_player_ids"] == []
+    watch = run(players, {1: "S", 2: "NS"}, injuries={1: {"status": "Questionable"}})
+    assert watch["classification"] == "WATCH" and watch["recommended_starter_ids"] == [1]
+
+
+def test_missing_projection_out_starter_can_be_repaired_without_fake_gain():
+    players = [player(1, projection=None), player(2, projection=20)]
+    result = run(players, {1: "S", 2: "NS"}, injuries={1: {"status": "Out"}})
+    assert result["entering_player_ids"] == [2] and result["leaving_player_ids"] == [1]
+    assert result["projected_gain"] is None and result["classification"] == "CRITICAL"
+
+
+def test_incomplete_lineup_is_critical_and_has_entering_only_recommendation():
+    players = [player(1, projection=10), player(2, projection=9)]
+    result = run(players, {1: "S", 2: "NS"}, slots="2:RB:1-2")
+    assert result["classification"] == "CRITICAL"
+    assert result["leaving_player_ids"] == [] and result["entering_player_ids"] == [2]
+    assert any(f["type"] == "INCOMPLETE_LINEUP" for f in result["findings"])
+
+
+def test_overfilled_lineup_fails_safely_without_recommendation():
+    result = run([player(1), player(2)], {1: "S", 2: "S"}, slots="1:RB:1")
+    assert result["classification"] == "CRITICAL"
+    assert result["recommended_starter_ids"] == [1, 2]
+    assert result["entering_player_ids"] == result["leaving_player_ids"] == []
+    assert any(f["type"] == "INVALID_LINEUP_COUNT" for f in result["findings"])
+
+
+def test_route_fetches_sitewide_feeds_once_and_filters_historical_leagues():
+    app = Flask(__name__); app.config.update(SECRET_KEY="test", TESTING=True)
+    current = SimpleNamespace(id=1, year=2026, mfl_id="1", name="Current", league_host="api.myfantasyleague.com",
+        franchise_id="0001", roster_slots="1:RB:1", lineup_mode="MANUAL")
+    historical = SimpleNamespace(id=2, year=2025, mfl_id="2", name="Old", league_host="api.myfantasyleague.com",
+        franchise_id="0002", roster_slots="1:RB:1", lineup_mode="MANUAL")
+    payload = {"fullNflSchedule": {"nflSchedule": [{"week": "2", "matchup":
+        {"kickoff": "9999999999", "team": [{"id": "PIT"}, {"id": "BAL"}]}}]}}
+    captured = {}
+    def checker(jobs, **kwargs):
+        captured["jobs"] = jobs
+        return {"week": 2, "summary": {}, "leagues": []}
+    with app.test_request_context("/lineups/check"), \
+         patch.object(lineup_routes, "_require_recent_sync_or_gate", return_value=None), \
+         patch.object(lineup_routes, "_pick_year_for_week_lookup", return_value=2026), \
+         patch.object(lineup_routes, "_effective_current_week", return_value=2), \
+         patch.object(lineup_routes, "_user_synced_leagues", return_value=[current, historical]), \
+         patch.object(lineup_routes, "_resolve_lineup_mode", return_value="MANUAL"), \
+         patch.object(lineup_routes, "ensure_roster_status_fresh", return_value=(True, None)), \
+         patch.object(lineup_routes, "build_players_for_review", return_value=[]), \
+         patch.object(lineup_routes, "get_my_team_roster_statuses", return_value={}), \
+         patch.object(lineup_routes, "render_template", side_effect=lambda _name, result: result), \
+         patch("services.nfl_schedule_service.fetch_mfl_nfl_schedule", return_value=payload) as schedule_fetch, \
+         patch("services.nfl_schedule_service.sync_nfl_schedule"), \
+         patch("services.lineup_check_service.fetch_injuries", return_value={}) as injury_fetch, \
+         patch("services.lineup_check_service.check_user_lineups", side_effect=checker):
+        response = lineup_routes.lineups_check.__wrapped__()
+    schedule_fetch.assert_called_once_with(2026)
+    injury_fetch.assert_called_once_with(2026, 2)
+    assert [item["league_id"] for item in captured["jobs"]] == [1]
+    assert response["week"] == 2

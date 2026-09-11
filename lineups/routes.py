@@ -325,8 +325,8 @@ def lineups_check():
         return gate
     from services.lineup_check_service import check_user_lineups, fetch_injuries
     from services.nfl_schedule_service import (
-        build_team_game_states, fetch_mfl_nfl_schedule, get_week_schedule,
-        parse_mfl_nfl_schedule, sync_nfl_schedule,
+        build_team_game_states, fetch_mfl_nfl_schedule,
+        parse_mfl_nfl_schedule_with_metadata, sync_nfl_schedule,
     )
 
     season = _pick_year_for_week_lookup()
@@ -336,12 +336,14 @@ def lineups_check():
     game_states = {}
     try:
         payload = fetch_mfl_nfl_schedule(season)  # exactly once for the entire scan
-        parsed = parse_mfl_nfl_schedule(payload, season)
-        week_complete = any(row["week"] == week for row in parsed)
+        parsed, schedule_metadata = parse_mfl_nfl_schedule_with_metadata(payload, season)
+        week_complete = bool(schedule_metadata.get(week, {}).get("structurally_complete"))
         if not week_complete:
-            raise ValueError(f"MFL schedule did not contain week {week}")
+            raise ValueError(f"MFL schedule week {week} was absent or structurally incomplete")
         sync_nfl_schedule(season, parsed)
-        rows = get_week_schedule(season, week)
+        # The durable table is a cache.  Current decisions use only this fresh,
+        # structurally verified payload so stale DB rows cannot contaminate them.
+        rows = [row for row in parsed if row["week"] == week]
         schedule_ok = bool(rows)
         game_states = build_team_game_states(rows, datetime.now(timezone.utc), schedule_verified=schedule_ok)
     except Exception:
@@ -357,6 +359,8 @@ def lineups_check():
 
     jobs = []
     for league in _user_synced_leagues():
+        if int(league.year) != int(season):
+            continue
         host = _league_host(league) or "api.myfantasyleague.com"
         cookie = _cookie_header_for_host(host)
         best_ball = _resolve_lineup_mode(league) == LINEUP_MODE_BEST_BALL

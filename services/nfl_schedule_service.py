@@ -40,12 +40,18 @@ def fetch_mfl_nfl_schedule(year: int, *, timeout: int = 20) -> dict:
     return response.json()
 
 
-def parse_mfl_nfl_schedule(payload: dict, year: int) -> list[dict]:
-    """Turn each real fullNflSchedule matchup into its two team rows."""
+def parse_mfl_nfl_schedule_with_metadata(payload: dict, year: int) -> tuple[list[dict], dict[int, dict]]:
+    """Parse schedule rows and prove week-level structural completeness.
+
+    A week is complete only when every raw matchup produces two recognized,
+    reciprocal teams.  Kickoff may be absent without hiding the teams; those
+    teams receive UNKNOWN lock state later.
+    """
     weeks = payload.get("fullNflSchedule", {}).get("nflSchedule", [])
     if isinstance(weeks, dict):
         weeks = [weeks]
     records: list[dict] = []
+    metadata: dict[int, dict] = {}
     for week_node in weeks or []:
         try:
             week = int(week_node["week"])
@@ -54,15 +60,24 @@ def parse_mfl_nfl_schedule(payload: dict, year: int) -> list[dict]:
         matchups = week_node.get("matchup", [])
         if isinstance(matchups, dict):
             matchups = [matchups]
+        info = metadata.setdefault(week, {"week_number": week, "raw_matchup_count": 0,
+            "parsed_matchup_count": 0, "malformed_matchup_count": 0,
+            "unique_team_count": 0, "structurally_complete": False})
+        info["raw_matchup_count"] = len(matchups or [])
+        parsed_teams: set[str] = set()
         for matchup in matchups or []:
             teams = matchup.get("team", [])
             if isinstance(teams, dict):
                 teams = [teams]
             if len(teams) != 2:
+                info["malformed_matchup_count"] += 1
                 continue
             ids = [normalize_nfl_team(t.get("id")) for t in teams]
-            if not all(ids):
+            if not all(ids) or ids[0] == ids[1]:
+                info["malformed_matchup_count"] += 1
                 continue
+            info["parsed_matchup_count"] += 1
+            parsed_teams.update(ids)
             try:
                 kickoff = int(matchup["kickoff"])
             except (KeyError, TypeError, ValueError):
@@ -71,7 +86,19 @@ def parse_mfl_nfl_schedule(payload: dict, year: int) -> list[dict]:
                 records.append({"year": int(year), "week": week, "team": ids[index],
                                 "opponent": ids[1-index], "is_home": str(node.get("isHome", "0")) == "1",
                                 "kickoff_unix": kickoff})
-    return records
+        info["unique_team_count"] = len(parsed_teams)
+        info["structurally_complete"] = (
+            info["raw_matchup_count"] > 0
+            and info["parsed_matchup_count"] == info["raw_matchup_count"]
+            and info["malformed_matchup_count"] == 0
+            and info["unique_team_count"] == info["parsed_matchup_count"] * 2
+        )
+    return records, metadata
+
+
+def parse_mfl_nfl_schedule(payload: dict, year: int) -> list[dict]:
+    """Backward-compatible rows-only parser."""
+    return parse_mfl_nfl_schedule_with_metadata(payload, year)[0]
 
 
 def sync_nfl_schedule(year: int, records: Iterable[dict]) -> int:
