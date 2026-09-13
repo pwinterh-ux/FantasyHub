@@ -141,7 +141,7 @@
           Scan every MFL lineup for unavailable starters, injuries, missing projections, lineup problems, and meaningful projection upgrades before kickoff.
         </div>
         <div class="actions">
-          <a class="btn open-tool" data-tool="Lineup Checker" href="{{ url_for('lineups.lineups_check') }}" data-mfl-only="1">Open Checker</a>
+          <a class="btn open-tool" data-tool="Lineup Checker" href="{{ url_for('lineups.lineups_check') }}" data-mfl-only="1" data-lineup-check-launch="1">Open Checker</a>
           <span class="sub">Review only the leagues that need attention.</span>
         </div>
       </div>
@@ -546,6 +546,7 @@
 
       document.querySelectorAll('a.open-tool[href]').forEach(a => {
         a.addEventListener('click', function(){
+          if (a.matches('[data-lineup-check-launch="1"]')) return; // shared global overlay handles Checker scans
           if (a.matches('[data-mfl-only="1"]') && {{ has_mfl_leagues|tojson }} === false) return; // modal will handle
           showLaunching(a.getAttribute('data-tool') || 'Tool');
         });

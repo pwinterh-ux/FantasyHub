@@ -415,6 +415,45 @@
 
       window.SyncOverlay = { show, update, hide, pause };
 
+      // Fresh Lineup Checker scans can take several seconds. Delay navigation
+      // until the overlay has had an opportunity to paint, and bind once here
+      // so every marked Checker entry point behaves consistently.
+      let lineupCheckLaunching = false;
+      const lineupCheckCopy = {
+        headline: 'Checking your lineups…',
+        detail: 'Reviewing MFL leagues for starters, injuries, game locks, missing projections, and upgrades.'
+      };
+      function launchLineupCheck(control, navigate) {
+        if (lineupCheckLaunching) return;
+        lineupCheckLaunching = true;
+        control.setAttribute('aria-disabled', 'true');
+        control.classList.add('is-disabled');
+        show({ headline: lineupCheckCopy.headline, detail: lineupCheckCopy.detail,
+               spinner: true, done: 0, total: 0 });
+        requestAnimationFrame(() => requestAnimationFrame(navigate));
+      }
+      document.addEventListener('click', (event) => {
+        const link = event.target.closest('a[data-lineup-check-launch="1"]');
+        if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        launchLineupCheck(link, () => window.location.assign(link.href));
+      });
+      document.addEventListener('submit', (event) => {
+        const form = event.target.closest('form[data-lineup-check-launch="1"]');
+        if (!form) return;
+        event.preventDefault();
+        launchLineupCheck(form, () => form.submit());
+      });
+      window.addEventListener('pageshow', () => {
+        lineupCheckLaunching = false;
+        document.querySelectorAll('[data-lineup-check-launch="1"][aria-disabled="true"]')
+          .forEach(control => {
+            control.removeAttribute('aria-disabled');
+            control.classList.remove('is-disabled');
+          });
+        hide();
+      });
+
       // ----- Auto-bind to top-nav (Matchups + Injuries only) -----
       try {
         const cfg = JSON.parse((document.getElementById('baseOverlayConfig')?.textContent || '{}'));

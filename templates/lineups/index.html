@@ -43,7 +43,7 @@
         <h3 style="margin:0 0 6px;">Lineup Checker</h3>
         <div style="opacity:.85;">Scan all of your MFL lineups and show only leagues needing attention because of injuries, locked players, or meaningful projection upgrades.</div>
       </div>
-      <form method="POST" action="{{ url_for('lineups.lineups_check') }}">
+      <form method="POST" action="{{ url_for('lineups.lineups_check') }}" data-lineup-check-launch="1">
         <button type="submit" class="btn-ghost" style="padding:10px 14px; border-radius:10px;">Check All Lineups</button>
       </form>
       <div style="font-size:12px; opacity:.8;">Read-only: this check never submits or changes a lineup.</div>

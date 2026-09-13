@@ -645,3 +645,23 @@ def test_tools_surface_checker_and_updated_rapid_copy():
     assert "Lineup Injury Check" not in tools
     assert rapid_description in " ".join(tools.split())
     assert rapid_description in " ".join(lineups.split())
+
+
+def test_checker_launches_reuse_global_loading_overlay():
+    base = open("templates/base.html", encoding="utf-8").read()
+    tools = open("templates/tools/index.html", encoding="utf-8").read()
+    lineups = open("templates/lineups/index.html", encoding="utf-8").read()
+    results = open("templates/lineups/check.html", encoding="utf-8").read()
+
+    assert 'data-tool="Lineup Checker"' in tools and 'data-lineup-check-launch="1"' in tools
+    assert 'action="{{ url_for(\'lineups.lineups_check\') }}" data-lineup-check-launch="1"' in lineups
+    assert '>Run Again</a>' in results and 'data-lineup-check-launch="1"' in results
+    assert 'Review &amp; Submit' in results
+    review_form = results[results.index('lineups_check_review'):results.index('</form>')]
+    assert 'data-lineup-check-launch' not in review_form
+    assert base.count('id="globalSyncOverlay"') == 1
+    assert "window.SyncOverlay = { show, update, hide, pause }" in base
+    assert "Checking your lineups…" in base
+    assert "Reviewing MFL leagues for starters, injuries, game locks, missing projections, and upgrades." in base
+    assert "requestAnimationFrame(() => requestAnimationFrame(navigate))" in base
+    assert "window.addEventListener('pageshow'" in base
