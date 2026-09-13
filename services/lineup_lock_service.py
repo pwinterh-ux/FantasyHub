@@ -52,7 +52,8 @@ def fetch_player_roster_statuses(job: dict, week: int, *, timeout: int = 20) -> 
 
 
 def resolve_lineup_locks(job: dict, players: list[tuple], week: int,
-                         roster_locations: dict[int, str] | None = None) -> dict:
+                         roster_locations: dict[int, str] | None = None,
+                         lineup_positions: set[str] | frozenset[str] | None = None) -> dict:
     """Resolve game locks, requiring weekly status only when a game is not editable."""
     ids = [int(row[0]) for row in players]
     try:
@@ -92,8 +93,18 @@ def resolve_lineup_locks(job: dict, players: list[tuple], week: int,
                   schedule_verified=True, week_complete=True)["state"]
                   for pid, _name, _pos, team in players}
         statuses = fetch_player_roster_statuses({**job, "player_ids": ids}, week)
-        eligible = {pid for pid in ids if roster_locations is None or
-                    is_lineup_eligible_status(roster_locations.get(pid))}
+        positions = {int(row[0]): str(row[2] or "").strip().upper() for row in players}
+        normalized_lineup_positions = {str(position).strip().upper()
+                                       for position in (lineup_positions or set())
+                                       if str(position).strip()}
+        # A positive MFL starter result always wins over stale local metadata.
+        # Without usable parsed constraints, retain the previous conservative
+        # behavior rather than guessing which ACTIVE assets are irrelevant.
+        eligible = {pid for pid in ids if statuses.get(pid) == "S" or (
+                    (roster_locations is None or
+                     is_lineup_eligible_status(roster_locations.get(pid))) and
+                    (not normalized_lineup_positions or
+                     positions.get(pid) in normalized_lineup_positions))}
         # Weekly S/NS is only needed to place players whose games can no longer
         # be changed on the correct side of the lineup.  An omitted status for
         # an unlocked player does not create a game-lock risk.

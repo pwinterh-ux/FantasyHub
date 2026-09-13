@@ -20,6 +20,12 @@ def count_for_constraint(actual_position_counts: Mapping[str, int], rule_key: st
                for position in constraint_members(rule_key))
 
 
+def allowed_actual_positions(ranges: Mapping) -> frozenset[str]:
+    """Return every actual position accepted by parsed lineup constraints."""
+    return frozenset(position for rule_key in ranges
+                     for position in constraint_members(rule_key))
+
+
 def lineup_satisfies_constraints(actual_position_counts: Mapping[str, int], ranges: Mapping,
                                   *, minimums: bool = True, maximums: bool = True) -> bool:
     """Test every lineup rule using its aggregated member-position count."""
