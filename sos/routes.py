@@ -683,12 +683,12 @@ def _weekly_positional_scores(
         if pid not in used and player_map.get(pid) in {"RB", "WR", "TE"}
     ]
     # Some MFL formats encode flex capacity only through RB/WR/TE max ranges.
-    flex_limit = flex_slots if flex_slots else len(flex_candidates)
+    superflex_slots = _slot_minimum(ranges, "SF", "SUPERFLEX", "SFLX")
+    flex_limit = flex_slots if flex_slots else max(0, len(flex_candidates) - superflex_slots)
     for pid in flex_candidates[:flex_limit]:
         used.add(pid)
         scores["FLEX"] += _projection_value(projections, pid)
 
-    superflex_slots = _slot_minimum(ranges, "SF", "SUPERFLEX", "SFLX")
     superflex_candidates = [
         pid for pid in selected
         if pid not in used and player_map.get(pid) in {"QB", "RB", "WR", "TE"}
