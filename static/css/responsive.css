@@ -1,0 +1,124 @@
+/* RosterDash responsive presentation layer.
+   Breakpoints: phone <=639, compact/tablet 640-899, iPad 900-1199, desktop >=1200. */
+*, *::before, *::after { box-sizing: border-box; }
+
+main.content {
+  display: block;
+  min-height: 0;
+  padding: 0 0 var(--space-8);
+}
+.rd-scroll-x,
+main.content table {
+  max-width: 100%;
+}
+.rd-scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.rd-responsive-grid, .rd-card-grid { display: grid; gap: 12px; }
+.rd-page-header, .rd-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.nav-toggle { display: none; }
+
+@media (max-width: 1199px) {
+  .page-wrap { max-width: 100%; padding-left: 16px; padding-right: 16px; }
+  .content > .page-wrap { width: 100%; }
+  /* base.html owns the only viewport gutter; legacy inner wrappers retain desktop sizing only. */
+  .content > .page-wrap .page-wrap { max-width: none; width: 100%; margin-left: 0; margin-right: 0; padding-left: 0; padding-right: 0; }
+  .content > .page-wrap > [style*="max-width"] { width: 100%; }
+  .tile.pad, .glass-tile, .glass-container { max-width: 100%; }
+  .rd-responsive-grid, .rd-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .page > .grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  table { max-width: 100%; }
+}
+
+@media (max-width: 899px) {
+  .site-header { padding: 8px 0; margin-bottom: 8px; }
+  .site-header > .nav-bar {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    justify-content: initial;
+    gap: 8px 10px;
+    padding: 8px 12px;
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+  }
+  .nav-toggle {
+    display: inline-grid; place-items: center; width: 44px; height: 44px;
+    padding: 0; border: 1px solid var(--border); border-radius: 10px;
+    color: #eaf1f7; background: #0f172a; cursor: pointer; font-size: 22px;
+  }
+  .logo img { height: 25px; max-width: min(220px, 100%); }
+  .nav-bar nav, .nav-bar .donate { display: none; grid-column: 1 / -1; }
+  .nav-bar.is-open nav { display: block; }
+  .nav-bar.is-open .donate { display: block; }
+  .nav-links { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .nav-links li, .nav-links a, .nav-links form, .nav-links button { width: 100%; }
+  .nav-links a, .nav-links button { display: flex; align-items: center; min-height: 44px; }
+  .nav-links .muted { padding: 6px 12px; }
+  .nav-links .muted a { display: inline-flex; width: auto; padding-left: 4px; }
+  .donate a { display: flex; justify-content: center; align-items: center; min-height: 44px; }
+  main.content { padding-top: 8px; }
+  .page, .hud-wrap, .glass-container { width: 100%; margin-top: 8px !important; margin-bottom: 8px !important; }
+  .grid, .cards, .leagues-container, .buyers-grid { min-width: 0; }
+  .pos-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .gso-card, .sync-card, dialog { max-width: calc(100vw - 24px) !important; }
+  .gso-actions, .sync-actions { flex-wrap: wrap; justify-content: center; }
+  .tile.pad { padding: 16px; }
+}
+
+@media (max-width: 639px) {
+  .page-wrap { padding-left: 10px; padding-right: 10px; }
+  .site-header > .nav-bar { padding-left: 10px; padding-right: 10px; }
+  .site-header .page-wrap { width: 100%; }
+  main.content { padding-bottom: 24px; }
+  .tile.pad, .glass-tile, .glass-container, .card-inner, .hdr, .helper { padding: 10px !important; }
+  .rd-responsive-grid, .rd-card-grid, .grid, .cards, .leagues-container, .buyers-grid,
+  .ir-grid, .ir-columns, .account-grid, .grid-2, .best-available-grid, .tables {
+    grid-template-columns: 1fr !important;
+  }
+  .leagues-container { gap: 12px; padding: 0; }
+  .rd-stack-mobile, .rd-actions, .actions, .helper, .helper .row, .field,
+  form[style*="display:flex"], div[style*="display:flex"] { max-width: 100%; }
+  .rd-mobile-full, .actions > .btn, .actions > .button { max-width: 100%; }
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { max-width: 100%; font-size: 16px !important; }
+  button, .btn, .button, .btn-ghost, input[type="submit"] { min-height: 44px; }
+  input[type="checkbox"], input[type="radio"] { min-width: 20px; min-height: 20px; }
+  h1 { font-size: 1.55rem; } h2 { font-size: 1.3rem; } h3 { font-size: 1.05rem; }
+  #toast-stack { left: 10px; right: 10px; top: 68px; width: auto; }
+  #toast-stack .toast { width: auto; min-width: 0; max-width: none; }
+  #mflOnlyMask > [role="dialog"] { width: calc(100vw - 24px) !important; padding: 14px !important; }
+  #mflOnlyMask [style*="justify-content:flex-end"] { flex-wrap: wrap; }
+  main.content table { display: block; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Compact lineup editor: full-width position cards and readable two-line players. */
+  .pos-grid { grid-template-columns: 1fr !important; }
+  .pos-card { padding: 6px !important; min-width: 0; }
+  .pos-card .row { min-height: 44px; padding: 5px 6px !important; grid-template-columns: 22px minmax(0, 1fr) auto !important; }
+  .pos-card .info { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; }
+  .pos-card .nm { flex-basis: 100%; white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }
+  .pos-card .tm { margin-left: 0 !important; }
+  .pos-card .pj { font-size: 13px !important; font-weight: 700; }
+  .hdr-row { align-items: flex-start !important; flex-direction: column; }
+  .rules { flex-wrap: wrap; }
+  .body { margin-bottom: 132px !important; }
+  .action-bar { align-items: stretch !important; flex-direction: column; padding: 7px 10px calc(7px + env(safe-area-inset-bottom)) !important; gap: 6px !important; }
+  .ab-left { width: 100%; line-height: 1.25; }
+  .ab-right { display: flex; width: 100%; gap: 8px; }
+  .ab-right > * { flex: 1 1 0; min-width: 0; min-height: 44px; text-align: center; justify-content: center; }
+  .ab-right > a { order: -1; }
+  #fh-toast { left: 10px !important; right: 10px !important; bottom: 126px !important; max-width: none !important; }
+
+  /* Checker recommendations become vertical rather than compressed columns. */
+  [style*="grid-template-columns:1fr 1fr"] { grid-template-columns: 1fr !important; }
+  .kv { grid-template-columns: 1fr !important; }
+}
+
+@media (orientation: landscape) and (max-height: 520px) and (max-width: 932px) {
+  .site-header { position: sticky; padding: 3px 0; margin-bottom: 3px; }
+  .site-header > .nav-bar { padding-top: 3px; padding-bottom: 3px; }
+  main.content { padding-top: 3px; padding-bottom: 12px; }
+  .content > .page-wrap { padding-top: 6px; padding-bottom: 6px; }
+  .pos-grid, .rd-card-grid, .rd-responsive-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .action-bar { flex-direction: row !important; align-items: center !important; padding-top: 4px !important; padding-bottom: calc(4px + env(safe-area-inset-bottom)) !important; }
+  .ab-left { max-width: 46%; }
+  .ab-right { width: auto; min-width: 48%; }
+  .body { margin-bottom: 62px !important; }
+}
