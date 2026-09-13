@@ -8,7 +8,8 @@ from typing import Callable
 import requests
 
 from services.lineups_service import Projection, fetch_projected_scores, parse_lineup_requirements
-from services.nfl_schedule_service import BYE, LOCKED, UNKNOWN, game_state_for_team
+from services.lineup_constraints import lineup_satisfies_constraints
+from services.nfl_schedule_service import BYE, LOCKED, NO_GAME, UNKNOWN, game_state_for_team
 from services.lineup_lock_service import fetch_player_roster_statuses
 
 LINEUP_CHECK_MIN_GAIN = 2.0
@@ -35,7 +36,8 @@ def build_constrained_optimal_lineup(players: list[dict], total: int | None, ran
     if target is None: target = len(frozen)
     counts = {}
     for p in frozen: counts[p["position"]] = counts.get(p["position"], 0) + 1
-    if len(frozen) > target or any(counts.get(pos, 0) > hi for pos, (_lo, hi) in ranges.items()):
+    if len(frozen) > target or not lineup_satisfies_constraints(
+            counts, ranges, minimums=False):
         return {"ok": False, "reason": "Frozen starters violate lineup limits", "starter_ids": []}
     candidates = [p for p in players if int(p["player_id"]) not in frozen_ids | forbidden_ids
                   and p.get("projection") is not None]
@@ -48,15 +50,16 @@ def build_constrained_optimal_lineup(players: list[dict], total: int | None, ran
         for key, value in list(dp.items()):
             n, count_tuple = key
             current = dict(count_tuple)
-            hi = ranges.get(pos, (0, target))[1]
-            if n >= target or current.get(pos, 0) >= hi: continue
+            if n >= target: continue
             current[pos] = current.get(pos, 0) + 1
+            if not lineup_satisfies_constraints(current, ranges, minimums=False):
+                continue
             newkey = (n + 1, tuple(sorted(current.items())))
             newval = (value[0] + score, tuple(sorted(value[1] + (pid,))))
             if newkey not in dp or newval[0] > dp[newkey][0] or (newval[0] == dp[newkey][0] and newval[1] < dp[newkey][1]):
                 dp[newkey] = newval
     valid = [(v, dict(k[1])) for k, v in dp.items() if k[0] == target and
-             all(dict(k[1]).get(pos, 0) >= lo for pos, (lo, _hi) in ranges.items())]
+             lineup_satisfies_constraints(dict(k[1]), ranges)]
     if not valid: return {"ok": False, "reason": "No legal projected lineup satisfies requirements", "starter_ids": []}
     best = max(valid, key=lambda x: (x[0][0], tuple(-i for i in x[0][1])))[0]
     return {"ok": True, "reason": None, "starter_ids": list(best[1])}
@@ -94,9 +97,12 @@ def check_league_lineup(job: dict, *, week: int, injuries: dict[int, dict], inju
         p["injury"] = injury; players.append(p)
         is_starter = pid in current
         if is_starter and p["game"]["state"] in {LOCKED, UNKNOWN}: frozen.add(pid)
-        if (not is_starter and p["game"]["state"] in {LOCKED, UNKNOWN}) or p["game"]["state"] == BYE or p.get("roster_status") != "ACTIVE" or kind == "UNAVAILABLE": forbidden.add(pid)
-        if is_starter and (kind == "UNAVAILABLE" or p["game"]["state"] == BYE or p.get("roster_status") != "ACTIVE"):
-            findings.append({"type": "BYE_STARTER" if p["game"]["state"] == BYE else "UNAVAILABLE_STARTER",
+        if (not is_starter and p["game"]["state"] in {LOCKED, UNKNOWN}) or p["game"]["state"] in {BYE, NO_GAME} or p.get("roster_status") != "ACTIVE" or kind == "UNAVAILABLE": forbidden.add(pid)
+        if is_starter and (kind == "UNAVAILABLE" or p["game"]["state"] in {BYE, NO_GAME} or p.get("roster_status") != "ACTIVE"):
+            finding_type = ("BYE_STARTER" if p["game"]["state"] == BYE else
+                            "NO_GAME_STARTER" if p["game"]["state"] == NO_GAME else
+                            "UNAVAILABLE_STARTER")
+            findings.append({"type": finding_type,
                              "severity": "CRITICAL", "player_id": pid, "player_name": p.get("name"),
                              "injury_status": injury.get("status"), "game_state": p["game"]["state"],
                              "message": "No lineup change is possible for this player." if pid in frozen else "Starter needs attention"})
@@ -106,7 +112,7 @@ def check_league_lineup(job: dict, *, week: int, injuries: dict[int, dict], inju
         # Missing data is not evidence that a healthy/watch starter is worse.
         # Definite unavailable/bye/illegal starters remain repairable.
         if is_starter and p["projection"] is None and kind != "UNAVAILABLE" and \
-                p["game"]["state"] != BYE and p.get("roster_status") == "ACTIVE":
+                p["game"]["state"] not in {BYE, NO_GAME} and p.get("roster_status") == "ACTIVE":
             frozen.add(pid)
     # A stale schedule cannot prove that a starter may leave or a bench player may
     # enter.  A failed injury feed likewise cannot prove a candidate is available.

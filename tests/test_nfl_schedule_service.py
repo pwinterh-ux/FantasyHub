@@ -60,6 +60,9 @@ def test_lock_boundary_bye_unknown_and_aliases():
     assert game_state_for_team("KC", {}, schedule_verified=True, week_complete=True)["state"] == BYE
     assert game_state_for_team("KC", {}, schedule_verified=False, week_complete=True)["state"] == UNKNOWN
     assert game_state_for_team("???", {}, schedule_verified=True, week_complete=True)["state"] == UNKNOWN
+    assert game_state_for_team("FA", {}, schedule_verified=False, week_complete=False)["state"] == "NO_GAME"
+    assert game_state_for_team("fa", {}, schedule_verified=True, week_complete=True)["state"] == "NO_GAME"
+    assert game_state_for_team("XYZ", {}, schedule_verified=True, week_complete=True)["state"] == UNKNOWN
     assert normalize_nfl_team("KC") == "KCC"
     assert normalize_nfl_team("GB") == "GBP"
     assert normalize_nfl_team("LV") == "LVR"
