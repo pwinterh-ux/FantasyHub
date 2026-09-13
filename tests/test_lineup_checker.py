@@ -24,6 +24,35 @@ def test_constrained_optimizer_freezes_and_excludes_and_obeys_ranges():
     assert not impossible["ok"] and impossible["reason"]
 
 
+def test_composite_tdl_rule_returns_eleven_legal_starters():
+    players = ([player(1, "QB", 30), player(2, "QB", 10)] +
+               [player(pid, "RB", 30 - pid) for pid in range(3, 10)] +
+               [player(10, "WR", 18), player(11, "WR", 17), player(12, "TE", 16)])
+    ranges = {"QB": (1, 2), "RB": (1, 9), "WR+TE": (1, 9)}
+    result = build_constrained_optimal_lineup(players, 11, ranges, set(), set())
+    assert result["ok"] and len(result["starter_ids"]) == 11
+    selected = [p for p in players if p["player_id"] in result["starter_ids"]]
+    assert sum(p["position"] == "QB" for p in selected) >= 1
+    assert 1 <= sum(p["position"] in {"WR", "TE"} for p in selected) <= 9
+
+
+def test_overlapping_composite_constraints_enforce_all_minimums_and_maximums():
+    players = ([player(1, "QB", 100), player(2, "QB", 90)] +
+               [player(pid, "RB", 80 - pid) for pid in range(3, 9)] +
+               [player(pid, "WR", 70 - pid) for pid in range(9, 15)] +
+               [player(pid, "TE", 60 - pid) for pid in range(15, 19)])
+    ranges = {"QB": (1, 2), "RB": (1, 4), "WR": (2, 5), "TE": (1, 3),
+              "RB+WR+TE": (6, 9)}
+    result = build_constrained_optimal_lineup(players, 10, ranges, set(), set())
+    assert result["ok"]
+    positions = [p["position"] for p in players if p["player_id"] in result["starter_ids"]]
+    assert 1 <= positions.count("QB") <= 2
+    assert 1 <= positions.count("RB") <= 4
+    assert 2 <= positions.count("WR") <= 5
+    assert 1 <= positions.count("TE") <= 3
+    assert 6 <= sum(pos in {"RB", "WR", "TE"} for pos in positions) <= 9
+
+
 def job(players, slots="1:RB:1"):
     return {"league_id": 1, "league_name": "League", "players": players,
             "roster_slots": slots, "player_ids": [p["player_id"] for p in players]}
@@ -53,6 +82,17 @@ def test_taxi_ir_unknown_and_locked_bench_are_never_recommended():
               "BAL": {"state": "LOCKED", "kickoff_at_utc": None}}
     result = run([base, player(2, projection=50, team="BAL")], {1: "S", 2: "NS"}, states=states)
     assert result["entering_player_ids"] == []
+
+
+def test_no_game_starter_is_critical_and_replaceable_but_bench_is_forbidden():
+    starter = run([player(1, projection=50, team="FA"), player(2, projection=5)],
+                  {1: "S", 2: "NS"})
+    assert starter["classification"] == "CRITICAL"
+    assert starter["recommended_starter_ids"] == [2]
+    assert any(f["type"] == "NO_GAME_STARTER" for f in starter["findings"])
+    bench = run([player(1, projection=5), player(2, projection=50, team="fa")],
+                {1: "S", 2: "NS"})
+    assert bench["recommended_starter_ids"] == [1]
 
 
 def test_locked_out_starter_is_critical_frozen_and_missing_projection_has_no_fake_gain():

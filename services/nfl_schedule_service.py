@@ -9,7 +9,9 @@ import requests
 from app import db
 from models import NflSchedule
 
-UNLOCKED, LOCKED, BYE, UNKNOWN = "UNLOCKED", "LOCKED", "BYE", "UNKNOWN"
+UNLOCKED, LOCKED, BYE, NO_GAME, UNKNOWN = "UNLOCKED", "LOCKED", "BYE", "NO_GAME", "UNKNOWN"
+
+_NO_GAME_TEAMS = {"FA"}
 
 # MFL uses its historic abbreviations.  Player imports sometimes use modern ones.
 _ALIASES = {
@@ -149,6 +151,8 @@ def build_team_game_states(rows: Iterable[dict], now_utc: datetime, *, schedule_
 
 
 def game_state_for_team(team: Any, states: dict, *, schedule_verified: bool, week_complete: bool) -> dict:
+    if str(team or "").strip().upper() in _NO_GAME_TEAMS:
+        return {"state": NO_GAME, "kickoff_at_utc": None}
     normalized = normalize_nfl_team(team)
     if not schedule_verified or not week_complete or normalized is None:
         return {"state": UNKNOWN, "kickoff_at_utc": None}

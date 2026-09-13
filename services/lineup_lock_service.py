@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import requests
 
 from services.nfl_schedule_service import (
-    BYE, LOCKED, UNKNOWN, UNLOCKED, build_team_game_states, fetch_mfl_nfl_schedule,
+    BYE, LOCKED, NO_GAME, UNKNOWN, UNLOCKED, build_team_game_states, fetch_mfl_nfl_schedule,
     game_state_for_team, parse_mfl_nfl_schedule_with_metadata,
 )
 
@@ -57,10 +57,13 @@ def resolve_lineup_locks(job: dict, players: list[tuple], week: int) -> dict:
             current = {pid for pid, status in statuses.items() if status == "S"}
             raise ValueError("Past-week lineup editing is not supported")
         if int(week) > live_week:
-            states = {pid: UNLOCKED for pid in ids}
+            states = {int(pid): game_state_for_team(team, {}, schedule_verified=True,
+                      week_complete=True)["state"] if str(team or "").strip().upper() == "FA" else UNLOCKED
+                      for pid, _name, _pos, team in players}
             return {"safe": True, "warning": None, "current": set(), "states": states,
                     "locked_starters": set(), "locked_bench": set(),
-                    "unknown_starters": set(), "unknown_bench": set(), "bye_players": set()}
+                    "unknown_starters": set(), "unknown_bench": set(), "bye_players": set(),
+                    "no_game_players": {pid for pid in ids if states.get(pid) == NO_GAME}}
         complete = bool(metadata.get(int(week), {}).get("structurally_complete"))
         week_rows = [row for row in rows if row["week"] == int(week)]
         if not complete or not week_rows:
@@ -85,7 +88,8 @@ def resolve_lineup_locks(job: dict, players: list[tuple], week: int) -> dict:
                 "locked_starters": {pid for pid in current if states.get(pid) == LOCKED},
                 "locked_bench": {pid for pid in ids if pid not in current and states.get(pid) == LOCKED},
                 "unknown_starters": unknown_starters, "unknown_bench": unknown_bench,
-                "bye_players": {pid for pid in ids if states.get(pid) == BYE}}
+                "bye_players": {pid for pid in ids if states.get(pid) == BYE},
+                "no_game_players": {pid for pid in ids if states.get(pid) == NO_GAME}}
     except Exception as exc:
         # If the schedule is unavailable we can still preserve live starters when
         # that first fetch succeeded; otherwise no edit or submit is safe.
@@ -94,7 +98,7 @@ def resolve_lineup_locks(job: dict, players: list[tuple], week: int) -> dict:
                 "current": current, "states": {pid: UNKNOWN for pid in ids},
                 "locked_starters": set(), "locked_bench": set(),
                 "unknown_starters": set(current), "unknown_bench": set(ids) - set(current),
-                "bye_players": set()}
+                "bye_players": set(), "no_game_players": set()}
 
 
 def lock_violation(lock_context: dict, submitted: list[int]) -> str | None:
@@ -105,7 +109,8 @@ def lock_violation(lock_context: dict, submitted: list[int]) -> str | None:
     frozen = set(lock_context["locked_starters"]) | set(lock_context.get("unknown_starters", set()))
     forbidden = (set(lock_context["locked_bench"]) |
                  set(lock_context.get("unknown_bench", set())) |
-                 set(lock_context.get("bye_players", set())))
+                 set(lock_context.get("bye_players", set())) |
+                 set(lock_context.get("no_game_players", set())))
     if not frozen.issubset(selected) or selected & forbidden:
         return "Lineup changed after a game locked. Refresh this lineup before submitting."
     return None

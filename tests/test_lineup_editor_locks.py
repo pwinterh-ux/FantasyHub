@@ -225,6 +225,7 @@ def test_future_week_does_not_require_weekly_statuses_and_is_editable():
         "states": {1: "UNLOCKED", 2: "UNLOCKED"},
         "locked_starters": set(), "locked_bench": set(),
         "unknown_starters": set(), "unknown_bench": set(), "bye_players": set(),
+        "no_game_players": set(),
     }
     statuses.assert_not_called()
     grouped, _selected, warning = routes._lock_safe_view(
@@ -298,14 +299,15 @@ def test_future_week_rapid_renders_and_submits_through_live_lock_guard():
         submit.assert_called_once()
 
 
-def test_unknown_player_is_per_player_and_known_players_remain_editable():
-    players = [(1, "Known Starter", "WR", "TBB"), (2, "Unknown Bench", "WR", "FA")]
+def test_no_game_player_is_per_player_and_known_players_remain_editable():
+    players = [(1, "Known Starter", "WR", "TBB"), (2, "No Game Bench", "WR", "FA")]
     with patch("services.lineup_lock_service.fetch_player_roster_statuses",
                return_value={1: "S", 2: "NS"}), patch(
                "services.lineup_lock_service.fetch_mfl_nfl_schedule", return_value=_schedule()):
         result = resolve_lineup_locks(_lock_job(), players, 1)
     assert result["safe"]
-    assert result["unknown_bench"] == {2}
+    assert result["unknown_bench"] == set()
+    assert result["no_game_players"] == {2}
     grouped, selected, _ = routes._lock_safe_view(
         SimpleNamespace(), players, {1: Projection(1, 5)}, 1, {"WR": (1, 1)},
         {1: "ACTIVE", 2: "ACTIVE"}, result, [1])
@@ -313,6 +315,46 @@ def test_unknown_player_is_per_player_and_known_players_remain_editable():
     assert next(row for row in grouped["WR"] if row["player_id"] == 1)["is_editable"]
     assert not next(row for row in grouped["WR"] if row["player_id"] == 2)["is_editable"]
     assert lock_violation(result, [1, 2]) is not None
+
+
+def test_no_game_needs_no_weekly_status_and_does_not_fail_lock_resolution():
+    players = [(1, "Known Starter", "WR", "TBB"), (2, "No Game Bench", "WR", "fA")]
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses", return_value={1: "S"}), \
+         patch("services.lineup_lock_service.fetch_mfl_nfl_schedule", return_value=_schedule()):
+        result = resolve_lineup_locks(_lock_job(), players, 1)
+    assert result["safe"] and result["states"][2] == "NO_GAME"
+    assert result["unknown_bench"] == set()
+
+
+def test_no_game_current_starter_is_not_frozen_and_can_be_replaced():
+    players = [(1, "No Game Starter", "WR", "FA"), (2, "Replacement", "WR", "ATL")]
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses",
+               return_value={1: "S", 2: "NS"}), patch(
+               "services.lineup_lock_service.fetch_mfl_nfl_schedule", return_value=_schedule()):
+        context = resolve_lineup_locks(_lock_job(), players, 1)
+    grouped, selected, warning = routes._lock_safe_view(SimpleNamespace(), players,
+        {1: Projection(1, 50), 2: Projection(2, 5)}, 1, {"WR": (1, 1)},
+        {1: "ACTIVE", 2: "ACTIVE"}, context)
+    assert warning is None and selected == {2}
+    no_game = next(row for row in grouped["WR"] if row["player_id"] == 1)
+    assert not no_game["is_locked"] and no_game["game_state"] == "NO_GAME"
+
+
+def test_composite_checker_prefill_is_legal_and_survives_rapid_validation():
+    players = ([(1, "QB", "QB", "TBB")] +
+               [(pid, f"RB{pid}", "RB", "ATL") for pid in range(2, 9)] +
+               [(9, "WR1", "WR", "TBB"), (10, "WR2", "WR", "ATL"),
+                (11, "TE1", "TE", "TBB")])
+    ranges = {"QB": (1, 2), "RB": (1, 9), "WR+TE": (1, 9)}
+    ids = set(range(1, 12))
+    assert routes._lineup_is_legal(ids, players, 11, ranges)
+    context = {"safe": True, "warning": None, "current": ids,
+               "states": {pid: "UNLOCKED" for pid in ids}, "locked_starters": set(),
+               "locked_bench": set(), "unknown_starters": set(), "unknown_bench": set(),
+               "bye_players": set(), "no_game_players": set()}
+    _grouped, selected, warning = routes._lock_safe_view(SimpleNamespace(), players, {}, 11,
+        ranges, {pid: "ACTIVE" for pid in ids}, context, sorted(ids))
+    assert selected == ids and warning is None
 
 
 def test_unknown_starter_is_frozen_without_disabling_known_bench():
@@ -341,3 +383,11 @@ def test_bye_is_forbidden_but_current_bye_starter_is_not_locked():
     assert selected == {2}
     assert not bye["is_locked"]
     assert lock_violation(context, [1]) is not None
+
+
+def test_no_game_templates_have_badge_but_no_bye_or_lock_branch():
+    for template in ("templates/lineups/rapid_league.html", "templates/lineups/single_league.html"):
+        source = open(template, encoding="utf-8").read()
+        assert "r.game_state == 'NO_GAME'" in source
+        assert ">NO GAME</span>" in source
+        assert "Lineup Checker recommendation" not in source

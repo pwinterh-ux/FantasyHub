@@ -47,7 +47,7 @@
 
             <div class="list">
               {% for r in rows %}
-                <label class="row{% if not r.lineup_eligible or not r.is_editable %} ineligible{% endif %}"{% if r.locked_as_starter %} title="Game started — starter locked"{% elif r.is_locked %} title="Game started — cannot be added"{% elif r.game_state == 'UNKNOWN' %} title="Game status unknown — lineup position preserved"{% elif r.game_state == 'BYE' %} title="Player is on a bye"{% endif %}>
+                <label class="row{% if not r.lineup_eligible or not r.is_editable %} ineligible{% endif %}"{% if r.locked_as_starter %} title="Game started — starter locked"{% elif r.is_locked %} title="Game started — cannot be added"{% elif r.game_state == 'UNKNOWN' %} title="Game status unknown — lineup position preserved"{% elif r.game_state == 'BYE' %} title="Player is on a bye"{% elif r.game_state == 'NO_GAME' %} title="Player has no NFL game"{% endif %}>
                   <input type="checkbox"
                          name="starters[]"
                          value="{{ r.player_id }}"
@@ -55,7 +55,7 @@
                          {% if not r.lineup_eligible or not r.is_editable %}disabled{% endif %}
                          data-pos="{{ r.position }}"
                          data-proj="{{ r.projected if r.projected is not none else '' }}">
-                  <span class="nm">{{ r.name }}{% if r.is_locked %} <span aria-label="Locked">🔒</span>{% elif r.game_state == 'UNKNOWN' %} <span title="Game status unknown">⚠</span>{% elif r.game_state == 'BYE' %} <span class="status-badge unknown">BYE</span>{% endif %}
+                  <span class="nm">{{ r.name }}{% if r.is_locked %} <span aria-label="Locked">🔒</span>{% elif r.game_state == 'UNKNOWN' %} <span title="Game status unknown">⚠</span>{% elif r.game_state == 'BYE' %} <span class="status-badge unknown">BYE</span>{% elif r.game_state == 'NO_GAME' %} <span class="status-badge unknown">NO GAME</span>{% endif %}
                     {% if r.roster_status == 'TAXI' %}<span class="status-badge taxi">On Taxi</span>
                     {% elif r.roster_status == 'IR' %}<span class="status-badge ir">On IR</span>
                     {% elif r.roster_status != 'ACTIVE' %}<span class="status-badge unknown">Status Unknown</span>{% endif %}
@@ -197,6 +197,11 @@
     return {lo, hi};
   }
 
+  function countForRule(byPos, rule){
+    return String(rule).toUpperCase().split('+')
+      .reduce((total, pos) => total + (byPos[pos.trim()] || 0), 0);
+  }
+
   function updateCounts(){
     const byPos = {};
     const boxes = form.querySelectorAll('input[type="checkbox"][name="starters[]"]');
@@ -212,7 +217,7 @@
       const pos = (card?.getAttribute('data-pos') || 'Other').toUpperCase();
       const rangeText = ranges[pos] || '';
       const countEl = card.querySelector('[data-pos-count]');
-      const count = byPos[pos] || 0;
+      const count = countForRule(byPos, pos);
       if (countEl) countEl.textContent = count;
 
       el.classList.remove('bad','good');

@@ -22,6 +22,7 @@ from services.mfl_parsers import (
     ROSTER_STATUS_UNKNOWN,
 )
 from services.mfl_sync import sync_league_info
+from services.lineup_constraints import lineup_satisfies_constraints
 
 log = logging.getLogger(__name__)
 ROSTER_STATUS_TTL_SECONDS = 300
@@ -527,69 +528,35 @@ def pick_optimal_lineup(
     total_required: Optional[int],
     ranges: Dict[str, Tuple[int, int]],
 ) -> List[int]:
-    """
-    Greedy auto-pick:
-      1) For each position with a min requirement, take top 'min' by projection.
-      2) Pool the remaining candidates from positions that still have room (<= max) and
-         fill by best available until total_required is reached (or we run out).
-    If total_required is None, fill up to the sum of max bounds (or just the min fill if no max).
-    """
-    # Build buckets by POS with sorted candidates
-    by_pos: Dict[str, List[Tuple[int, float]]] = {}
-    for pid, _name, pos, _nfl in players:
-        proj = projections.get(pid).projected if projections.get(pid) else None
-        score = float(proj) if proj is not None else float("-inf")  # None last
-        key = (pos or "").upper() or "OTHER"
-        by_pos.setdefault(key, []).append((pid, score))
-
-    for key in by_pos:
-        # sort by projection desc, then pid for stability
-        by_pos[key].sort(key=lambda t: (-t[1], t[0]))
-
-    selected: List[int] = []
-    counts: Dict[str, int] = {}
-
-    # Step A: satisfy mins
-    for pos, (lo, _hi) in ranges.items():
-        if pos not in by_pos or lo <= 0:
-            if lo > 0 and pos not in by_pos:
-                counts[pos] = 0
-            continue
-        take = min(lo, len(by_pos[pos]))
-        for pid, _ in by_pos[pos][:take]:
-            selected.append(pid)
-        counts[pos] = take
-
-    # Remove selected from buckets
-    selected_set = set(selected)
-    for pos in list(by_pos.keys()):
-        by_pos[pos] = [(pid, sc) for (pid, sc) in by_pos[pos] if pid not in selected_set]
-
-    # Decide target total
-    if total_required is None:
-        # best effort: sum of mins + as many as the max room allows
-        total_required = sum(r[1] for r in ranges.values()) if ranges else len(players)
-        # If all maxes are huge, cap by roster size
-        total_required = min(total_required, len(players))
-
-    # Step B: best-available while respecting max per position
-    def has_room(pos: str) -> bool:
-        lo, hi = ranges.get(pos, (0, 9999))
-        return counts.get(pos, 0) < hi
-
-    # Build a pooled candidate list that we can pop from
-    pool: List[Tuple[int, float, str]] = []
-    for pos, lst in by_pos.items():
-        for pid, sc in lst:
-            pool.append((pid, sc, pos))
-    pool.sort(key=lambda t: (-t[1], t[0]))
-
-    for pid, _sc, pos in pool:
-        if len(selected) >= total_required:
-            break
-        if not has_room(pos):
-            continue
-        selected.append(pid)
-        counts[pos] = counts.get(pos, 0) + 1
-
-    return selected
+    """Pick the highest projected legal lineup, including composite MFL rules."""
+    target = total_required
+    if target is None:
+        target = min(sum(maximum for _minimum, maximum in ranges.values()), len(players)) \
+            if ranges else len(players)
+    # State is (selected count, actual-position counts); values retain score and
+    # stable player ids. Actual counts let every overlapping flex rule aggregate
+    # the same player without creating synthetic position buckets.
+    dp = {(0, ()): (0.0, ())}
+    ordered = sorted(players, key=lambda row: int(row[0]))
+    for pid, _name, raw_position, _nfl in ordered:
+        projection = projections.get(pid)
+        score = float(projection.projected) if projection and projection.projected is not None else float("-inf")
+        position = (raw_position or "").upper() or "OTHER"
+        for key, value in list(dp.items()):
+            count, count_tuple = key
+            if count >= target:
+                continue
+            actual_counts = dict(count_tuple)
+            actual_counts[position] = actual_counts.get(position, 0) + 1
+            if not lineup_satisfies_constraints(actual_counts, ranges, minimums=False):
+                continue
+            new_key = (count + 1, tuple(sorted(actual_counts.items())))
+            new_value = (value[0] + score, tuple(sorted(value[1] + (pid,))))
+            old = dp.get(new_key)
+            if old is None or new_value[0] > old[0] or (new_value[0] == old[0] and new_value[1] < old[1]):
+                dp[new_key] = new_value
+    legal = [value for (count, count_tuple), value in dp.items()
+             if count == target and lineup_satisfies_constraints(dict(count_tuple), ranges)]
+    if not legal:
+        return []
+    return list(max(legal, key=lambda value: (value[0], tuple(-pid for pid in value[1])))[1])

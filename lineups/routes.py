@@ -40,6 +40,7 @@ from services.lineups_service import (
 )
 from services.mfl_parsers import LINEUP_MODE_BEST_BALL
 from services.lineup_check_service import build_constrained_optimal_lineup
+from services.lineup_constraints import lineup_satisfies_constraints
 from services.lineup_lock_service import lock_violation, resolve_lineup_locks
 
 lineups_bp = Blueprint("lineups", __name__, template_folder="../templates")
@@ -899,7 +900,7 @@ def _lineup_is_legal(ids: set[int], players: list, total: int | None, ranges: di
     counts = {}
     for pid in ids:
         counts[lookup[pid]] = counts.get(lookup[pid], 0) + 1
-    return all(lo <= counts.get(pos, 0) <= hi for pos, (lo, hi) in ranges.items())
+    return lineup_satisfies_constraints(counts, ranges)
 
 
 def _lock_safe_view(lg: League, players: list, projections: dict, total: int | None,
@@ -909,7 +910,8 @@ def _lock_safe_view(lg: League, players: list, projections: dict, total: int | N
     frozen = set(lock_context["locked_starters"]) | set(lock_context.get("unknown_starters", set()))
     forbidden = (set(lock_context["locked_bench"]) |
                  set(lock_context.get("unknown_bench", set())) |
-                 set(lock_context.get("bye_players", set())))
+                 set(lock_context.get("bye_players", set())) |
+                 set(lock_context.get("no_game_players", set())))
     warning = lock_context.get("warning")
     if not lock_context["safe"]:
         selected = current
@@ -919,7 +921,7 @@ def _lock_safe_view(lg: League, players: list, projections: dict, total: int | N
         selected.difference_update(forbidden)
         selected = {pid for pid in selected if is_lineup_eligible_status(statuses.get(pid))}
         if not _lineup_is_legal(selected, players, total, ranges):
-            selected = current - set(lock_context.get("bye_players", set()))
+            selected = current - set(lock_context.get("bye_players", set())) - set(lock_context.get("no_game_players", set()))
             warning = "The saved checker recommendation is no longer legal after current game locks. Current starters are preserved; refresh Lineup Checker."
     else:
         player_dicts = [{"player_id": pid, "name": name, "position": pos, "team": team,
@@ -929,7 +931,7 @@ def _lock_safe_view(lg: League, players: list, projections: dict, total: int | N
         result = build_constrained_optimal_lineup(player_dicts, total, ranges,
                     frozen, forbidden)
         selected = (set(result["starter_ids"]) if result["ok"] else
-                    current - set(lock_context.get("bye_players", set())))
+                    current - set(lock_context.get("bye_players", set())) - set(lock_context.get("no_game_players", set())))
         if not result["ok"]:
             warning = result["reason"]
     grouped = group_and_sort_players_for_review(players, projections, statuses)
