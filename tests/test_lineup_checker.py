@@ -121,6 +121,26 @@ def test_missing_projection_starter_is_watch_preserved_and_has_no_fake_gain():
     assert any(f["type"] == "NO_PROJECTION_STARTER" for f in result["findings"])
 
 
+def test_unchanged_missing_projection_does_not_hide_known_independent_upgrade():
+    players = [player(1, "RB", None), player(2, "WR", 8), player(3, "WR", 13)]
+    result = run(players, {1: "S", 2: "S", 3: "NS"}, slots="2:RB:1,WR:1")
+    assert result["classification"] == "ACTION"
+    assert result["current_projected_total"] is None
+    assert result["recommended_projected_total"] is None
+    assert result["projected_gain"] == 5
+    assert result["leaving_player_ids"] == [2] and result["entering_player_ids"] == [3]
+    assert any(f["type"] == "NO_PROJECTION_STARTER" for f in result["findings"])
+
+
+def test_changed_missing_projection_has_unknown_gain_without_projection_action():
+    result = run([player(1, projection=None, team="FA"), player(2, projection=20)],
+                 {1: "S", 2: "NS"})
+    assert result["classification"] == "CRITICAL"
+    assert result["recommended_starter_ids"] == [2]
+    assert result["projected_gain"] is None
+    assert not any(f["type"] == "PROJECTION_UPGRADE" for f in result["findings"])
+
+
 def test_numeric_zero_is_known_but_sub_threshold_projection_swap_is_hidden():
     action = run([player(1, projection=0.0), player(2, projection=3)], {1: "S", 2: "NS"})
     assert action["classification"] == "ACTION" and action["entering_player_ids"] == [2]
