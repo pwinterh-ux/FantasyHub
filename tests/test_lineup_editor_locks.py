@@ -8,7 +8,9 @@ from app import db
 import lineups.routes as routes
 from models import League, Player, Roster, Team, User
 from services.lineups_service import Projection
-from services.lineup_lock_service import lock_violation, resolve_lineup_locks
+from services.lineup_lock_service import (
+    lock_violation, parse_player_roster_statuses, resolve_lineup_locks,
+)
 
 
 def _app_and_league():
@@ -109,6 +111,69 @@ def test_normal_rapid_start_uses_only_normal_queue_state():
         assert response.status_code == 302
         assert session["rapid_queue"] == [league_id] and session["rapid_idx"] == 0
         assert not any(key.startswith("checker_review_") for key in session)
+
+
+def test_rapid_start_excludes_best_ball_from_manual_queue():
+    app, (_league_id, user_id) = _app_and_league()
+    leagues = [SimpleNamespace(id=i, user_id=user_id, lineup_mode=("BEST_BALL" if i < 3 else "MANUAL"))
+               for i in range(1, 6)]
+    with app.test_request_context("/lineups/rapid", method="POST", data={"week": "2"}):
+        with patch.object(routes, "current_user", SimpleNamespace(id=user_id)), \
+             patch.object(routes, "_require_recent_sync_or_gate", return_value=None), \
+             patch.object(routes, "_user_synced_leagues", return_value=leagues), \
+             patch.object(routes, "_resolve_lineup_mode", side_effect=lambda league: league.lineup_mode):
+            response = routes.lineups_rapid_start.__wrapped__()
+        assert response.location.endswith("/lineups/rapid/league")
+        assert session["rapid_queue"] == [3, 4, 5]
+        assert session["lineups_rapid_total"] == 3
+        assert session["rapid_best_ball_skipped"] == 2
+
+
+def test_all_best_ball_rapid_flow_reaches_finish_cleanly():
+    app, (_league_id, user_id) = _app_and_league()
+    leagues = [SimpleNamespace(id=i, user_id=user_id, lineup_mode="BEST_BALL") for i in (10, 11)]
+    with app.test_request_context("/lineups/rapid", method="POST", data={"week": "2"}):
+        with patch.object(routes, "current_user", SimpleNamespace(id=user_id)), \
+             patch.object(routes, "_require_recent_sync_or_gate", return_value=None), \
+             patch.object(routes, "_user_synced_leagues", return_value=leagues), \
+             patch.object(routes, "_resolve_lineup_mode", return_value="BEST_BALL"):
+            routes.lineups_rapid_start.__wrapped__()
+        assert session["rapid_queue"] == [] and session["rapid_best_ball_skipped"] == 2
+        response = routes.lineups_rapid_league.__wrapped__()
+        assert response.location.endswith("/lineups/rapid/finish")
+
+
+def test_rapid_finish_reports_manual_best_ball_and_event_categories_separately():
+    app, (_league_id, user_id) = _app_and_league()
+    events = [{"league_id": i, "league_name": str(i), "status": status,
+               "message": status, "ts": "now"}
+              for i, status in enumerate(("submitted", "skipped", "blocked", "blocked"), 1)]
+    with app.test_request_context("/lineups/rapid/finish"):
+        session.update(rapid_week=2, lineups_rapid_total=4, rapid_best_ball_skipped=2,
+                       lineups_rapid_events=events)
+        with patch.object(routes, "current_user", SimpleNamespace(id=user_id)), \
+             patch.object(routes, "render_template", side_effect=lambda _template, **values: values):
+            rendered = routes.lineups_rapid_finish.__wrapped__()
+        assert rendered["total_leagues"] == 4 and rendered["best_ball_count"] == 2
+        assert rendered["submitted_count"] == 1 and rendered["skipped_count"] == 1
+        assert rendered["blocked_count"] == 2
+
+
+@pytest.mark.parametrize(("data", "expected"), [({"blocked": "1"}, "blocked"), ({}, "skipped")])
+def test_rapid_skip_distinguishes_blocked_from_normal_user_skip(data, expected):
+    app, (league_id, user_id) = _app_and_league()
+    with app.test_request_context("/lineups/rapid/skip", method="POST", data=data):
+        session.update(rapid_queue=[league_id], rapid_idx=0)
+        with patch.object(routes, "current_user", SimpleNamespace(id=user_id)):
+            routes.lineups_rapid_skip.__wrapped__()
+        assert session["lineups_rapid_events"][0]["status"] == expected
+
+
+def test_lineups_index_accepts_with_and_without_trailing_slash():
+    app, _ids = _app_and_league()
+    adapter = app.url_map.bind("example.test")
+    assert adapter.match("/lineups", method="GET")[0] == "lineups.lineups_index"
+    assert adapter.match("/lineups/", method="GET")[0] == "lineups.lineups_index"
 
 
 def test_checker_review_uses_exact_prefill_without_normal_rapid_state():
@@ -398,6 +463,42 @@ def test_no_game_needs_no_weekly_status_and_does_not_fail_lock_resolution():
         result = resolve_lineup_locks(_lock_job(), players, 1)
     assert result["safe"] and result["states"][2] == "NO_GAME"
     assert result["unknown_bench"] == set()
+
+
+def test_taxi_and_ir_missing_statuses_do_not_poison_lock_resolution():
+    players = [(1, "Starter", "WR", "TBB"), (2, "Taxi Devy", "WR", ""),
+               (3, "IR", "WR", "ATL")]
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses", return_value={1: "S"}) as fetch, \
+         patch("services.lineup_lock_service.fetch_mfl_nfl_schedule",
+               return_value=_schedule(kickoff="1")):
+        result = resolve_lineup_locks(_lock_job(), players, 1,
+                                      {1: "ACTIVE", 2: "TAXI", 3: "IR"})
+    assert result["safe"] and result["locked_starters"] == {1}
+    fetch.assert_called_once()
+
+
+def test_relevant_missing_status_is_retried_once_and_partial_states_survive():
+    players = [(1, "Starter", "WR", "TBB"), (2, "Missing", "WR", "ATL")]
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses",
+               side_effect=[{1: "S"}, {}]) as fetch, patch(
+               "services.lineup_lock_service.fetch_mfl_nfl_schedule",
+               return_value=_schedule(kickoff="1")):
+        result = resolve_lineup_locks(_lock_job(), players, 1,
+                                      {1: "ACTIVE", 2: "ACTIVE"})
+    assert fetch.call_count == 2
+    assert not result["safe"] and result["states"][1] == "LOCKED"
+    assert result["states"][2] == "UNKNOWN"
+    assert result["unresolved_lock_status_ids"] == {2}
+    assert "Missing" in result["warning"]
+
+
+def test_player_roster_status_parser_normalizes_ids_and_falls_back_only_unambiguously():
+    xml = b'''<playerRosterStatuses>
+      <playerStatus id="1"><roster_franchise franchise_id="1" status="s"/></playerStatus>
+      <playerStatus id="2"><roster_franchise status="ns"/></playerStatus>
+      <playerStatus id="3"><roster_franchise franchise_id="2" status="S"/><roster_franchise franchise_id="3" status="NS"/></playerStatus>
+    </playerRosterStatuses>'''
+    assert parse_player_roster_statuses(xml, "0001") == {1: "S", 2: "NS"}
 
 
 def test_no_game_current_starter_is_not_frozen_and_can_be_replaced():

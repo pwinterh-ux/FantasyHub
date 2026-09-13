@@ -303,7 +303,7 @@ def _is_ok_payload(text: str) -> bool:
 
 # ============================= Index (two tiles) =============================
 
-@lineups_bp.route("/lineups", methods=["GET", "POST"])
+@lineups_bp.route("/lineups", methods=["GET", "POST"], strict_slashes=False)
 @login_required
 def lineups_index():
     gate = _require_recent_sync_or_gate()
@@ -882,8 +882,10 @@ def lineups_auto_submit():
 # ============================ Rapid flow (one-by-one) ========================
 
 def _live_lock_context(lg: League, players: list, week: int, host: str, cookie: str | None) -> dict:
+    locations = get_my_team_roster_statuses(lg.id)
     return resolve_lineup_locks({"host": host, "year": int(lg.year), "mfl_id": str(lg.mfl_id),
-        "franchise_id": str(lg.franchise_id or ""), "cookie": cookie or ""}, players, week)
+        "franchise_id": str(lg.franchise_id or ""), "cookie": cookie or ""}, players, week,
+        roster_locations=locations)
 
 
 def _lineup_is_legal(ids: set[int], players: list, total: int | None, ranges: dict) -> bool:
@@ -1095,16 +1097,20 @@ def lineups_rapid_start():
             return redirect(url_for("lineups.lineups_rapid_start"))
 
         leagues = _user_synced_leagues()
-        queue = [lg.id for lg in leagues if getattr(lg, "user_id", None) == current_user.id]
-        if not queue:
+        owned = [lg for lg in leagues if getattr(lg, "user_id", None) == current_user.id]
+        if not owned:
             flash("No synced leagues found.", "warning")
             return redirect(url_for("lineups.lineups_index"))
+        best_ball = [lg for lg in owned if (getattr(lg, "lineup_mode", None) and
+                     _resolve_lineup_mode(lg) == LINEUP_MODE_BEST_BALL)]
+        queue = [lg.id for lg in owned if lg not in best_ball]
 
         session["rapid_week"] = week_i
         session["rapid_queue"] = queue
         session["rapid_idx"] = 0
         session.pop("lineups_rapid_events", None)
         session["lineups_rapid_total"] = len(queue)
+        session["rapid_best_ball_skipped"] = len(best_ball)
         session["lineups_rapid_success"] = 0
         _clear_checker_review_state()
         session.modified = True
@@ -1190,7 +1196,7 @@ def lineups_rapid_league():
         total_leagues=len(queue),
         best_ball=False,
         blocking_status=("Roster status unavailable — submission disabled" if not refresh_ok else
-                         "Lock status unavailable — submission disabled" if not locks.get("safe") else None),
+                         locks.get("warning") if not locks.get("safe") else None),
         submission_blocked=not refresh_ok or not locks.get("safe"),
         submit_url="/lineups/rapid/submit",
         skip_url="/lineups/rapid/skip",
@@ -1320,9 +1326,9 @@ def lineups_rapid_skip():
         league_id_pk = queue[idx]
         lg: League | None = db.session.get(League, league_id_pk)
         if lg:
-            message = ("Best Ball — no lineup required (MFL sets the optimal lineup)."
-                       if lg.lineup_mode == LINEUP_MODE_BEST_BALL else "Skipped by user.")
-            _record_rapid_event(lg, "skipped", message)
+            blocked = str(request.form.get("blocked", "")).lower() in {"1", "true", "yes"}
+            _record_rapid_event(lg, "blocked" if blocked else "skipped",
+                                "Safety verification blocked submission." if blocked else "Skipped by user.")
         session["rapid_idx"] = idx + 1
         session.modified = True
     next_exists = (session.get("rapid_idx", 0) < len(queue))
@@ -1336,6 +1342,7 @@ def lineups_rapid_finish():
     total = session.get("lineups_rapid_total", 0)
     success = session.get("lineups_rapid_success", 0)
     events = session.get("lineups_rapid_events") or []
+    best_ball_count = int(session.get("rapid_best_ball_skipped") or 0)
 
     # Group by league
     grouped: Dict[int, Dict[str, object]] = {}
@@ -1357,6 +1364,7 @@ def lineups_rapid_finish():
     submitted_count = sum(1 for e in events if e.get("status") == "submitted")
     error_count     = sum(1 for e in events if e.get("status") == "error")
     skipped_count   = sum(1 for e in events if e.get("status") == "skipped")
+    blocked_count   = sum(1 for e in events if e.get("status") == "blocked")
 
     # Clear session keys used for rapid flow (keep toast persistence to browser storage)
     session.pop("rapid_week", None)
@@ -1365,6 +1373,7 @@ def lineups_rapid_finish():
     session.pop("lineups_rapid_total", None)
     session.pop("lineups_rapid_success", None)
     session.pop("lineups_rapid_events", None)
+    session.pop("rapid_best_ball_skipped", None)
 
     return render_template(
         "lineups/rapid_finish.html",
@@ -1373,6 +1382,8 @@ def lineups_rapid_finish():
         submitted_count=submitted_count,
         error_count=error_count,
         skipped_count=skipped_count,
+        blocked_count=blocked_count,
+        best_ball_count=best_ball_count,
         grouped_events=list(grouped.values()),
     )
 

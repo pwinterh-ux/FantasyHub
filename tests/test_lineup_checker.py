@@ -112,6 +112,51 @@ def test_questionable_and_doubtful_are_watch_not_removed():
         assert result["classification"] == "WATCH" and result["recommended_starter_ids"] == [1]
 
 
+def test_missing_projection_starter_is_watch_preserved_and_has_no_fake_gain():
+    result = run([player(1, projection=None), player(2, projection=50)], {1: "S", 2: "NS"})
+    assert result["classification"] == "WATCH"
+    assert result["recommended_starter_ids"] == [1]
+    assert result["projected_gain"] is None
+    assert result["leaving_player_ids"] == result["entering_player_ids"] == []
+    assert any(f["type"] == "NO_PROJECTION_STARTER" for f in result["findings"])
+
+
+def test_unchanged_missing_projection_does_not_hide_known_independent_upgrade():
+    players = [player(1, "RB", None), player(2, "WR", 8), player(3, "WR", 13)]
+    result = run(players, {1: "S", 2: "S", 3: "NS"}, slots="2:RB:1,WR:1")
+    assert result["classification"] == "ACTION"
+    assert result["current_projected_total"] is None
+    assert result["recommended_projected_total"] is None
+    assert result["projected_gain"] == 5
+    assert result["leaving_player_ids"] == [2] and result["entering_player_ids"] == [3]
+    assert any(f["type"] == "NO_PROJECTION_STARTER" for f in result["findings"])
+
+
+def test_changed_missing_projection_has_unknown_gain_without_projection_action():
+    result = run([player(1, projection=None, team="FA"), player(2, projection=20)],
+                 {1: "S", 2: "NS"})
+    assert result["classification"] == "CRITICAL"
+    assert result["recommended_starter_ids"] == [2]
+    assert result["projected_gain"] is None
+    assert not any(f["type"] == "PROJECTION_UPGRADE" for f in result["findings"])
+
+
+def test_numeric_zero_is_known_but_sub_threshold_projection_swap_is_hidden():
+    action = run([player(1, projection=0.0), player(2, projection=3)], {1: "S", 2: "NS"})
+    assert action["classification"] == "ACTION" and action["entering_player_ids"] == [2]
+    quiet = run([player(1, projection=0.0), player(2, projection=1.9)], {1: "S", 2: "NS"})
+    assert quiet["classification"] == "GOOD"
+    assert quiet["recommended_starter_ids"] == [1]
+    assert quiet["projected_gain"] is None
+
+
+def test_critical_repair_is_exposed_even_below_projection_threshold():
+    result = run([player(1, projection=10, team="FA"), player(2, projection=9)],
+                 {1: "S", 2: "NS"})
+    assert result["classification"] == "CRITICAL"
+    assert result["leaving_player_ids"] == [1] and result["entering_player_ids"] == [2]
+
+
 def test_scan_fetches_each_league_once_skips_best_ball_isolates_failure_and_is_plain():
     jobs = [dict(job([player(1)]), host="example", mfl_id="1", year=2026, cookie="", franchise_id="1", best_ball=False),
             dict(job([]), league_id=2, league_name="Best", host="example", mfl_id="2", year=2026, cookie="", franchise_id="2", best_ball=True)]
