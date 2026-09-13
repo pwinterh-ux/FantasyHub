@@ -92,7 +92,7 @@
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
       <div>
         <h2>Tools Hub</h2>
-        <div class="sub">Kickoff for IR Optimizer, lineup helpers, Exposures, and Waivers.</div>
+        <div class="sub">IR management, lineup checks, Rapid Lineups, exposures, waivers, and more.</div>
       </div>
       {# removed the "Hidden page (no nav link)" pill #}
     </div>
@@ -132,16 +132,17 @@
       </div>
     </div>
 
-    <!-- Lineup Injury Check (NOT gated; works with Sleeper too) -->
-    <div class="card">
+    <!-- Lineup Checker (MFL Only) -->
+    <div class="card {% if not has_mfl_leagues %}is-disabled{% endif %}">
+      <div class="badge">MFL Only</div>
       <div class="card-inner">
-        <h3>Lineup Injury Check</h3>
+        <h3>Lineup Checker</h3>
         <div class="desc">
-          Shows starters who appear on the weekly injury report (OUT/Doubtful/Questionable/Suspended) so you can review before lock.
+          Scan every MFL lineup for unavailable starters, injuries, missing projections, lineup problems, and meaningful projection upgrades before kickoff.
         </div>
         <div class="actions">
-          <a class="btn open-tool" data-tool="Lineup Injury Check" href="/injuries">Open</a>
-          <span class="sub">Requires current injury data.</span>
+          <a class="btn open-tool" data-tool="Lineup Checker" href="{{ url_for('lineups.lineups_check') }}" data-mfl-only="1" data-lineup-check-launch="1">Open Checker</a>
+          <span class="sub">Review only the leagues that need attention.</span>
         </div>
       </div>
     </div>
@@ -152,7 +153,7 @@
       <div class="card-inner">
         <h3>Rapid Lineups</h3>
         <div class="desc">
-          Review and submit projected lineups one league at a time. Started games are locked automatically and Taxi/IR players remain protected.
+          Work through every manual MFL league one at a time with the best projected legal lineup preselected. Started players stay locked, Taxi/IR players are protected, and Best Ball leagues are skipped automatically.
         </div>
         <div class="actions">
           <form method="POST"
@@ -171,7 +172,7 @@
             </span>
             <button class="btn" type="submit">Begin</button>
           </form>
-          <div class="sub" style="flex-basis:100%;">We’ll fetch projections and pre-fill a recommended lineup; you can adjust before submitting to MFL.</div>
+          <div class="sub" style="flex-basis:100%;">Review each lineup, adjust if needed, then Submit or Skip.</div>
         </div>
       </div>
     </div>
@@ -545,6 +546,7 @@
 
       document.querySelectorAll('a.open-tool[href]').forEach(a => {
         a.addEventListener('click', function(){
+          if (a.matches('[data-lineup-check-launch="1"]')) return; // shared global overlay handles Checker scans
           if (a.matches('[data-mfl-only="1"]') && {{ has_mfl_leagues|tojson }} === false) return; // modal will handle
           showLaunching(a.getAttribute('data-tool') || 'Tool');
         });

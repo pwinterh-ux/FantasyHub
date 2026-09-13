@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="tile pad" style="max-width:1100px;margin:24px auto;">
-  <h2 class="hdr">Lineup Check — Week {{ result.week }}</h2>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <h2 class="hdr">Lineup Check — Week {{ result.week }}</h2>
+    <a class="btn-ghost" href="{{ url_for('lineups.lineups_check') }}" data-lineup-check-launch="1">Run Again</a>
+  </div>
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
     <strong>🚨 {{ result.summary.critical }} Critical</strong><strong>↑ {{ result.summary.action }} Projection Upgrades</strong>
     <strong>⚠ {{ result.summary.watch }} Watch</strong><span>{{ result.summary.error }} Error</span>

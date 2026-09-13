@@ -40,7 +40,7 @@ from services.lineups_service import (
 )
 from services.mfl_parsers import LINEUP_MODE_BEST_BALL
 from services.lineup_check_service import build_constrained_optimal_lineup
-from services.lineup_constraints import lineup_satisfies_constraints
+from services.lineup_constraints import allowed_actual_positions, lineup_satisfies_constraints
 from services.lineup_lock_service import lock_violation, resolve_lineup_locks
 
 lineups_bp = Blueprint("lineups", __name__, template_folder="../templates")
@@ -883,9 +883,10 @@ def lineups_auto_submit():
 
 def _live_lock_context(lg: League, players: list, week: int, host: str, cookie: str | None) -> dict:
     locations = get_my_team_roster_statuses(lg.id)
+    _total, ranges = parse_lineup_requirements(lg.roster_slots or "")
     return resolve_lineup_locks({"host": host, "year": int(lg.year), "mfl_id": str(lg.mfl_id),
         "franchise_id": str(lg.franchise_id or ""), "cookie": cookie or ""}, players, week,
-        roster_locations=locations)
+        roster_locations=locations, lineup_positions=allowed_actual_positions(ranges))
 
 
 def _lineup_is_legal(ids: set[int], players: list, total: int | None, ranges: dict) -> bool:

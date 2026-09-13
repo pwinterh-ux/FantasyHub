@@ -7,6 +7,7 @@ from flask import Flask, session
 from app import db
 import lineups.routes as routes
 from models import League, Player, Roster, Team, User
+from services.lineup_constraints import allowed_actual_positions
 from services.lineups_service import Projection
 from services.lineup_lock_service import (
     lock_violation, parse_player_roster_statuses, resolve_lineup_locks,
@@ -577,3 +578,90 @@ def test_rapid_and_checker_share_compact_grid_without_checker_banner():
     assert 'aria-label="Locked"' in shared and ">NO GAME</span>" in shared
     assert "blocking_status" in shared and "action-bar" in shared
     assert "Updated for current game locks" not in shared
+
+
+@pytest.mark.parametrize("placeholder_position", ["", "OTHER"])
+def test_active_devy_placeholder_outside_lineup_positions_does_not_block(placeholder_position):
+    players = [(1, "Starter", "WR", "TBB"),
+               (908, "Devy Placeholder", placeholder_position, "")]
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses",
+               return_value={1: "S"}) as fetch, patch(
+               "services.lineup_lock_service.fetch_mfl_nfl_schedule",
+               return_value=_schedule(kickoff="1")):
+        result = resolve_lineup_locks(_lock_job(), players, 1,
+            {1: "ACTIVE", 908: "ACTIVE"}, {"QB", "RB", "WR", "TE"})
+
+    assert result["safe"]
+    assert result["unresolved_lock_status_ids"] == set()
+    assert result["locked_starters"] == {1}
+    fetch.assert_called_once()
+
+
+def test_actual_lineup_position_without_required_weekly_status_still_fails_closed():
+    players = [(2, "Unresolved Receiver", "WR", "ATL")]
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses",
+               side_effect=[{}, {}]) as fetch, patch(
+               "services.lineup_lock_service.fetch_mfl_nfl_schedule",
+               return_value=_schedule(kickoff="1")):
+        result = resolve_lineup_locks(_lock_job(), players, 1,
+            {2: "ACTIVE"}, {"QB", "RB", "WR", "TE"})
+
+    assert not result["safe"]
+    assert result["unresolved_lock_status_ids"] == {2}
+    assert fetch.call_count == 2
+
+
+def test_mfl_starter_with_incomplete_metadata_remains_protected():
+    players = [(3, "Incomplete Starter", "", "")]
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses",
+               return_value={3: "S"}), patch(
+               "services.lineup_lock_service.fetch_mfl_nfl_schedule",
+               return_value=_schedule(kickoff="1")):
+        result = resolve_lineup_locks(_lock_job(), players, 1,
+            {3: "ACTIVE"}, {"QB", "RB", "WR", "TE"})
+
+    assert result["safe"]
+    assert result["current"] == {3}
+    assert result["unknown_starters"] == {3}
+
+
+def test_allowed_actual_positions_expands_composite_rules():
+    assert allowed_actual_positions({"QB": (1, 2), "WR+TE": (1, 9)}) == {
+        "QB", "WR", "TE"
+    }
+
+
+def test_tools_surface_checker_and_updated_rapid_copy():
+    tools = open("templates/tools/index.html", encoding="utf-8").read()
+    lineups = open("templates/lineups/index.html", encoding="utf-8").read()
+    rapid_description = (
+        "Work through every manual MFL league one at a time with the best projected legal "
+        "lineup preselected. Started players stay locked, Taxi/IR players are protected, "
+        "and Best Ball leagues are skipped automatically."
+    )
+    assert "Lineup Checker" in tools
+    assert "url_for('lineups.lineups_check')" in tools
+    assert 'data-tool="Lineup Checker"' in tools and 'data-mfl-only="1"' in tools
+    assert "Lineup Injury Check" not in tools
+    assert rapid_description in " ".join(tools.split())
+    assert rapid_description in " ".join(lineups.split())
+
+
+def test_checker_launches_reuse_global_loading_overlay():
+    base = open("templates/base.html", encoding="utf-8").read()
+    tools = open("templates/tools/index.html", encoding="utf-8").read()
+    lineups = open("templates/lineups/index.html", encoding="utf-8").read()
+    results = open("templates/lineups/check.html", encoding="utf-8").read()
+
+    assert 'data-tool="Lineup Checker"' in tools and 'data-lineup-check-launch="1"' in tools
+    assert 'action="{{ url_for(\'lineups.lineups_check\') }}" data-lineup-check-launch="1"' in lineups
+    assert '>Run Again</a>' in results and 'data-lineup-check-launch="1"' in results
+    assert 'Review &amp; Submit' in results
+    review_form = results[results.index('lineups_check_review'):results.index('</form>')]
+    assert 'data-lineup-check-launch' not in review_form
+    assert base.count('id="globalSyncOverlay"') == 1
+    assert "window.SyncOverlay = { show, update, hide, pause }" in base
+    assert "Checking your lineups…" in base
+    assert "Reviewing MFL leagues for starters, injuries, game locks, missing projections, and upgrades." in base
+    assert "requestAnimationFrame(() => requestAnimationFrame(navigate))" in base
+    assert "window.addEventListener('pageshow'" in base
