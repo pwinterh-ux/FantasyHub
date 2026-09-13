@@ -69,7 +69,7 @@
   <!-- Bottom action bar -->
   <div class="action-bar">
     <div class="ab-left">
-      <span id="abStatus">{% if blocking_status %}⚠ {{ blocking_status }}{% elif reconciliation_status %}{{ reconciliation_status }}{% elif best_ball %}MFL sets the optimal lineup for this Best Ball league.{% else %}Review & submit your starters. Requirements turn green when valid.{% endif %}</span>
+      <span id="abStatus">{% if blocking_status %}⚠ {{ blocking_status }}{% elif best_ball %}MFL sets the optimal lineup for this Best Ball league.{% else %}Review & submit your starters. Requirements turn green when valid.{% endif %}</span>
     </div>
     <div class="ab-right">
       <button type="button" class="btn-ghost" id="skipBtn">{{ 'Continue' if best_ball else 'Skip' }}</button>

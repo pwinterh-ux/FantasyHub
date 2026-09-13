@@ -153,7 +153,7 @@ def test_checker_review_reoptimizes_a_stale_prefill_for_current_locks():
                           side_effect=lambda template, **values: captured.update(values) or template):
             routes.lineups_checker_review.__wrapped__()
     assert captured["auto_selected"] == {1}
-    assert captured["reconciliation_status"] == "Updated for current game locks"
+    assert "reconciliation_status" not in captured
     assert captured["blocking_status"] is None
 
 
@@ -206,14 +206,52 @@ def test_checker_submit_and_skip_use_independent_queue_while_normal_skip_keeps_q
         assert response.get_json()["redirect"].endswith("/lineups/check")
         assert "checker_review_queue" not in session
     with app.test_request_context("/lineups/check/review/skip", method="POST"):
-        session.update(checker_review_queue=[league_id], checker_review_idx=0)
-        response = routes.lineups_checker_review_skip.__wrapped__()
+        session.update(checker_review_queue=[league_id], checker_review_idx=0,
+                       checker_review_week=2)
+        with patch.object(routes, "current_user", SimpleNamespace(id=user_id)):
+            response = routes.lineups_checker_review_skip.__wrapped__()
         assert response.get_json()["redirect"].endswith("/lineups/check")
     with app.test_request_context("/lineups/rapid/skip", method="POST"):
         session.update(rapid_queue=[league_id, league_id], rapid_idx=0)
         response = routes.lineups_rapid_skip.__wrapped__()
         assert response.get_json()["next"] is True
         assert "redirect" not in response.get_json()
+
+
+def test_checker_submit_rejects_posted_week_tampering_without_mfl_submit():
+    app, (league_id, user_id) = _app_and_league()
+    with app.test_request_context("/lineups/check/review/submit", method="POST",
+                                  data={"league_id": league_id, "week": 2,
+                                        "starters[]": ["1"]}):
+        session.update(checker_review_queue=[league_id], checker_review_idx=0,
+                       checker_review_week=1)
+        with patch.object(routes, "current_user", SimpleNamespace(id=user_id)), \
+             patch.object(routes, "_effective_current_week", return_value=1), \
+             patch.object(routes, "submit_lineup") as submit:
+            response, code = routes.lineups_checker_review_submit.__wrapped__()
+        assert code == 409
+        submit.assert_not_called()
+
+
+def test_checker_review_exit_clears_state_and_redirects_to_checker():
+    app, _ids = _app_and_league()
+    with app.test_request_context("/lineups/check/review/exit"):
+        session.update(checker_review_queue=[1], checker_review_idx=0,
+                       checker_review_week=2, checker_review_prefills={"1": [1]})
+        response = routes.lineups_checker_review_exit.__wrapped__()
+        assert response.status_code == 302 and response.location.endswith("/lineups/check")
+        assert not any(key.startswith("checker_review_") for key in session)
+
+
+def test_checker_review_stale_get_clears_deleted_league_state():
+    app, (_league_id, user_id) = _app_and_league()
+    with app.test_request_context("/lineups/check/review"):
+        session.update(checker_review_queue=[999], checker_review_idx=0,
+                       checker_review_week=2, checker_review_prefills={"999": [1]})
+        with patch.object(routes, "current_user", SimpleNamespace(id=user_id)):
+            response = routes.lineups_checker_review.__wrapped__()
+        assert response.status_code == 302 and response.location.endswith("/lineups/check")
+        assert not any(key.startswith("checker_review_") for key in session)
 
 
 def test_locked_templates_include_hidden_starter_without_counting_it_as_checkbox():
@@ -437,3 +475,4 @@ def test_rapid_and_checker_share_compact_grid_without_checker_banner():
     assert "Lineup Checker recommendation" not in rapid + checker + shared
     assert 'aria-label="Locked"' in shared and ">NO GAME</span>" in shared
     assert "blocking_status" in shared and "action-bar" in shared
+    assert "Updated for current game locks" not in shared

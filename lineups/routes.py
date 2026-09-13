@@ -956,20 +956,37 @@ def _advance_checker_review() -> bool:
     return session["checker_review_idx"] < len(queue)
 
 
+def _checker_review_item() -> tuple[list[int], int, int, League] | None:
+    """Return a valid current review item, or clear stale review state."""
+    queue = session.get("checker_review_queue") or []
+    try:
+        idx = int(session.get("checker_review_idx"))
+        week = int(session.get("checker_review_week"))
+    except (TypeError, ValueError):
+        _clear_checker_review_state()
+        return None
+    if not queue or idx < 0 or idx >= len(queue):
+        _clear_checker_review_state()
+        return None
+    lg = db.session.get(League, queue[idx])
+    season = _pick_year_for_week_lookup()
+    max_week = int(current_app.config.get("MFL_MAX_WEEKS", MFL_MAX_WEEKS_FALLBACK))
+    valid_weeks = _allowed_weeks_from(_effective_current_week(season), max_week)
+    if (not lg or lg.user_id != current_user.id or int(lg.year) != int(season)
+            or week not in valid_weeks):
+        _clear_checker_review_state()
+        return None
+    return queue, idx, week, lg
+
+
 @lineups_bp.route("/lineups/check/review", methods=["GET"])
 @login_required
 def lineups_checker_review():
     """Render Checker recommendations with Rapid's compact presentation only."""
-    queue = session.get("checker_review_queue") or []
-    idx = int(session.get("checker_review_idx") or 0)
-    week = session.get("checker_review_week")
-    if not queue or week is None or idx >= len(queue):
-        _clear_checker_review_state()
+    item = _checker_review_item()
+    if item is None:
         return redirect(url_for("lineups.lineups_check"))
-    lg = db.session.get(League, queue[idx])
-    if not lg or lg.user_id != current_user.id:
-        _advance_checker_review()
-        return redirect("/lineups/check/review")
+    queue, idx, week, lg = item
 
     refresh_ok, refresh_error, host, cookie = _refresh_lineup_roster(lg)
     players = build_players_for_review(lg.id)
@@ -982,11 +999,9 @@ def lineups_checker_review():
     prefill = (session.get("checker_review_prefills") or {}).get(str(lg.id), [])
     grouped, selected, stale_warning = _lock_safe_view(
         lg, players, projections, total, ranges, statuses, locks, prefill)
-    reconciliation_status = None
     if locks.get("safe") and stale_warning:
         grouped, selected, _unused = _lock_safe_view(
             lg, players, projections, total, ranges, statuses, locks)
-        reconciliation_status = "Updated for current game locks"
     blocking_status = None
     if not refresh_ok:
         blocking_status = "Roster status unavailable — submission disabled"
@@ -999,27 +1014,30 @@ def lineups_checker_review():
         total_required=total, ranges=ranges, grouped_players=grouped,
         auto_selected=set(selected), index=idx + 1, total_leagues=len(queue),
         best_ball=False, blocking_status=blocking_status,
-        submission_blocked=bool(blocking_status), reconciliation_status=reconciliation_status,
+        submission_blocked=bool(blocking_status),
         submit_url="/lineups/check/review/submit",
         skip_url="/lineups/check/review/skip",
         next_url="/lineups/check/review",
-        finish_url=url_for("lineups.lineups_check"), exit_url=url_for("lineups.lineups_check"))
+        finish_url=url_for("lineups.lineups_check"), exit_url="/lineups/check/review/exit")
 
 
 @lineups_bp.route("/lineups/check/review/submit", methods=["POST"])
 @login_required
 def lineups_checker_review_submit():
+    item = _checker_review_item()
+    if item is None:
+        return jsonify(ok=False, message="Checker review is no longer current.", next=False,
+                       redirect=url_for("lineups.lineups_check")), 409
+    queue, idx, expected_week, expected_lg = item
     try:
         league_id = int(request.form.get("league_id", ""))
-        week = int(request.form.get("week", ""))
+        posted_week = int(request.form.get("week", ""))
         submitted = [int(value) for value in request.form.getlist("starters[]")]
     except (TypeError, ValueError):
         return jsonify(ok=False, message="Invalid request.", next=False), 400
-    queue = session.get("checker_review_queue") or []
-    idx = int(session.get("checker_review_idx") or 0)
-    lg = db.session.get(League, league_id)
-    if idx >= len(queue) or queue[idx] != league_id or not lg or lg.user_id != current_user.id:
+    if posted_week != expected_week or queue[idx] != league_id or expected_lg.id != league_id:
         return jsonify(ok=False, message="Checker review is no longer current.", next=False), 409
+    lg = expected_lg
     refresh_ok, refresh_error, host, cookie = _refresh_lineup_roster(lg)
     if not refresh_ok:
         return jsonify(ok=False, message=f"Lineup not submitted: {refresh_error}", next=False), 503
@@ -1030,10 +1048,10 @@ def lineups_checker_review_submit():
     total, ranges = parse_lineup_requirements(lg.roster_slots or "")
     if not _lineup_is_legal(set(submitted), players, total, ranges):
         return jsonify(ok=False, message="Lineup requirements are not satisfied.", next=False), 400
-    lock_error = lock_violation(_live_lock_context(lg, players, week, host, cookie), submitted)
+    lock_error = lock_violation(_live_lock_context(lg, players, expected_week, host, cookie), submitted)
     if lock_error:
         return jsonify(ok=False, message=lock_error, next=False), 409
-    ok, raw = submit_lineup(host, lg.mfl_id, lg.year, week, submitted, cookie=cookie)
+    ok, raw = submit_lineup(host, lg.mfl_id, lg.year, expected_week, submitted, cookie=cookie)
     if not (ok or _is_ok_payload(raw or "")):
         return jsonify(ok=False, message=_clean_mfl_message(raw or "Failed"), next=False), 502
     has_next = _advance_checker_review()
@@ -1046,11 +1064,21 @@ def lineups_checker_review_submit():
 @lineups_bp.route("/lineups/check/review/skip", methods=["POST"])
 @login_required
 def lineups_checker_review_skip():
+    if _checker_review_item() is None:
+        return jsonify(ok=False, message="Checker review is no longer current.", next=False,
+                       redirect=url_for("lineups.lineups_check")), 409
     has_next = _advance_checker_review()
     if not has_next:
         _clear_checker_review_state()
     return jsonify(ok=True, message="Skipped.", next=has_next,
                    redirect=None if has_next else url_for("lineups.lineups_check"))
+
+
+@lineups_bp.route("/lineups/check/review/exit", methods=["GET", "POST"])
+@login_required
+def lineups_checker_review_exit():
+    _clear_checker_review_state()
+    return redirect(url_for("lineups.lineups_check"))
 
 @lineups_bp.route("/lineups/rapid", methods=["GET", "POST"])
 @login_required
@@ -1116,7 +1144,7 @@ def lineups_rapid_league():
             my_team_name=None, starters_label="", total_required=None, ranges={},
             grouped_players={}, auto_selected=set(), index=idx + 1,
             total_leagues=len(queue), best_ball=True, blocking_status=None,
-            submission_blocked=False, reconciliation_status=None,
+            submission_blocked=False,
             submit_url="/lineups/rapid/submit",
             skip_url="/lineups/rapid/skip",
             next_url="/lineups/rapid/league",
@@ -1164,7 +1192,7 @@ def lineups_rapid_league():
         blocking_status=("Roster status unavailable — submission disabled" if not refresh_ok else
                          "Lock status unavailable — submission disabled" if not locks.get("safe") else None),
         submission_blocked=not refresh_ok or not locks.get("safe"),
-        reconciliation_status=None, submit_url="/lineups/rapid/submit",
+        submit_url="/lineups/rapid/submit",
         skip_url="/lineups/rapid/skip",
         next_url="/lineups/rapid/league",
         finish_url="/lineups/rapid/finish",
