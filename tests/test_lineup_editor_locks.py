@@ -78,9 +78,10 @@ def test_checker_bridge_stores_one_league_and_exact_recommendation():
              patch.object(routes, "_pick_year_for_week_lookup", return_value=2026):
             response = routes.lineups_check_review.__wrapped__(league_id)
         assert response.status_code == 302
-        assert session["rapid_queue"] == [league_id]
-        assert session["rapid_prefill"] == {str(league_id): [1]}
-        assert session["rapid_source"] == "lineup_checker"
+        assert session["checker_review_queue"] == [league_id]
+        assert session["checker_review_prefills"] == {str(league_id): [1]}
+        assert session["checker_review_idx"] == 0
+        assert not any(key.startswith("rapid_") for key in session)
 
 
 def test_checker_bridge_rejects_other_owner_and_non_rostered_ids():
@@ -92,32 +93,68 @@ def test_checker_bridge_rejects_other_owner_and_non_rostered_ids():
                  patch.object(routes, "_pick_year_for_week_lookup", return_value=2026):
                 response = routes.lineups_check_review.__wrapped__(league_id)
             assert response.status_code == 302
-            assert "rapid_prefill" not in session
+            assert "checker_review_prefills" not in session
 
 
-def test_checker_sourced_rapid_route_uses_exact_prefill_without_greedy_picker():
+def test_normal_rapid_start_uses_only_normal_queue_state():
+    app, (league_id, user_id) = _app_and_league()
+    with app.test_request_context("/lineups/rapid", method="POST", data={"week": "2"}):
+        session.update(checker_review_queue=[league_id], checker_review_idx=0,
+                       checker_review_prefills={str(league_id): [1]})
+        with patch.object(routes, "current_user", SimpleNamespace(id=user_id)), \
+             patch.object(routes, "_require_recent_sync_or_gate", return_value=None), \
+            patch.object(routes, "_user_synced_leagues",
+                          return_value=[SimpleNamespace(id=league_id, user_id=user_id)]):
+            response = routes.lineups_rapid_start.__wrapped__()
+        assert response.status_code == 302
+        assert session["rapid_queue"] == [league_id] and session["rapid_idx"] == 0
+        assert not any(key.startswith("checker_review_") for key in session)
+
+
+def test_checker_review_uses_exact_prefill_without_normal_rapid_state():
     app, (league_id, user_id) = _app_and_league()
     locks = {"safe": True, "warning": None, "current": {1},
              "states": {1: "UNLOCKED", 2: "UNLOCKED"}, "locked_starters": set(),
              "locked_bench": set(), "unknown_starters": set(), "unknown_bench": set(),
              "bye_players": set()}
     captured = {}
-    with app.test_request_context("/lineups/rapid/league"):
-        session.update(rapid_queue=[league_id], rapid_idx=0, rapid_week=2,
-                       rapid_source="lineup_checker", rapid_prefill={str(league_id): [1]})
+    with app.test_request_context("/lineups/check/review"):
+        session.update(checker_review_queue=[league_id], checker_review_idx=0,
+                       checker_review_week=2, checker_review_prefills={str(league_id): [1]})
         with patch.object(routes, "current_user", SimpleNamespace(id=user_id)), \
-             patch.object(routes, "_require_recent_sync_or_gate", return_value=None), \
              patch.object(routes, "_refresh_lineup_roster", return_value=(True, None, "host", "cookie")), \
              patch.object(routes, "fetch_projected_scores",
                           return_value={1: Projection(1, 1), 2: Projection(2, 99)}), \
              patch.object(routes, "_live_lock_context", return_value=locks), \
-             patch.object(routes, "pick_optimal_lineup") as greedy, \
              patch.object(routes, "render_template",
                           side_effect=lambda template, **values: captured.update(values) or template):
-            response = routes.lineups_rapid_league.__wrapped__()
-        assert response == "lineups/rapid_league.html"
+            response = routes.lineups_checker_review.__wrapped__()
+        assert response == "lineups/checker_review.html"
         assert captured["auto_selected"] == {1}
-        greedy.assert_not_called()
+        assert not any(key.startswith("rapid_") for key in session)
+
+
+def test_checker_review_reoptimizes_a_stale_prefill_for_current_locks():
+    app, (league_id, user_id) = _app_and_league()
+    locks = {"safe": True, "warning": None, "current": {1},
+             "states": {1: "LOCKED", 2: "UNLOCKED"}, "locked_starters": {1},
+             "locked_bench": set(), "unknown_starters": set(), "unknown_bench": set(),
+             "bye_players": set(), "no_game_players": set()}
+    captured = {}
+    with app.test_request_context("/lineups/check/review"):
+        session.update(checker_review_queue=[league_id], checker_review_idx=0,
+                       checker_review_week=2, checker_review_prefills={str(league_id): [2]})
+        with patch.object(routes, "current_user", SimpleNamespace(id=user_id)), \
+             patch.object(routes, "_refresh_lineup_roster", return_value=(True, None, "host", "cookie")), \
+             patch.object(routes, "fetch_projected_scores",
+                          return_value={1: Projection(1, 1), 2: Projection(2, 99)}), \
+             patch.object(routes, "_live_lock_context", return_value=locks), \
+             patch.object(routes, "render_template",
+                          side_effect=lambda template, **values: captured.update(values) or template):
+            routes.lineups_checker_review.__wrapped__()
+    assert captured["auto_selected"] == {1}
+    assert captured["reconciliation_status"] == "Updated for current game locks"
+    assert captured["blocking_status"] is None
 
 
 @pytest.mark.parametrize("submitted", ([], [2]))
@@ -153,25 +190,24 @@ def test_single_submit_rejects_locked_tampering_before_import(submitted):
         submit.assert_not_called()
 
 
-def test_checker_submit_and_skip_return_to_checker_while_normal_skip_keeps_queue():
+def test_checker_submit_and_skip_use_independent_queue_while_normal_skip_keeps_queue():
     app, (league_id, user_id) = _app_and_league()
     safe = {"safe": True, "locked_starters": set(), "locked_bench": set(),
             "unknown_starters": set(), "unknown_bench": set(), "bye_players": set()}
-    with app.test_request_context("/lineups/rapid/submit", method="POST",
+    with app.test_request_context("/lineups/check/review/submit", method="POST",
                                   data={"league_id": league_id, "week": 2, "starters[]": ["1"]}):
-        session.update(rapid_queue=[league_id], rapid_idx=0, rapid_week=2,
-                       rapid_source="lineup_checker")
+        session.update(checker_review_queue=[league_id], checker_review_idx=0,
+                       checker_review_week=2)
         with patch.object(routes, "current_user", SimpleNamespace(id=user_id)), \
-             patch.object(routes, "_require_recent_sync_or_gate", return_value=None), \
              patch.object(routes, "_refresh_lineup_roster", return_value=(True, None, "host", "cookie")), \
              patch.object(routes, "_live_lock_context", return_value=safe), \
              patch.object(routes, "submit_lineup", return_value=(True, "OK")):
-            response = routes.lineups_rapid_submit.__wrapped__()
+            response = routes.lineups_checker_review_submit.__wrapped__()
         assert response.get_json()["redirect"].endswith("/lineups/check")
-        assert "rapid_source" not in session
-    with app.test_request_context("/lineups/rapid/skip", method="POST"):
-        session.update(rapid_queue=[league_id], rapid_idx=0, rapid_source="lineup_checker")
-        response = routes.lineups_rapid_skip.__wrapped__()
+        assert "checker_review_queue" not in session
+    with app.test_request_context("/lineups/check/review/skip", method="POST"):
+        session.update(checker_review_queue=[league_id], checker_review_idx=0)
+        response = routes.lineups_checker_review_skip.__wrapped__()
         assert response.get_json()["redirect"].endswith("/lineups/check")
     with app.test_request_context("/lineups/rapid/skip", method="POST"):
         session.update(rapid_queue=[league_id, league_id], rapid_idx=0)
@@ -181,7 +217,7 @@ def test_checker_submit_and_skip_return_to_checker_while_normal_skip_keeps_queue
 
 
 def test_locked_templates_include_hidden_starter_without_counting_it_as_checkbox():
-    for template in ("templates/lineups/rapid_league.html", "templates/lineups/single_league.html"):
+    for template in ("templates/lineups/_compact_lineup_editor.html", "templates/lineups/single_league.html"):
         source = open(template, encoding="utf-8").read()
         assert 'type="hidden" name="starters[]"' in source
         assert 'type="checkbox"' in source
@@ -386,8 +422,18 @@ def test_bye_is_forbidden_but_current_bye_starter_is_not_locked():
 
 
 def test_no_game_templates_have_badge_but_no_bye_or_lock_branch():
-    for template in ("templates/lineups/rapid_league.html", "templates/lineups/single_league.html"):
+    for template in ("templates/lineups/_compact_lineup_editor.html", "templates/lineups/single_league.html"):
         source = open(template, encoding="utf-8").read()
         assert "r.game_state == 'NO_GAME'" in source
         assert ">NO GAME</span>" in source
         assert "Lineup Checker recommendation" not in source
+
+
+def test_rapid_and_checker_share_compact_grid_without_checker_banner():
+    rapid = open("templates/lineups/rapid_league.html", encoding="utf-8").read()
+    checker = open("templates/lineups/checker_review.html", encoding="utf-8").read()
+    shared = open("templates/lineups/_compact_lineup_editor.html", encoding="utf-8").read()
+    assert '_compact_lineup_editor.html' in rapid and '_compact_lineup_editor.html' in checker
+    assert "Lineup Checker recommendation" not in rapid + checker + shared
+    assert 'aria-label="Locked"' in shared and ">NO GAME</span>" in shared
+    assert "blocking_status" in shared and "action-bar" in shared
