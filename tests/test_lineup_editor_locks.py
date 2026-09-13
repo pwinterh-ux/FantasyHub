@@ -8,7 +8,9 @@ from app import db
 import lineups.routes as routes
 from models import League, Player, Roster, Team, User
 from services.lineups_service import Projection
-from services.lineup_lock_service import lock_violation, resolve_lineup_locks
+from services.lineup_lock_service import (
+    lock_violation, parse_player_roster_statuses, resolve_lineup_locks,
+)
 
 
 def _app_and_league():
@@ -398,6 +400,42 @@ def test_no_game_needs_no_weekly_status_and_does_not_fail_lock_resolution():
         result = resolve_lineup_locks(_lock_job(), players, 1)
     assert result["safe"] and result["states"][2] == "NO_GAME"
     assert result["unknown_bench"] == set()
+
+
+def test_taxi_and_ir_missing_statuses_do_not_poison_lock_resolution():
+    players = [(1, "Starter", "WR", "TBB"), (2, "Taxi Devy", "WR", ""),
+               (3, "IR", "WR", "ATL")]
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses", return_value={1: "S"}) as fetch, \
+         patch("services.lineup_lock_service.fetch_mfl_nfl_schedule",
+               return_value=_schedule(kickoff="1")):
+        result = resolve_lineup_locks(_lock_job(), players, 1,
+                                      {1: "ACTIVE", 2: "TAXI", 3: "IR"})
+    assert result["safe"] and result["locked_starters"] == {1}
+    fetch.assert_called_once()
+
+
+def test_relevant_missing_status_is_retried_once_and_partial_states_survive():
+    players = [(1, "Starter", "WR", "TBB"), (2, "Missing", "WR", "ATL")]
+    with patch("services.lineup_lock_service.fetch_player_roster_statuses",
+               side_effect=[{1: "S"}, {}]) as fetch, patch(
+               "services.lineup_lock_service.fetch_mfl_nfl_schedule",
+               return_value=_schedule(kickoff="1")):
+        result = resolve_lineup_locks(_lock_job(), players, 1,
+                                      {1: "ACTIVE", 2: "ACTIVE"})
+    assert fetch.call_count == 2
+    assert not result["safe"] and result["states"][1] == "LOCKED"
+    assert result["states"][2] == "UNKNOWN"
+    assert result["unresolved_lock_status_ids"] == {2}
+    assert "Missing" in result["warning"]
+
+
+def test_player_roster_status_parser_normalizes_ids_and_falls_back_only_unambiguously():
+    xml = b'''<playerRosterStatuses>
+      <playerStatus id="1"><roster_franchise franchise_id="1" status="s"/></playerStatus>
+      <playerStatus id="2"><roster_franchise status="ns"/></playerStatus>
+      <playerStatus id="3"><roster_franchise franchise_id="2" status="S"/><roster_franchise franchise_id="3" status="NS"/></playerStatus>
+    </playerRosterStatuses>'''
+    assert parse_player_roster_statuses(xml, "0001") == {1: "S", 2: "NS"}
 
 
 def test_no_game_current_starter_is_not_frozen_and_can_be_replaced():

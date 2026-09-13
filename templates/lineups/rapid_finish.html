@@ -10,10 +10,12 @@
         <div class="sub">Results summary across your leagues</div>
       </div>
       <div class="chips">
-        <span class="chip">Leagues: <b>{{ total_leagues or (grouped_events|length) }}</b></span>
+        <span class="chip">Manual leagues: <b>{{ total_leagues }}</b></span>
         <span class="chip ok">Submitted: <b>{{ submitted_count or 0 }}</b></span>
         <span class="chip err">Errors: <b>{{ error_count or 0 }}</b></span>
         <span class="chip sk">Skipped: <b>{{ skipped_count or 0 }}</b></span>
+        <span class="chip err">Blocked: <b>{{ blocked_count or 0 }}</b></span>
+        <span class="chip">Best Ball: <b>{{ best_ball_count or 0 }}</b></span>
       </div>
     </div>
   </div>

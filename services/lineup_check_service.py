@@ -114,6 +114,10 @@ def check_league_lineup(job: dict, *, week: int, injuries: dict[int, dict], inju
         if is_starter and p["projection"] is None and kind != "UNAVAILABLE" and \
                 p["game"]["state"] not in {BYE, NO_GAME} and p.get("roster_status") == "ACTIVE":
             frozen.add(pid)
+            findings.append({"type": "NO_PROJECTION_STARTER", "severity": "WATCH",
+                             "player_id": pid, "player_name": p.get("name"),
+                             "game_state": p["game"]["state"],
+                             "message": "Starter has no MFL projection available."})
     # A stale schedule cannot prove that a starter may leave or a bench player may
     # enter.  A failed injury feed likewise cannot prove a candidate is available.
     if not schedule_ok or not injuries_ok:
@@ -130,6 +134,14 @@ def check_league_lineup(job: dict, *, week: int, injuries: dict[int, dict], inju
         return round(sum(vals), 2) if vals and all(v is not None for v in vals) else None
     cur_total, rec_total = known_total(current), known_total(recommended)
     gain = round(rec_total-cur_total, 2) if cur_total is not None and rec_total is not None else None
+    critical_repair = bool(recommended != current and any(
+        finding["severity"] == "CRITICAL" for finding in findings))
+    meaningful_swap = bool(entering and (critical_repair or
+                           (gain is not None and gain >= LINEUP_CHECK_MIN_GAIN)))
+    if not meaningful_swap:
+        recommended = set(current)
+        leaving, entering = [], []
+        rec_total, gain = cur_total, None
     if schedule_ok and injuries_ok and gain is not None and gain >= LINEUP_CHECK_MIN_GAIN and entering:
         findings.append({"type": "PROJECTION_UPGRADE", "severity": "ACTION", "projected_gain": gain})
     if not injuries_ok: findings.append({"type": "INJURY_DATA_ERROR", "severity": "ERROR", "message": "Current injury report unavailable"})

@@ -6,10 +6,37 @@ from datetime import datetime, timezone
 
 import requests
 
+from services.lineups_service import is_lineup_eligible_status
+
 from services.nfl_schedule_service import (
     BYE, LOCKED, NO_GAME, UNKNOWN, UNLOCKED, build_team_game_states, fetch_mfl_nfl_schedule,
     game_state_for_team, parse_mfl_nfl_schedule_with_metadata,
 )
+
+
+def _normalized_franchise_id(value: object) -> str:
+    value = str(value or "").strip()
+    return value.lstrip("0") or ("0" if value else "")
+
+
+def parse_player_roster_statuses(payload: bytes | str | ET.Element, franchise_id: object) -> dict[int, str]:
+    """Parse only the requested franchise, with a safe single-entry fallback."""
+    root = payload if isinstance(payload, ET.Element) else ET.fromstring(payload)
+    target = _normalized_franchise_id(franchise_id)
+    result: dict[int, str] = {}
+    for node in root.findall(".//playerStatus"):
+        if not str(node.get("id", "")).isdigit():
+            continue
+        entries = node.findall("roster_franchise")
+        exact = [entry for entry in entries
+                 if _normalized_franchise_id(entry.get("franchise_id")) == target and target]
+        # Some MFL variants omit/mangle the franchise id.  Falling back is safe
+        # only when there is no possibility of selecting another franchise.
+        match = exact[0] if exact else (entries[0] if len(entries) == 1 else None)
+        status = str(match.get("status", "")).strip().upper() if match is not None else ""
+        if status in {"S", "NS"}:
+            result[int(node.get("id"))] = status
+    return result
 
 
 def fetch_player_roster_statuses(job: dict, week: int, *, timeout: int = 20) -> dict[int, str]:
@@ -21,19 +48,11 @@ def fetch_player_roster_statuses(job: dict, week: int, *, timeout: int = 20) -> 
         headers={"Cookie": job.get("cookie", "")}, timeout=timeout,
     )
     response.raise_for_status()
-    root = ET.fromstring(response.content)
-    result = {}
-    for node in root.findall(".//playerStatus"):
-        if not str(node.get("id", "")).isdigit():
-            continue
-        match = next((entry for entry in node.findall("roster_franchise")
-                      if str(entry.get("franchise_id", "")) == str(job["franchise_id"])), None)
-        if match is not None and match.get("status"):
-            result[int(node.get("id"))] = str(match.get("status")).upper()
-    return result
+    return parse_player_roster_statuses(response.content, job.get("franchise_id"))
 
 
-def resolve_lineup_locks(job: dict, players: list[tuple], week: int) -> dict:
+def resolve_lineup_locks(job: dict, players: list[tuple], week: int,
+                         roster_locations: dict[int, str] | None = None) -> dict:
     """Resolve game locks, requiring weekly status only when a game is not editable."""
     ids = [int(row[0]) for row in players]
     try:
@@ -73,21 +92,35 @@ def resolve_lineup_locks(job: dict, players: list[tuple], week: int) -> dict:
                   schedule_verified=True, week_complete=True)["state"]
                   for pid, _name, _pos, team in players}
         statuses = fetch_player_roster_statuses({**job, "player_ids": ids}, week)
+        eligible = {pid for pid in ids if roster_locations is None or
+                    is_lineup_eligible_status(roster_locations.get(pid))}
         # Weekly S/NS is only needed to place players whose games can no longer
         # be changed on the correct side of the lineup.  An omitted status for
         # an unlocked player does not create a game-lock risk.
-        missing_required = {pid for pid in ids
+        missing_required = {pid for pid in eligible
                             if states.get(pid) in {LOCKED, UNKNOWN}
                             and statuses.get(pid) not in {"S", "NS"}}
         if missing_required:
-            raise ValueError("MFL weekly lineup status is incomplete for a locked or unknown player")
+            retry = fetch_player_roster_statuses(
+                {**job, "player_ids": sorted(missing_required)}, week)
+            statuses.update(retry)
+            missing_required = {pid for pid in missing_required
+                                if statuses.get(pid) not in {"S", "NS"}}
+        for pid in missing_required:
+            states[pid] = UNKNOWN
         current = {pid for pid in ids if statuses.get(pid) == "S"}
-        unknown_starters = {pid for pid in current if states.get(pid) == UNKNOWN}
-        unknown_bench = {pid for pid in ids if pid not in current and states.get(pid) == UNKNOWN}
-        return {"safe": True, "warning": None, "current": current, "states": states,
+        unknown_starters = ({pid for pid in current if states.get(pid) == UNKNOWN} |
+                            (missing_required & current))
+        unknown_bench = ({pid for pid in eligible if pid not in current and states.get(pid) == UNKNOWN} |
+                         (missing_required - current))
+        names = [str(row[1]) for row in players if int(row[0]) in missing_required]
+        warning = ("Cannot verify lineup status for " + ", ".join(names) +
+                   " — submission disabled (weekly status is incomplete for a locked or unknown player)") if missing_required else None
+        return {"safe": not missing_required, "warning": warning, "current": current, "states": states,
                 "locked_starters": {pid for pid in current if states.get(pid) == LOCKED},
-                "locked_bench": {pid for pid in ids if pid not in current and states.get(pid) == LOCKED},
+                "locked_bench": {pid for pid in eligible if pid not in current and states.get(pid) == LOCKED},
                 "unknown_starters": unknown_starters, "unknown_bench": unknown_bench,
+                "unresolved_lock_status_ids": missing_required,
                 "bye_players": {pid for pid in ids if states.get(pid) == BYE},
                 "no_game_players": {pid for pid in ids if states.get(pid) == NO_GAME}}
     except Exception as exc:

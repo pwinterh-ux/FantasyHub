@@ -381,7 +381,9 @@
   skipBtn.addEventListener('click', async () => {
     submitBtn.disabled = true; skipBtn.disabled = true;
     try {
-      const res = await fetch('{{ skip_url }}', {method:'POST', credentials:'same-origin'});
+      const body = new URLSearchParams();
+      {% if submission_blocked %}body.set('blocked', '1');{% endif %}
+      const res = await fetch('{{ skip_url }}', {method:'POST', credentials:'same-origin', body});
       const data = await res.json().catch(()=>({ok:false,next:false}));
       // Skip is a benign success -> auto-hide, no persistence
       showToast('success', 'Skipped.', {persist:false, autohideMs:1000});
