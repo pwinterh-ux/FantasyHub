@@ -55,6 +55,7 @@
     <div style="font-weight:700; margin-bottom:6px;">Preview</div>
     <div class="muted" style="font-size:13px;">Review each offer below, then click <strong>Confirm</strong> to send them to MFL.</div>
 
+    <div class="offers-table-wrap rd-scroll-x">
     <table class="conf-table" id="offers-table">
       <thead>
         <tr>
@@ -70,6 +71,7 @@
         <!-- rows injected by JS -->
       </tbody>
     </table>
+    </div>
 
     <form method="POST" action="{{ url_for('offers.perform_offers') }}" style="margin-top:12px; display:flex; gap:10px; align-items:center;">
       <input type="hidden" name="pending_json" id="pending_json_field" value="{{ pending_json|e }}">

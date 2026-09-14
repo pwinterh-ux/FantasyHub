@@ -186,6 +186,7 @@
     .gso-progress { width:280px; max-width:100%; height:6px; background:rgba(255,255,255,.12); border-radius:4px; overflow:hidden; }
     .gso-progress > div { height:100%; width:0%; background:#60a5fa; transition: width .25s ease; }
   </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/responsive.css') }}">
 </head>
 <body>
   {# Only allow embed mode on legal pages to avoid accidental global embed #}
@@ -212,14 +213,15 @@
   {% if not embed %}
   <!-- Header -->
   <header class="site-header">
-    <div class="page-wrap nav-bar">
+    <div class="page-wrap nav-bar" id="siteNav">
+      <button class="nav-toggle" id="navToggle" type="button" aria-expanded="false" aria-controls="primaryNav" aria-label="Open navigation">☰</button>
       <div class="logo">
         <a href="{{ url_for('start') }}" aria-label="RosterDash home" style="display:flex;align-items:center;text-decoration:none;">
           <img src="{{ url_for('static', filename='img/rosterdash-wordmark.png') }}" alt="">
         </a>
       </div>
 
-      <nav>
+      <nav id="primaryNav" aria-label="Primary navigation">
         <ul class="nav-links">
           <li><a href="{{ url_for('start') }}">Leagues</a></li>
 
@@ -321,6 +323,25 @@
   </script>
 
   <script>
+    // Responsive navigation uses the existing link/form markup and routes.
+    (function () {
+      const shell = document.getElementById('siteNav');
+      const toggle = document.getElementById('navToggle');
+      if (!shell || !toggle) return;
+      const closeMenu = () => { shell.classList.remove('is-open'); toggle.setAttribute('aria-expanded', 'false'); toggle.setAttribute('aria-label', 'Open navigation'); };
+      const openMenu = () => { shell.classList.add('is-open'); toggle.setAttribute('aria-expanded', 'true'); toggle.setAttribute('aria-label', 'Close navigation'); };
+      toggle.addEventListener('click', () => shell.classList.contains('is-open') ? closeMenu() : openMenu());
+      shell.addEventListener('click', event => { if (event.target.closest('a')) closeMenu(); });
+      document.addEventListener('click', event => { if (!shell.contains(event.target)) closeMenu(); });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && shell.classList.contains('is-open')) {
+          closeMenu();
+          toggle.focus();
+        }
+      });
+      matchMedia('(min-width: 1100px)').addEventListener?.('change', event => { if (event.matches) closeMenu(); });
+    })();
+
     // Toasts autohide/persist
     (function () {
       const toasts = document.querySelectorAll('#toast-stack .toast');
