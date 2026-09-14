@@ -33,6 +33,27 @@ def test_mobile_navigation_reuses_complete_primary_navigation():
         assert f"url_for('{endpoint}')" in base
     assert "https://discord.gg/PKdA8dmTbS" in base
     assert "event.key === 'Escape'" in base
+    assert "event.key === 'Escape' && shell.classList.contains('is-open')" in base
+    assert "matchMedia('(min-width: 1100px)')" in base
+
+
+def test_content_flow_reset_is_responsive_only():
+    css = read("static/css/responsive.css")
+    responsive_start = css.index("@media (max-width: 1199px)")
+    reset = "main.content { display: block; min-height: 0;"
+    assert reset not in css[:responsive_start]
+    assert reset in css[responsive_start:]
+
+
+def test_tables_keep_native_display_and_wide_tables_use_wrappers():
+    css = read("static/css/responsive.css")
+    assert "main.content table { display: block" not in css
+    assert ".responsive-table" in css
+    assert ".league-table-wrap" in css
+    assert ".offers-table-wrap" in css
+    offers = read("templates/offers/confirm.html")
+    assert '<div class="offers-table-wrap rd-scroll-x">' in offers
+    assert '<table class="conf-table" id="offers-table">' in offers
 
 
 def test_rapid_editor_submission_contract_is_unchanged():

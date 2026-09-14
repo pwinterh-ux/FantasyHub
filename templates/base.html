@@ -333,8 +333,13 @@
       toggle.addEventListener('click', () => shell.classList.contains('is-open') ? closeMenu() : openMenu());
       shell.addEventListener('click', event => { if (event.target.closest('a')) closeMenu(); });
       document.addEventListener('click', event => { if (!shell.contains(event.target)) closeMenu(); });
-      document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeMenu(); toggle.focus(); } });
-      matchMedia('(min-width: 900px)').addEventListener?.('change', event => { if (event.matches) closeMenu(); });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && shell.classList.contains('is-open')) {
+          closeMenu();
+          toggle.focus();
+        }
+      });
+      matchMedia('(min-width: 1100px)').addEventListener?.('change', event => { if (event.matches) closeMenu(); });
     })();
 
     // Toasts autohide/persist
