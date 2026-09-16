@@ -328,7 +328,8 @@ def lineups_check():
         return gate
     from services.lineup_check_service import check_user_lineups, fetch_injuries
     from services.nfl_schedule_service import (
-        build_team_game_states, fetch_mfl_nfl_schedule,
+        build_cached_tuesday_game_states, build_team_game_states,
+        fetch_mfl_nfl_schedule, get_week_schedule, is_central_tuesday,
         parse_mfl_nfl_schedule_with_metadata, sync_nfl_schedule,
     )
 
@@ -352,6 +353,26 @@ def lineups_check():
     except Exception:
         db.session.rollback()
         current_app.logger.exception("Lineup Checker schedule refresh failed")
+        if is_central_tuesday():
+            try:
+                cached_states = build_cached_tuesday_game_states(
+                    get_week_schedule(season, week)
+                )
+                if cached_states:
+                    game_states = cached_states
+                    schedule_ok = True
+                    week_complete = True
+                    current_app.logger.warning(
+                        "Lineup Checker used Tuesday cached-schedule fallback "
+                        "for season %s week %s",
+                        season,
+                        week,
+                    )
+            except Exception:
+                db.session.rollback()
+                current_app.logger.exception(
+                    "Lineup Checker Tuesday cached-schedule fallback failed"
+                )
 
     try:
         injuries = fetch_injuries(season, week)  # exactly once for the entire scan

@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pytest
 from flask import Flask
@@ -8,7 +9,9 @@ from flask import Flask
 from app import db
 from models import NflSchedule
 from services.nfl_schedule_service import (
-    BYE, LOCKED, UNKNOWN, UNLOCKED, build_team_game_states, game_state_for_team,
+    BYE, LOCKED, UNKNOWN, UNLOCKED, build_cached_tuesday_game_states,
+    build_team_game_states, fetch_mfl_nfl_schedule, game_state_for_team,
+    is_central_tuesday,
     normalize_nfl_team, parse_mfl_nfl_schedule, sync_nfl_schedule,
     parse_mfl_nfl_schedule_with_metadata,
 )
@@ -35,6 +38,22 @@ def test_real_repository_fixture_parses_two_rows_per_game():
     assert {x["opponent"] for x in first} == {"DAL", "PHI"}
     assert {x["is_home"] for x in first} == {True, False}
     assert {x["kickoff_unix"] for x in first} == {1757031600}
+
+
+def test_fetch_schedule_explicitly_requests_full_season():
+    response = Mock()
+    response.json.return_value = {"fullNflSchedule": {"nflSchedule": []}}
+
+    with patch("services.nfl_schedule_service.requests.get", return_value=response) as get:
+        result = fetch_mfl_nfl_schedule(2026, timeout=7)
+
+    get.assert_called_once_with(
+        "https://api.myfantasyleague.com/2026/export",
+        params={"TYPE": "nflSchedule", "W": "ALL", "JSON": "1"},
+        timeout=7,
+    )
+    response.raise_for_status.assert_called_once_with()
+    assert result == response.json.return_value
 
 
 def test_schedule_upsert_is_idempotent_updates_and_keeps_seasons(app):
@@ -162,3 +181,49 @@ def test_unknown_schedule_root_shape_fails_closed():
 
     assert records == []
     assert metadata == {}
+
+
+def test_cached_tuesday_states_unlock_scheduled_teams_and_leave_byes_to_resolution():
+    rows = [
+        {"team": "PIT", "opponent": "BAL", "kickoff_unix": 1},
+        {"team": "BAL", "opponent": "PIT", "kickoff_unix": 1},
+    ]
+    states = build_cached_tuesday_game_states(rows)
+
+    assert {team: state["state"] for team, state in states.items()} == {
+        "PIT": UNLOCKED, "BAL": UNLOCKED,
+    }
+    assert game_state_for_team(
+        "KCC", states, schedule_verified=True, week_complete=True
+    )["state"] == BYE
+    assert game_state_for_team(
+        "FA", states, schedule_verified=True, week_complete=True
+    )["state"] == "NO_GAME"
+
+
+@pytest.mark.parametrize("rows", [
+    [],
+    [{"team": "PIT", "opponent": "BAL"}],
+    [
+        {"team": "PIT", "opponent": "BAL"},
+        {"team": "PIT", "opponent": "BAL"},
+        {"team": "BAL", "opponent": "PIT"},
+    ],
+    [
+        {"team": "PIT", "opponent": "BAL"},
+        {"team": "BAL", "opponent": "CLE"},
+        {"team": "CLE", "opponent": "BAL"},
+    ],
+    [
+        {"team": "FA", "opponent": "PIT"},
+        {"team": "PIT", "opponent": "FA"},
+    ],
+])
+def test_cached_tuesday_states_reject_empty_duplicate_and_nonreciprocal_rows(rows):
+    assert build_cached_tuesday_game_states(rows) == {}
+
+
+def test_central_tuesday_uses_chicago_calendar_day():
+    # 00:30 UTC Wednesday remains Tuesday evening in America/Chicago.
+    assert is_central_tuesday(datetime(2026, 9, 16, 0, 30, tzinfo=timezone.utc))
+    assert not is_central_tuesday(datetime(2026, 9, 16, 6, 0, tzinfo=timezone.utc))

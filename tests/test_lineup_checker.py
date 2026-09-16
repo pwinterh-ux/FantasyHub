@@ -5,6 +5,7 @@ from services.lineups_service import Projection
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from flask import Flask
 import lineups.routes as lineup_routes
 
@@ -264,3 +265,80 @@ def test_route_fetches_sitewide_feeds_once_and_filters_historical_leagues():
     injury_fetch.assert_called_once_with(2026, 2)
     assert [item["league_id"] for item in captured["jobs"]] == [1]
     assert response["week"] == 2
+
+
+def _run_schedule_route(payload_or_error, *, tuesday, cached_rows):
+    app = Flask(__name__)
+    app.config.update(SECRET_KEY="test", TESTING=True)
+    captured = {}
+
+    def checker(_jobs, **kwargs):
+        captured.update(kwargs)
+        return {"week": 2, "summary": {}, "leagues": []}
+
+    fetch = (patch("services.nfl_schedule_service.fetch_mfl_nfl_schedule",
+                   side_effect=payload_or_error)
+             if isinstance(payload_or_error, Exception)
+             else patch("services.nfl_schedule_service.fetch_mfl_nfl_schedule",
+                        return_value=payload_or_error))
+    with app.test_request_context("/lineups/check"), \
+         patch.object(lineup_routes, "_require_recent_sync_or_gate", return_value=None), \
+         patch.object(lineup_routes, "_pick_year_for_week_lookup", return_value=2026), \
+         patch.object(lineup_routes, "_effective_current_week", return_value=2), \
+         patch.object(lineup_routes, "_user_synced_leagues", return_value=[]), \
+         patch.object(lineup_routes, "render_template", side_effect=lambda _name, result: result), \
+         fetch, \
+         patch("services.nfl_schedule_service.sync_nfl_schedule"), \
+         patch("services.nfl_schedule_service.is_central_tuesday", return_value=tuesday), \
+         patch("services.nfl_schedule_service.get_week_schedule", return_value=cached_rows), \
+         patch("services.lineup_check_service.fetch_injuries", return_value={}), \
+         patch("services.lineup_check_service.check_user_lineups", side_effect=checker):
+        lineup_routes.lineups_check.__wrapped__()
+    return captured
+
+
+def test_tuesday_complete_live_week_preserves_fresh_kickoff_lock_behavior():
+    payload = {"fullNflSchedule": {"nflSchedule": [{"week": "2", "matchup": {
+        "kickoff": "1", "team": [{"id": "PIT"}, {"id": "BAL"}]
+    }}]}}
+    result = _run_schedule_route(payload, tuesday=True, cached_rows=[])
+
+    assert result["schedule_ok"] and result["week_complete"]
+    assert result["game_states"]["PIT"]["state"] == "LOCKED"
+
+
+def test_tuesday_live_failure_uses_valid_cached_week_and_unlocks_all_games():
+    cached = [
+        {"team": "PIT", "opponent": "BAL", "kickoff_unix": 1},
+        {"team": "BAL", "opponent": "PIT", "kickoff_unix": 1},
+    ]
+    result = _run_schedule_route(RuntimeError("offline"), tuesday=True, cached_rows=cached)
+
+    assert result["schedule_ok"] and result["week_complete"]
+    assert {state["state"] for state in result["game_states"].values()} == {"UNLOCKED"}
+
+
+def test_tuesday_incomplete_live_week_uses_valid_cache():
+    incomplete = {"fullNflSchedule": {"nflSchedule": [{"week": "2"}]}}
+    cached = [
+        {"team": "PIT", "opponent": "BAL"},
+        {"team": "BAL", "opponent": "PIT"},
+    ]
+    result = _run_schedule_route(incomplete, tuesday=True, cached_rows=cached)
+    assert result["schedule_ok"] and result["week_complete"]
+    assert result["game_states"]["BAL"]["state"] == "UNLOCKED"
+
+
+@pytest.mark.parametrize("tuesday,cached", [
+    (True, []),
+    (True, [{"team": "PIT", "opponent": "BAL"}]),
+    (False, [
+        {"team": "PIT", "opponent": "BAL"},
+        {"team": "BAL", "opponent": "PIT"},
+    ]),
+])
+def test_missing_invalid_cache_or_non_tuesday_live_failure_stays_closed(tuesday, cached):
+    result = _run_schedule_route(RuntimeError("offline"), tuesday=tuesday, cached_rows=cached)
+    assert not result["schedule_ok"]
+    assert not result["week_complete"]
+    assert result["game_states"] == {}
