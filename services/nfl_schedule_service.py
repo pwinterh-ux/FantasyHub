@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -131,6 +132,42 @@ def get_week_schedule(year: int, week: int) -> list[dict]:
     return [{"team": row.team, "opponent": row.opponent, "is_home": row.is_home,
              "kickoff_unix": row.kickoff_unix}
             for row in NflSchedule.query.filter_by(year=year, week=week).all()]
+
+
+def is_central_tuesday(now: datetime | None = None) -> bool:
+    """Return whether the current instant falls on Tuesday in Chicago."""
+    central_now = (now or datetime.now(timezone.utc)).astimezone(
+        ZoneInfo("America/Chicago")
+    )
+    return central_now.weekday() == 1
+
+
+def build_cached_tuesday_game_states(rows: Iterable[dict]) -> dict[str, dict]:
+    """Validate a cached week and make every scheduled NFL team unlocked.
+
+    An empty mapping means the cache cannot safely verify the week.  Kickoff
+    values are intentionally ignored: Tuesday is preparation time for the new
+    lineup week, even when cached timestamps describe games that already ran.
+    """
+    cached = list(rows)
+    if not cached:
+        return {}
+
+    opponents: dict[str, str] = {}
+    for row in cached:
+        team = normalize_nfl_team(row.get("team"))
+        opponent = normalize_nfl_team(row.get("opponent"))
+        if team is None or opponent is None or team == opponent or team in opponents:
+            return {}
+        opponents[team] = opponent
+
+    if any(opponents.get(opponent) != team for team, opponent in opponents.items()):
+        return {}
+
+    return {
+        team: {"state": UNLOCKED, "kickoff_at_utc": None}
+        for team in opponents
+    }
 
 
 def build_team_game_states(rows: Iterable[dict], now_utc: datetime, *, schedule_verified: bool) -> dict[str, dict]:

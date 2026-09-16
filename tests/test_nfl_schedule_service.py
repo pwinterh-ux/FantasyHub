@@ -8,7 +8,8 @@ from flask import Flask
 from app import db
 from models import NflSchedule
 from services.nfl_schedule_service import (
-    BYE, LOCKED, UNKNOWN, UNLOCKED, build_team_game_states, game_state_for_team,
+    BYE, LOCKED, UNKNOWN, UNLOCKED, build_cached_tuesday_game_states,
+    build_team_game_states, game_state_for_team, is_central_tuesday,
     normalize_nfl_team, parse_mfl_nfl_schedule, sync_nfl_schedule,
     parse_mfl_nfl_schedule_with_metadata,
 )
@@ -162,3 +163,49 @@ def test_unknown_schedule_root_shape_fails_closed():
 
     assert records == []
     assert metadata == {}
+
+
+def test_cached_tuesday_states_unlock_scheduled_teams_and_leave_byes_to_resolution():
+    rows = [
+        {"team": "PIT", "opponent": "BAL", "kickoff_unix": 1},
+        {"team": "BAL", "opponent": "PIT", "kickoff_unix": 1},
+    ]
+    states = build_cached_tuesday_game_states(rows)
+
+    assert {team: state["state"] for team, state in states.items()} == {
+        "PIT": UNLOCKED, "BAL": UNLOCKED,
+    }
+    assert game_state_for_team(
+        "KCC", states, schedule_verified=True, week_complete=True
+    )["state"] == BYE
+    assert game_state_for_team(
+        "FA", states, schedule_verified=True, week_complete=True
+    )["state"] == "NO_GAME"
+
+
+@pytest.mark.parametrize("rows", [
+    [],
+    [{"team": "PIT", "opponent": "BAL"}],
+    [
+        {"team": "PIT", "opponent": "BAL"},
+        {"team": "PIT", "opponent": "BAL"},
+        {"team": "BAL", "opponent": "PIT"},
+    ],
+    [
+        {"team": "PIT", "opponent": "BAL"},
+        {"team": "BAL", "opponent": "CLE"},
+        {"team": "CLE", "opponent": "BAL"},
+    ],
+    [
+        {"team": "FA", "opponent": "PIT"},
+        {"team": "PIT", "opponent": "FA"},
+    ],
+])
+def test_cached_tuesday_states_reject_empty_duplicate_and_nonreciprocal_rows(rows):
+    assert build_cached_tuesday_game_states(rows) == {}
+
+
+def test_central_tuesday_uses_chicago_calendar_day():
+    # 00:30 UTC Wednesday remains Tuesday evening in America/Chicago.
+    assert is_central_tuesday(datetime(2026, 9, 16, 0, 30, tzinfo=timezone.utc))
+    assert not is_central_tuesday(datetime(2026, 9, 16, 6, 0, tzinfo=timezone.utc))
