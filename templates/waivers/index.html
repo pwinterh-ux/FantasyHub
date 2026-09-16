@@ -132,8 +132,16 @@
             <option value="dynasty_rank">
               Dynasty Rank
             </option>
+            <option value="trending_adds">
+              Trending Adds
+            </option>
           </select>
         </div>
+
+        <label id="hideUnavailableControl" class="target-hide-unavailable" hidden>
+          <input id="hideUnavailableEverywhere" type="checkbox">
+          Hide unavailable everywhere
+        </label>
 
 
         <div class="target-filter-block">
@@ -313,6 +321,7 @@
 <script id="waiverConfig" type="application/json">
 {
   "targetsUrl": {{ url_for("waivers.api_targets") | tojson }},
+  "trendingUrl": {{ url_for("waivers.api_trending") | tojson }},
   "searchUrl": {{ url_for("waivers.api_search") | tojson }},
   "playerUrlTemplate": {{ url_for("waivers.api_player", player_id=999999) | tojson }},
   "liveStatusUrl": {{ url_for("waivers.api_live_status") | tojson }}
@@ -1023,6 +1032,11 @@
     font-size: 12px;
   }
 
+  .target-hide-unavailable { align-items: center; gap: 8px; color: var(--waiver-muted); font-size: .88rem; }
+  .target-hide-unavailable:not([hidden]) { display: flex; }
+  .trending-card.is-unavailable { opacity: .72; }
+  .trend-rank { color: #7dd3fc; font-size: 1.05rem; font-weight: 800; min-width: 2.5rem; }
+
 
   .target-freshness {
     border: 1px solid rgba(245,158,11,.30);
@@ -1428,6 +1442,9 @@
       "targetReasonFilter"
     );
 
+  const hideUnavailableControl = document.getElementById("hideUnavailableControl");
+  const hideUnavailableEverywhere = document.getElementById("hideUnavailableEverywhere");
+
   const confirmMask = document.getElementById("waiverConfirmMask");
   const confirmSubmit = document.getElementById("waiverConfirmSubmit");
   let pendingConfirmation = null;
@@ -1476,6 +1493,23 @@
 
   let targetsLoaded =
     false;
+  let trendingPayload = null;
+  let trendingLoaded = false;
+
+  const dynastySortOptions = [
+    ["position_rank", "Positional Rank"], ["top3", "Most Top-3 Leagues"],
+    ["top5", "Most Top-5 Leagues"], ["unrostered", "Most Unrostered"]
+  ];
+  const trendingSortOptions = [
+    ["trend_rank", "Trend Rank"], ["most_available", "Most Available"],
+    ["dynasty_rank", "Dynasty Rank"]
+  ];
+
+  function setSortOptions(options, selected) {
+    targetSort.innerHTML = options.map(([value, label]) =>
+      `<option value="${value}">${label}</option>`).join("");
+    targetSort.value = selected;
+  }
 
   /*
    * Map local Player.id -> target metadata.
@@ -2174,6 +2208,65 @@
       `${staleCount} of ${leagueCount} leagues are stale. `
       + "Targets remain browseable, but refresh assets before submitting transactions.";
 
+  }
+
+  function renderTrending() {
+    if (!trendingPayload || !targetsNode) return;
+    let players = [...(trendingPayload.players || [])].filter(player =>
+      activeTargetPosition === "ALL" || String(player.position || "").toUpperCase() === activeTargetPosition
+    );
+    if (hideUnavailableEverywhere?.checked) {
+      players = players.filter(player => Number(player.available_count || 0) > 0);
+    }
+    const mode = targetSort?.value || "trend_rank";
+    players.sort((a, b) => {
+      if (mode === "most_available") return Number(b.available_count || 0) - Number(a.available_count || 0) || Number(a.trend_rank) - Number(b.trend_rank);
+      if (mode === "dynasty_rank") return targetRankValue(a) - targetRankValue(b) || Number(a.trend_rank) - Number(b.trend_rank);
+      return Number(a.trend_rank) - Number(b.trend_rank) || String(a.mfl_id).localeCompare(String(b.mfl_id));
+    });
+    targetPlayerMeta.clear();
+    const cards = players.map(player => {
+      const playerId = targetPlayerId(player);
+      targetPlayerMeta.set(playerId, player);
+      const available = Number(player.available_count || 0);
+      const total = Number(player.total_leagues || 0);
+      const percent = Number.isFinite(Number(player.add_percent)) ? `${Number(player.add_percent).toFixed(2)}%` : "Unknown";
+      const dynasty = player.positional_rank ? `Dynasty ${player.position || ""}${player.positional_rank}` : "Dynasty rank unavailable";
+      return `<div class="player-card target-player-card trending-card ${available === 0 ? "is-unavailable" : ""}" data-player-id="${escapeHtml(playerId)}" data-loaded="0">
+        <button type="button" class="player-summary" aria-expanded="false">
+          <span class="trend-rank">#${escapeHtml(player.trend_rank)}</span>
+          <div class="player-main"><div class="player-name">${escapeHtml(player.name || `MFL Player ${player.mfl_id}`)}</div>
+            <div class="target-player-meta"><span>${escapeHtml([player.position, player.team].filter(Boolean).join(" · ") || "Metadata unavailable")}</span><span>·</span><span class="target-reason">Added in ${escapeHtml(percent)} of MFL leagues</span></div></div>
+          <div class="target-stats"><div class="target-stat unrostered"><strong>${available}/${total}</strong><span>Available</span></div>
+            <div class="target-stat"><strong>${escapeHtml(dynasty)}</strong><span>Context</span></div><span class="accordion-caret" aria-hidden="true"></span></div>
+        </button><div class="player-details" hidden></div></div>`;
+    }).join("");
+    targetsNode.innerHTML = cards ? `<div class="player-list">${cards}</div>` : `<div class="empty-message">No trending players match these filters.</div>`;
+    bindTargetPlayerCards(targetsNode);
+  }
+
+  async function loadTrending(force = false) {
+    if (trendingLoaded && !force) { renderTrending(); return; }
+    targetsSpinner.hidden = false;
+    targetsSub.textContent = "Loading MFL trending adds…";
+    try {
+      const response = await fetch(CONFIG.trendingUrl, {headers: {"Accept": "application/json"}});
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || "MFL trending data is temporarily unavailable.");
+      trendingPayload = payload;
+      trendingLoaded = true;
+      const updated = payload.fetched_at ? new Date(payload.fetched_at).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"}) : "unknown";
+      targetsSub.textContent = `${payload.players.length} MFL trending adds`;
+      targetFreshness.hidden = false;
+      targetFreshness.classList.add("is-fresh");
+      targetFreshness.textContent = `MFL Top Adds · Updated ${updated}`;
+      renderTrending();
+    } catch (error) {
+      trendingLoaded = false;
+      targetsSub.textContent = "Trending Adds unavailable";
+      targetsNode.innerHTML = `<div class="error-message">${escapeHtml(error.message || "MFL trending data is temporarily unavailable.")}</div>`;
+      targetFreshness.hidden = true;
+    } finally { targetsSpinner.hidden = true; }
   }
 
 
@@ -4566,7 +4659,11 @@
 
           updateTargetPositionButtons();
 
-          renderTargetGroups();
+          if (targetReasonFilter?.value === "trending_adds") {
+            renderTrending();
+          } else {
+            renderTargetGroups();
+          }
 
         }
       );
@@ -4578,25 +4675,24 @@
     "change",
     () => {
 
-      renderTargetGroups();
+      targetReasonFilter?.value === "trending_adds" ? renderTrending() : renderTargetGroups();
 
     }
   );
 
 
-  /*
-   * Reason is intentionally a real filter control from V1,
-   * even though Dynasty Rank is currently the only signal.
-   * Future signals can be added without changing the layout.
-   */
   targetReasonFilter?.addEventListener(
     "change",
     () => {
-
-      renderTargetGroups();
+      const trending = targetReasonFilter.value === "trending_adds";
+      hideUnavailableControl.hidden = !trending;
+      setSortOptions(trending ? trendingSortOptions : dynastySortOptions, trending ? "trend_rank" : "position_rank");
+      if (trending) loadTrending(); else { renderTargetGroups(); loadTargets(); }
 
     }
   );
+
+  hideUnavailableEverywhere?.addEventListener("change", renderTrending);
 
 
   async function loadDeepLinkedPlayer() {

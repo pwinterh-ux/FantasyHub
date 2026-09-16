@@ -4,6 +4,8 @@ from models import DynastyRankConsensusCurrent
 
 import json
 import re
+import threading
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +16,93 @@ from sqlalchemy import func
 from app import db
 from models import League, Player, Roster, Team
 from services.mfl_client import MFLClient
+
+
+MFL_TRENDING_TTL_SECONDS = 10 * 60
+_MFL_TRENDING_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
+_MFL_TRENDING_CACHE_LOCK = threading.Lock()
+
+
+def get_mfl_trending_adds(year: int) -> dict[str, Any]:
+    """Fetch or reuse the year-scoped site-wide MFL trend list."""
+    key = int(year)
+    now = time.time()
+    with _MFL_TRENDING_CACHE_LOCK:
+        cached = _MFL_TRENDING_CACHE.get(key)
+        if cached and now - cached[0] < MFL_TRENDING_TTL_SECONDS:
+            return dict(cached[1])
+
+    parsed = MFLClient(year).get_top_adds()
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    result = {**parsed, "fetched_at": fetched_at}
+    with _MFL_TRENDING_CACHE_LOCK:
+        _MFL_TRENDING_CACHE[key] = (now, result)
+    return dict(result)
+
+
+def build_trending_waiver_targets(
+    user_id: int,
+    trend_data: dict[str, Any],
+    *,
+    year: int,
+) -> list[dict[str, Any]]:
+    """Attach local metadata/ranks and one bulk availability calculation."""
+    trends = list(trend_data.get("players") or [])
+    mfl_ids = [str(row.get("mfl_id")) for row in trends if row.get("mfl_id")]
+    if not mfl_ids:
+        return []
+
+    players = Player.query.filter(Player.mfl_id.in_(mfl_ids)).all()
+    player_by_mfl = {
+        str(int(player.mfl_id)): player
+        for player in players
+        if str(player.mfl_id or "").strip().isdigit()
+    }
+    ranks = DynastyRankConsensusCurrent.query.filter(
+        DynastyRankConsensusCurrent.mfl_id.in_(mfl_ids)
+    ).all()
+    rank_by_mfl = {
+        str(int(row.mfl_id)): row
+        for row in ranks
+        if str(row.mfl_id or "").strip().isdigit()
+    }
+
+    # Player.id is the canonical MFL numeric id in this schema. This is the
+    # existing bulk player x league matrix; no upstream roster calls occur.
+    availability = get_players_availability(user_id, mfl_ids, year=year)
+    results = []
+    for trend in trends:
+        mfl_id = str(trend.get("mfl_id") or "")
+        local = player_by_mfl.get(mfl_id)
+        rank = rank_by_mfl.get(mfl_id)
+        available = availability.get(mfl_id, {})
+        try:
+            player_id = local.id if local is not None else int(mfl_id)
+        except (TypeError, ValueError):
+            continue
+        results.append({
+            "player_id": player_id,
+            "mfl_id": mfl_id,
+            "name": (local.name if local else None) or (rank.player_name if rank else None) or f"MFL Player {mfl_id}",
+            "position": (local.position if local else None) or (rank.position if rank else None),
+            "team": local.team if local else None,
+            "status": local.status if local else None,
+            "trend_rank": trend.get("trend_rank"),
+            "add_percent": trend.get("add_percent"),
+            "available_count": available.get("available_count", 0),
+            "total_leagues": available.get("total_leagues", 0),
+            "rostered_count": available.get("rostered_count", 0),
+            "available_leagues": available.get("available_leagues", []),
+            "rostered_leagues": available.get("rostered_leagues", []),
+            "positional_rank": rank.positional_rank if rank else None,
+        })
+
+    # Upstream order is authoritative; availability never participates.
+    results.sort(key=lambda row: (
+        row.get("trend_rank") if isinstance(row.get("trend_rank"), int) else 10**9,
+        row["mfl_id"],
+    ))
+    return results
 
 
 # ---------------------------------------------------------------------------
