@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote_plus
 
@@ -10,8 +11,21 @@ import requests
 
 from app import db
 from models import League, Team, Roster, Player
+from services.mfl_client import MFLClient
+from services.mfl_parsers import (
+    parse_league_info,
+    parse_rosters_fallback,
+    LINEUP_MODE_UNKNOWN,
+    ROSTER_STATUS_ACTIVE,
+    ROSTER_STATUS_IR,
+    ROSTER_STATUS_TAXI,
+    ROSTER_STATUS_UNKNOWN,
+)
+from services.mfl_sync import sync_league_info
+from services.lineup_constraints import lineup_satisfies_constraints
 
 log = logging.getLogger(__name__)
+ROSTER_STATUS_TTL_SECONDS = 300
 
 # ---------------------------- Data types ------------------------------------
 
@@ -61,7 +75,7 @@ def get_my_team_player_ids(league_id_pk: int) -> List[int]:
     """
     Return ALL rostered player IDs (ints) for the user's franchise
     in the given League (by DB primary key), using Team.mfl_id == League.franchise_id.
-    Includes any Taxi/IR because status isn't stored (as requested).
+    Includes Taxi and IR players regardless of their stored roster status.
     """
     league: League | None = db.session.get(League, league_id_pk)
     if not league:
@@ -84,6 +98,143 @@ def get_my_team_player_ids(league_id_pk: int) -> List[int]:
         except Exception:
             continue
     return player_ids
+
+
+def is_lineup_eligible_status(status: Optional[str]) -> bool:
+    return str(status or ROSTER_STATUS_UNKNOWN).upper() == ROSTER_STATUS_ACTIVE
+
+
+def get_my_team_roster(league_id_pk: int) -> List[Roster]:
+    league = db.session.get(League, league_id_pk)
+    if not league:
+        return []
+    team = db.session.query(Team).filter_by(
+        league_id=league.id, mfl_id=league.franchise_id
+    ).first()
+    return db.session.query(Roster).filter_by(team_id=team.id).all() if team else []
+
+
+def get_my_team_roster_statuses(league_id_pk: int) -> Dict[int, str]:
+    return {
+        int(row.player_id): str(row.roster_status or ROSTER_STATUS_UNKNOWN).upper()
+        for row in get_my_team_roster(league_id_pk)
+    }
+
+
+def get_my_team_active_player_ids(league_id_pk: int) -> List[int]:
+    return [pid for pid, status in get_my_team_roster_statuses(league_id_pk).items()
+            if is_lineup_eligible_status(status)]
+
+
+def roster_status_is_fresh(league: League, *, now: Optional[datetime] = None) -> bool:
+    synced_at = league.roster_status_synced_at
+    return bool(synced_at and (now or datetime.utcnow()) - synced_at <= timedelta(seconds=ROSTER_STATUS_TTL_SECONDS))
+
+
+def ensure_lineup_mode_resolved(
+    league: League, *, host: str, cookie: Optional[str]
+) -> str:
+    """Resolve a migrated UNKNOWN lineup mode once, retaining manual fallback on failure."""
+    current_mode = str(league.lineup_mode or LINEUP_MODE_UNKNOWN).upper()
+    if current_mode != LINEUP_MODE_UNKNOWN:
+        return current_mode
+
+    try:
+        client = MFLClient(year=league.year, base_url=f"https://{_norm_host(host)}/{league.year}/")
+        info_xml = client.get_league_info(
+            league.mfl_id,
+            cookie or "",
+            context={"operation": "lineup_mode_self_heal", "league_id": str(league.mfl_id)},
+        )
+        franchise_meta, roster_slots, _base_url, ir_slots_max, lineup_mode, taxi_slots_max = (
+            parse_league_info(info_xml)
+        )
+        sync_league_info(
+            league,
+            franchise_meta,
+            roster_slots=roster_slots,
+            ir_slots_max=ir_slots_max,
+            lineup_mode=lineup_mode,
+            taxi_slots_max=taxi_slots_max,
+            commit=False,
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        log.exception(
+            "Unable to refresh MFL lineup mode for league_id=%s mfl_id=%s; "
+            "proceeding with manual-lineup fallback",
+            league.id,
+            league.mfl_id,
+        )
+        return LINEUP_MODE_UNKNOWN
+
+    resolved_mode = str(league.lineup_mode or LINEUP_MODE_UNKNOWN).upper()
+    if resolved_mode == LINEUP_MODE_UNKNOWN:
+        log.warning(
+            "Unable to resolve MFL lineup mode for league_id=%s mfl_id=%s; "
+            "proceeding with manual-lineup fallback",
+            league.id,
+            league.mfl_id,
+        )
+    return resolved_mode
+
+
+def ensure_roster_status_fresh(
+    league: League, *, host: str, cookie: Optional[str], now: Optional[datetime] = None
+) -> Tuple[bool, Optional[str]]:
+    """Refresh roster locations with one MFL rosters request when the five-minute TTL expires."""
+    if roster_status_is_fresh(league, now=now):
+        return True, None
+    try:
+        client = MFLClient(year=league.year, base_url=f"https://{_norm_host(host)}/{league.year}/")
+        assets_list = parse_rosters_fallback(client.get_rosters(league.mfl_id, cookie or ""))
+        wanted_fid = _zpad4(league.franchise_id or "")
+        assets = next((item for item in assets_list if item.franchise_id == wanted_fid), None)
+        if assets is None:
+            raise RuntimeError("MFL roster response did not include your franchise")
+        team = db.session.query(Team).filter_by(league_id=league.id, mfl_id=wanted_fid).first()
+        if not team:
+            raise RuntimeError("Your MFL franchise is not present in the local league")
+
+        incoming = {entry.player_id: entry.roster_status for entry in (assets.roster_players or [])}
+        existing = {row.player_id: row for row in db.session.query(Roster).filter_by(team_id=team.id).all()}
+        for player_id, status in incoming.items():
+            if not db.session.get(Player, player_id):
+                db.session.add(Player(id=player_id, mfl_id=str(player_id), name=f"Player #{player_id}"))
+            row = existing.get(player_id)
+            if row is None:
+                row = Roster(team_id=team.id, player_id=player_id, is_starter=False)
+                db.session.add(row)
+            row.roster_status = status
+            row.in_ir = status == ROSTER_STATUS_IR
+        for player_id, row in existing.items():
+            if player_id not in incoming:
+                db.session.delete(row)
+        league.roster_status_synced_at = now or datetime.utcnow()
+        db.session.commit()
+        return True, None
+    except Exception as exc:
+        db.session.rollback()
+        log.exception("MFL roster-status refresh failed for league %s", league.mfl_id)
+        return False, f"Could not refresh current Taxi/IR status: {exc}"
+
+
+def validate_lineup_starters(league_id_pk: int, submitted: List[int]) -> Optional[str]:
+    """Reject any non-owned or non-ACTIVE starter instead of silently changing a lineup."""
+    statuses = get_my_team_roster_statuses(league_id_pk)
+    for player_id in submitted:
+        if player_id not in statuses:
+            return f"Lineup not submitted: player {player_id} is not on your roster."
+        status = statuses[player_id]
+        if not is_lineup_eligible_status(status):
+            player = db.session.get(Player, player_id)
+            name = player.name if player and player.name else f"Player {player_id}"
+            label = {ROSTER_STATUS_TAXI: "Taxi Squad", ROSTER_STATUS_IR: "Injured Reserve"}.get(
+                status, "an unknown roster status"
+            )
+            return f"Lineup not submitted: {name} is currently on {label}."
+    return None
 
 
 # ----------------------- Projected scores (XML) -----------------------------
@@ -248,6 +399,7 @@ POS_ORDER = {"QB": 0, "RB": 1, "WR": 2, "TE": 3}
 def group_and_sort_players_for_review(
     players: List[Tuple[int, str, str, str]],
     projections: Dict[int, Projection],
+    roster_statuses: Optional[Dict[int, str]] = None,
 ) -> Dict[str, List[Dict[str, object]]]:
     buckets: Dict[str, List[Dict[str, object]]] = {}
 
@@ -256,9 +408,13 @@ def group_and_sort_players_for_review(
         proj = p.projected if p else None
         key = pos.upper() if pos and pos.upper() in POS_ORDER else ("OTHER" if pos else "OTHER")
 
-        buckets.setdefault(key, []).append(
-            dict(player_id=pid, name=name, position=key if key != "OTHER" else (pos or "OTHER"), team=nfl, projected=proj)
-        )
+        status = (roster_statuses or {}).get(pid, ROSTER_STATUS_UNKNOWN)
+        buckets.setdefault(key, []).append(dict(
+            player_id=pid, name=name,
+            position=key if key != "OTHER" else (pos or "OTHER"), team=nfl,
+            projected=proj, roster_status=status,
+            lineup_eligible=is_lineup_eligible_status(status),
+        ))
 
     def sort_key(row: Dict[str, object]):
         proj = row.get("projected", None)
@@ -372,69 +528,35 @@ def pick_optimal_lineup(
     total_required: Optional[int],
     ranges: Dict[str, Tuple[int, int]],
 ) -> List[int]:
-    """
-    Greedy auto-pick:
-      1) For each position with a min requirement, take top 'min' by projection.
-      2) Pool the remaining candidates from positions that still have room (<= max) and
-         fill by best available until total_required is reached (or we run out).
-    If total_required is None, fill up to the sum of max bounds (or just the min fill if no max).
-    """
-    # Build buckets by POS with sorted candidates
-    by_pos: Dict[str, List[Tuple[int, float]]] = {}
-    for pid, _name, pos, _nfl in players:
-        proj = projections.get(pid).projected if projections.get(pid) else None
-        score = float(proj) if proj is not None else float("-inf")  # None last
-        key = (pos or "").upper() or "OTHER"
-        by_pos.setdefault(key, []).append((pid, score))
-
-    for key in by_pos:
-        # sort by projection desc, then pid for stability
-        by_pos[key].sort(key=lambda t: (-t[1], t[0]))
-
-    selected: List[int] = []
-    counts: Dict[str, int] = {}
-
-    # Step A: satisfy mins
-    for pos, (lo, _hi) in ranges.items():
-        if pos not in by_pos or lo <= 0:
-            if lo > 0 and pos not in by_pos:
-                counts[pos] = 0
-            continue
-        take = min(lo, len(by_pos[pos]))
-        for pid, _ in by_pos[pos][:take]:
-            selected.append(pid)
-        counts[pos] = take
-
-    # Remove selected from buckets
-    selected_set = set(selected)
-    for pos in list(by_pos.keys()):
-        by_pos[pos] = [(pid, sc) for (pid, sc) in by_pos[pos] if pid not in selected_set]
-
-    # Decide target total
-    if total_required is None:
-        # best effort: sum of mins + as many as the max room allows
-        total_required = sum(r[1] for r in ranges.values()) if ranges else len(players)
-        # If all maxes are huge, cap by roster size
-        total_required = min(total_required, len(players))
-
-    # Step B: best-available while respecting max per position
-    def has_room(pos: str) -> bool:
-        lo, hi = ranges.get(pos, (0, 9999))
-        return counts.get(pos, 0) < hi
-
-    # Build a pooled candidate list that we can pop from
-    pool: List[Tuple[int, float, str]] = []
-    for pos, lst in by_pos.items():
-        for pid, sc in lst:
-            pool.append((pid, sc, pos))
-    pool.sort(key=lambda t: (-t[1], t[0]))
-
-    for pid, _sc, pos in pool:
-        if len(selected) >= total_required:
-            break
-        if not has_room(pos):
-            continue
-        selected.append(pid)
-        counts[pos] = counts.get(pos, 0) + 1
-
-    return selected
+    """Pick the highest projected legal lineup, including composite MFL rules."""
+    target = total_required
+    if target is None:
+        target = min(sum(maximum for _minimum, maximum in ranges.values()), len(players)) \
+            if ranges else len(players)
+    # State is (selected count, actual-position counts); values retain score and
+    # stable player ids. Actual counts let every overlapping flex rule aggregate
+    # the same player without creating synthetic position buckets.
+    dp = {(0, ()): (0.0, ())}
+    ordered = sorted(players, key=lambda row: int(row[0]))
+    for pid, _name, raw_position, _nfl in ordered:
+        projection = projections.get(pid)
+        score = float(projection.projected) if projection and projection.projected is not None else float("-inf")
+        position = (raw_position or "").upper() or "OTHER"
+        for key, value in list(dp.items()):
+            count, count_tuple = key
+            if count >= target:
+                continue
+            actual_counts = dict(count_tuple)
+            actual_counts[position] = actual_counts.get(position, 0) + 1
+            if not lineup_satisfies_constraints(actual_counts, ranges, minimums=False):
+                continue
+            new_key = (count + 1, tuple(sorted(actual_counts.items())))
+            new_value = (value[0] + score, tuple(sorted(value[1] + (pid,))))
+            old = dp.get(new_key)
+            if old is None or new_value[0] > old[0] or (new_value[0] == old[0] and new_value[1] < old[1]):
+                dp[new_key] = new_value
+    legal = [value for (count, count_tuple), value in dp.items()
+             if count == target and lineup_satisfies_constraints(dict(count_tuple), ranges)]
+    if not legal:
+        return []
+    return list(max(legal, key=lambda value: (value[0], tuple(-pid for pid in value[1])))[1])

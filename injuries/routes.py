@@ -275,6 +275,7 @@ def _fetch_injuries(year: int, week: int) -> tuple[dict[str, dict[str, str]], di
     return injuries_map, meta
 
 def _fetch_roster_statuses(*, league: League, player_ids: Iterable[str], year: int, week: int) -> dict[str, str]:
+    from services.lineup_lock_service import parse_player_roster_statuses
     ids = [pid for pid in {_normalize_player_id(p) for p in player_ids} if pid]
     if not ids:
         return {}
@@ -288,29 +289,10 @@ def _fetch_roster_statuses(*, league: League, player_ids: Iterable[str], year: i
     resp = requests.get(url, params=params, headers=headers, timeout=20)
     resp.raise_for_status()
     try:
-        root = ET.fromstring(resp.content)
+        parsed = parse_player_roster_statuses(resp.content, league.franchise_id)
     except ET.ParseError:
-        root = ET.Element("playerRosterStatuses")
-
-    status_map: dict[str, str] = {}
-    target_franchise = str(league.franchise_id or "").strip()
-    for node in root.findall("playerStatus"):
-        pid = _normalize_player_id(node.get("id"))
-        if not pid:
-            continue
-        roster_status = None
-        for roster_node in node.findall("roster_franchise"):
-            fid = str(roster_node.get("franchise_id") or "").strip()
-            if target_franchise and fid != target_franchise:
-                continue
-            roster_status = roster_node.get("status")
-            if roster_status:
-                break
-        if roster_status is None and node.find("roster_franchise") is not None:
-            roster_status = node.find("roster_franchise").get("status")
-        if roster_status:
-            status_map[pid] = roster_status
-    return status_map
+        return {}
+    return {str(pid): status for pid, status in parsed.items()}
 
 def _gather_league_players(league: League) -> list[dict[str, Any]]:
     team: Optional[Team] = (

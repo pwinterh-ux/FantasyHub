@@ -31,6 +31,7 @@
 
   <!-- Body (compact grid) -->
   <div class="tile pad dark body" style="max-width:1200px;margin:0 auto 90px;">
+    {% if refresh_warning %}<div class="refresh-warning">{{ refresh_warning }} Cached players are shown, but submission will retry the safety refresh.</div>{% endif %}
     <form id="lineupForm" method="POST" action="{{ url_for('lineups.lineups_single_submit', league_id=league.id) }}">
       <input type="hidden" name="week" value="{{ week }}">
       <input type="hidden" name="next" value="{{ next_url }}">
@@ -46,17 +47,23 @@
 
             <div class="list">
               {% for r in rows %}
-                <label class="row">
+                <label class="row{% if not r.lineup_eligible or not r.is_editable %} ineligible{% endif %}"{% if r.locked_as_starter %} title="Game started — starter locked"{% elif r.is_locked %} title="Game started — cannot be added"{% elif r.game_state == 'UNKNOWN' %} title="Game status unknown — lineup position preserved"{% elif r.game_state == 'BYE' %} title="Player is on a bye"{% elif r.game_state == 'NO_GAME' %} title="Player has no NFL game"{% endif %}>
                   <input type="checkbox"
                          name="starters[]"
                          value="{{ r.player_id }}"
                          {% if r.player_id in auto_selected %}checked{% endif %}
+                         {% if not r.lineup_eligible or not r.is_editable %}disabled{% endif %}
                          data-pos="{{ r.position }}"
                          data-proj="{{ r.projected if r.projected is not none else '' }}">
-                  <span class="nm">{{ r.name }}</span>
+                  <span class="nm">{{ r.name }}{% if r.is_locked %} <span aria-label="Locked">🔒</span>{% elif r.game_state == 'UNKNOWN' %} <span title="Game status unknown">⚠</span>{% elif r.game_state == 'BYE' %} <span class="status-badge unknown">BYE</span>{% elif r.game_state == 'NO_GAME' %} <span class="status-badge unknown">NO GAME</span>{% endif %}
+                    {% if r.roster_status == 'TAXI' %}<span class="status-badge taxi">On Taxi</span>
+                    {% elif r.roster_status == 'IR' %}<span class="status-badge ir">On IR</span>
+                    {% elif r.roster_status != 'ACTIVE' %}<span class="status-badge unknown">Status Unknown</span>{% endif %}
+                  </span>
                   {% if r.team %}<span class="tm">— {{ r.team }}</span>{% endif %}
                   <span class="pj">{{ r.projected if r.projected is not none else '—' }}</span>
                 </label>
+                {% if r.locked_as_starter or r.unknown_as_starter %}<input type="hidden" name="starters[]" value="{{ r.player_id }}">{% endif %}
               {% endfor %}
             </div>
           </div>
@@ -93,6 +100,12 @@
   .hdr-row { display:flex; align-items:flex-end; justify-content:space-between; gap:10px; }
   .hdr { margin:0; font-size:16px; font-weight:700; }
   .sub { font-size:11px; color: var(--mut); }
+  .row.ineligible { cursor:not-allowed;background:rgba(148,163,184,.07); }
+  .status-badge { padding:1px 5px;border-radius:999px;font-size:9px;text-transform:uppercase; }
+  .status-badge.taxi { color:#fde68a;border:1px solid rgba(245,158,11,.55); }
+  .status-badge.ir { color:#fecaca;border:1px solid rgba(239,68,68,.45); }
+  .status-badge.unknown { color:#cbd5e1;border:1px solid rgba(203,213,225,.35); }
+  .refresh-warning { padding:8px;margin-bottom:8px;border-radius:8px;background:rgba(245,158,11,.1); }
 
   .hdr-right { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
   .wk-label { font-size:12px; color:var(--mut); }
@@ -184,6 +197,11 @@
     return {lo, hi};
   }
 
+  function countForRule(byPos, rule){
+    return String(rule).toUpperCase().split('+')
+      .reduce((total, pos) => total + (byPos[pos.trim()] || 0), 0);
+  }
+
   function updateCounts(){
     const byPos = {};
     const boxes = form.querySelectorAll('input[type="checkbox"][name="starters[]"]');
@@ -199,7 +217,7 @@
       const pos = (card?.getAttribute('data-pos') || 'Other').toUpperCase();
       const rangeText = ranges[pos] || '';
       const countEl = card.querySelector('[data-pos-count]');
-      const count = byPos[pos] || 0;
+      const count = countForRule(byPos, pos);
       if (countEl) countEl.textContent = count;
 
       el.classList.remove('bad','good');

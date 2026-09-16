@@ -749,11 +749,11 @@ def mfl_config_submit():
                     },
                 )
                 try:
-                    franchise_meta, roster_text, league_base_url, ir_slots_max = (
-                        parse_league_info(info_xml) if info_xml else ({}, None, None, None)
+                    franchise_meta, roster_text, league_base_url, ir_slots_max, lineup_mode, taxi_slots_max = (
+                        parse_league_info(info_xml) if info_xml else ({}, None, None, None, "UNKNOWN", None)
                     )
                 except Exception as e:
-                    franchise_meta, roster_text, league_base_url, ir_slots_max = {}, None, None, None
+                    franchise_meta, roster_text, league_base_url, ir_slots_max, lineup_mode, taxi_slots_max = {}, None, None, None, "UNKNOWN", None
                     out["errors"].append(f"parse_league_info:{e}")
                 try:
                     waiver_settings = parse_league_waiver_settings(info_xml) if info_xml else {}
@@ -763,6 +763,8 @@ def mfl_config_submit():
                 out["franchise_meta"] = franchise_meta
                 out["roster_text"] = roster_text
                 out["ir_slots_max"] = ir_slots_max
+                out["lineup_mode"] = lineup_mode
+                out["taxi_slots_max"] = taxi_slots_max
                 out["waiver_settings"] = waiver_settings
                 out["resolved_host"] = spec["prefer_host"] or _host_only(league_base_url) or host_by_lid.get(lid) or host_key
 
@@ -892,6 +894,9 @@ def mfl_config_submit():
                 lg,
                 bundle.get("franchise_meta") or {},
                 roster_slots=bundle.get("roster_text"),
+                ir_slots_max=bundle.get("ir_slots_max"),
+                lineup_mode=bundle.get("lineup_mode"),
+                taxi_slots_max=bundle.get("taxi_slots_max"),
                 waiver_settings=bundle.get("waiver_settings") or {},
             )
             db.session.commit()
@@ -1025,11 +1030,11 @@ def mfl_config_sync_one():
         if phase == "FAST":
             info_xml = api_client.get_league_info(league_id, api_cookie)
             try:
-                franchise_meta, roster_text, league_base_url, ir_slots_max = (
-                    parse_league_info(info_xml) if info_xml else ({}, None, None, None)
+                franchise_meta, roster_text, league_base_url, ir_slots_max, lineup_mode, taxi_slots_max = (
+                    parse_league_info(info_xml) if info_xml else ({}, None, None, None, "UNKNOWN", None)
                 )
             except Exception as parse_err:
-                franchise_meta, roster_text, league_base_url, ir_slots_max = {}, None, None, None
+                franchise_meta, roster_text, league_base_url, ir_slots_max, lineup_mode, taxi_slots_max = {}, None, None, None, "UNKNOWN", None
                 warnings.append(f"parse_league_info:{parse_err}")
 
             try:
@@ -1072,6 +1077,9 @@ def mfl_config_sync_one():
                     league,
                     franchise_meta or {},
                     roster_slots=roster_text,
+                    ir_slots_max=ir_slots_max,
+                    lineup_mode=lineup_mode,
+                    taxi_slots_max=taxi_slots_max,
                     waiver_settings=waiver_settings,
                     commit=False,
                 )
@@ -1223,15 +1231,19 @@ def refresh_assets_all():
                 # Always ensure franchise names exist before assets
                 info_xml = api_client.get_league_info(lid, api_cookie)
                 try:
-                    franchise_meta, roster_text, league_base_url, ir_slots_max = (
-                        parse_league_info(info_xml) if info_xml else ({}, None, None, None)
+                    franchise_meta, roster_text, league_base_url, ir_slots_max, lineup_mode, taxi_slots_max = (
+                        parse_league_info(info_xml) if info_xml else ({}, None, None, None, "UNKNOWN", None)
                     )
                 except Exception:
-                    franchise_meta, roster_text, league_base_url, ir_slots_max = {}, None, None, None
+                    franchise_meta, roster_text, league_base_url, ir_slots_max, lineup_mode, taxi_slots_max = {}, None, None, None, "UNKNOWN", None
 
                 if ir_slots_max is not None:
                     league.ir_slots_max = ir_slots_max
-                sync_league_info(league, franchise_meta or {}, roster_slots=roster_text, commit=False)
+                sync_league_info(
+                    league, franchise_meta or {}, roster_slots=roster_text,
+                    ir_slots_max=ir_slots_max, lineup_mode=lineup_mode,
+                    taxi_slots_max=taxi_slots_max, commit=False,
+                )
 
                 data_client, data_cookie, host_used_initial = _resolve_client(
                     league, getattr(league, "league_host", None)

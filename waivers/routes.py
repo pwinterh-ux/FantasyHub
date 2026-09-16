@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from flask import jsonify, render_template, request
+from flask import current_app, jsonify, render_template, request
 from flask_login import current_user, login_required
 
 from models import League, Player
@@ -15,6 +15,8 @@ from services.waivers_service import (
     get_player_availability,
     get_players_availability,
     search_players,
+    get_mfl_trending_adds,
+    build_trending_waiver_targets,
 )
 
 from . import waivers_bp
@@ -226,6 +228,33 @@ def api_targets():
             "freshness": freshness,
         }
     )
+
+
+@waivers_bp.route("/api/trending", methods=["GET"])
+@login_required
+def api_trending():
+    """MFL trend discovery enriched with this user's local availability."""
+    year = datetime.now(timezone.utc).year
+    try:
+        trend_data = get_mfl_trending_adds(year)
+        players = build_trending_waiver_targets(
+            current_user.id, trend_data, year=year
+        )
+    except Exception:
+        current_app.logger.exception("MFL topAdds retrieval failed")
+        return jsonify({
+            "ok": False,
+            "source": "mfl",
+            "error": "MFL trending data is temporarily unavailable.",
+        }), 503
+
+    return jsonify({
+        "ok": True,
+        "source": "mfl",
+        "period": "current_period",
+        "fetched_at": trend_data.get("fetched_at"),
+        "players": players,
+    })
 
 
 @waivers_bp.route("/api/search", methods=["GET"])
